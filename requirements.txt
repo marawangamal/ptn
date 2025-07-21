@@ -1,0 +1,7 @@
+transformers
+matplotlib
+torch
+tiktoken
+datasets
+lightning
+wandb

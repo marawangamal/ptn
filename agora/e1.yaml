@@ -1,0 +1,33 @@
+# Experiment 1
+# Evaluating efficacy of multi-token regularization
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:a100l:4"
+    - "#SBATCH --mem=128G"
+    - "#SBATCH --cpus-per-task=12"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+    - group:
+        name: "stp"
+        type: sequential
+        jobs:
+          - job:
+              preamble: glong
+              command: "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head stp"
+
+    - group:
+        name: "mhead::sweep"
+        type: sweep
+        preamble: glong
+        sweep:
+          horizon: [1, 2, 4]
+        sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head multihead --horizon {horizon}"
