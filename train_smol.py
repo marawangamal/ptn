@@ -2,10 +2,14 @@
 
 Usage:
     python train_smol.py --model_name distilbert/distilgpt2 --dataset_name wikitext --max_length 32 --epochs 1 --batch_size 1
+    python train_smol.py --datasets wikipedia --max_num_samples 50 --batch_size 1 --max_length 8 --epochs 10 --model distilbert/distilgpt2
 """
 
 # TODO:
+# [x] use cosine annealing lr scheduler (test on wikitext)
+# [ ] add validation set
 # [ ] add qualitative evaluation / logging (ie., x="the world is")
+# [ ] log norm = torch.clip_grad_norm_(1.0)
 
 import os
 import re
@@ -23,7 +27,7 @@ from datasets import load_from_disk
 import lm_eval
 from lm_eval import simple_evaluate
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
@@ -34,13 +38,15 @@ from transformers.data.data_collator import DataCollatorForLanguageModeling
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
-EXPERIMENTS_DIR = "experiments_debug"
+EXPERIMENTS_DIR = "experiments"
+DATA_DIR = os.environ.get("HF_DATA_DIR", "data")
 
 PRETRAINING_DS_CONFIG = {
     "fineweb": {
-        "path": "HuggingFaceFW/fineweb",
-        "name": "sample-10BT",
-        "split": "train",
+        "load_from_disk_path": os.path.join(DATA_DIR, "fineweb"),
+        # "path": "HuggingFaceFW/fineweb",
+        # "name": "sample-10BT",
+        # "split": "train",
         # "streaming": True,
     },
     # small ds for testing
@@ -54,7 +60,16 @@ PRETRAINING_DS_CONFIG = {
 
 
 class LitLM(pl.LightningModule):
-    def __init__(self, model_name, model_head, vocab_size, horizon, lr=5e-5):
+    def __init__(
+        self,
+        model_name,
+        model_head,
+        vocab_size,
+        horizon,
+        lr=5e-5,
+        use_cosine_annealing=False,
+        max_steps=None,
+    ):
         super().__init__()
         self.save_hyperparameters()
         config = MultiTokenHFConfig(
@@ -78,8 +93,43 @@ class LitLM(pl.LightningModule):
         )
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        outputs = self(**batch)
+        loss = outputs.loss
+        self.log(
+            "val_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
+        )
+        return loss
+
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
+        if (
+            self.hparams["use_cosine_annealing"] is not None
+            and self.hparams["max_steps"] is not None
+        ):
+            print(
+                f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
+            )
+            opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
+
+            # --- total steps with fallback ---
+            warm = int(0.05 * self.hparams["max_steps"])  # 5% warmup
+            floor = self.hparams["lr"] * 0.1  # final lr
+
+            warmup = torch.optim.lr_scheduler.LinearLR(opt, 1e-8, 1.0, warm)
+            cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+                opt, self.hparams["max_steps"] - warm, eta_min=floor
+            )
+            sched = torch.optim.lr_scheduler.SequentialLR(
+                opt, [warmup, cosine], milestones=[warm]
+            )
+
+            return {
+                "optimizer": opt,
+                "lr_scheduler": {"scheduler": sched, "interval": "step"},
+            }
+
+        else:
+            return torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
 
 
 class LMDataModule(pl.LightningDataModule):
@@ -117,13 +167,14 @@ class LMDataModule(pl.LightningDataModule):
         return result
 
     def setup(self, stage=None):
-        if self.dataset_name == "fineweb":
-            self.dataset = load_from_disk("data/fineweb")
-            # limit samples for testing
-            # self.dataset = self.dataset.select(range(50000))
+        if PRETRAINING_DS_CONFIG[self.dataset_name].get("load_from_disk_path"):
+            self.dataset = load_from_disk(
+                PRETRAINING_DS_CONFIG[self.dataset_name]["load_from_disk_path"]
+            )
         else:
             self.dataset = datasets.load_dataset(
-                **PRETRAINING_DS_CONFIG[self.dataset_name]
+                **PRETRAINING_DS_CONFIG[self.dataset_name],
+                data_dir=DATA_DIR,
             )
             self.dataset = self.dataset.filter(
                 lambda x: x["text"] and x["text"].strip() != ""
@@ -143,9 +194,20 @@ class LMDataModule(pl.LightningDataModule):
                 batched=True,
             )
 
+        self.dataset = self.dataset.train_test_split(test_size=0.1)
+        self.dataset["val"] = self.dataset["test"]
+
     def train_dataloader(self):
         collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
-        return DataLoader(self.dataset, batch_size=self.batch_size, collate_fn=collator)
+        return DataLoader(
+            self.dataset["train"], batch_size=self.batch_size, collate_fn=collator
+        )
+
+    def val_dataloader(self):
+        collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
+        return DataLoader(
+            self.dataset["val"], batch_size=self.batch_size, collate_fn=collator
+        )
 
 
 class HellaSwagEvalCallback(pl.Callback):
@@ -196,8 +258,32 @@ class HellaSwagEvalCallback(pl.Callback):
                 print("[HellaSwagEvalCallback] HellaSwag results not available.")
 
 
+class SampleEvalCallback(pl.Callback):
+    def __init__(
+        self, tokenizer, eval_every_n_batches=1, prefix="Hello, I'm a language model,"
+    ):
+        super().__init__()
+        self.eval_every_n_batches = eval_every_n_batches
+        self.prefix = prefix
+        self.tokenizer = tokenizer
+
+    def on_train_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        if (batch_idx + 1) % self.eval_every_n_batches == 0:
+            outputs = pl_module.model.generate(
+                self.tokenizer.encode(self.prefix, return_tensors="pt").to(
+                    pl_module.device
+                ),
+                max_new_tokens=32,
+                do_sample=True,
+                top_k=50,
+            )
+            trainer.logger.log_text(outputs, step=batch_idx + 1)
+
+
 def get_econfig_name(args: argparse.Namespace):
-    ignore_keys = ["disable_auto_resume"]
+    ignore_keys = ["disable_auto_resume", "val_check_interval"]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
     parts = [re.sub(r"[^a-zA-Z0-9]", "", p) for p in parts]
@@ -221,9 +307,6 @@ def lookup_wandb_run(args: argparse.Namespace):
     return matches[0].id
 
 
-# TODO:
-# [x] add auto resume feature
-# [ ] push to hub
 def main():
     p = argparse.ArgumentParser()
     # model
@@ -236,20 +319,35 @@ def main():
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_length", type=int, default=1024)
     p.add_argument("--epochs", type=int, default=1)
+    p.add_argument("--max_steps", type=int, default=None)
+    p.add_argument("--use_cosine_annealing", action="store_true")  # debug/temporary
+    # misc (untracked)
     p.add_argument("--disable_auto_resume", action="store_true")
+    p.add_argument("--val_check_interval", type=int, default=1000)
     args = p.parse_args()
 
     # data
     tokenizer = AutoTokenizer.from_pretrained("gpt2", use_fast=True)
     tokenizer.pad_token = tokenizer.eos_token
-    dm = LMDataModule(tokenizer, args.dataset_name, args.batch_size, args.max_length)
+    dm = LMDataModule(
+        tokenizer,
+        args.dataset_name,
+        args.batch_size,
+        args.max_length,
+    )
 
     # model
+    max_steps = args.max_steps
+    if max_steps is None:
+        dm.setup()
+        max_steps = args.epochs * len(dm.train_dataloader())
     model = LitLM(
         args.model_name,
         model_head=args.model_head,
         vocab_size=tokenizer.vocab_size,
         horizon=args.horizon,
+        use_cosine_annealing=args.use_cosine_annealing,
+        max_steps=max_steps,
     )
 
     # maybe auto resume
@@ -262,8 +360,9 @@ def main():
 
     # trainer + callbacks
     eval_callback = HellaSwagEvalCallback(args.model_name, eval_every_n_batches=5000)
+    sample_callback = SampleEvalCallback(tokenizer, eval_every_n_batches=1)
     wandb_logger = WandbLogger(
-        project="mtl",
+        project="mtl-dev",
         name=get_econfig_name(args),
         id=wandb_id,
         resume="allow",
@@ -280,12 +379,15 @@ def main():
         filename="last",
         every_n_train_steps=1000,
     )
+    lr_monitor_callback = LearningRateMonitor(logging_interval="step")
 
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator="auto",
         logger=wandb_logger,
         default_root_dir=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+        val_check_interval=args.val_check_interval,
+        max_steps=args.max_steps,
     )
 
     # Tune lr
@@ -294,7 +396,15 @@ def main():
         tuner.lr_find(model, dm)
 
     # Add evaluation callback after lr tuning
-    trainer.callbacks.extend([eval_callback, ckpt_best_callback, ckpt_last_callback])
+    trainer.callbacks.extend(
+        [
+            eval_callback,
+            sample_callback,
+            ckpt_best_callback,
+            ckpt_last_callback,
+            lr_monitor_callback,
+        ]
+    )
     trainer.fit(model, dm, ckpt_path=resume_ckpt)  # for auto resume, not for saving
 
 

@@ -1,6 +1,7 @@
 # Sample Efficient Learning Via Lookahead regularization
 
 ## Setup
+> **Note:** Requires Python 3.10 or higher.
 ```bash
 pip install -r requirements.txt
 pip install -e .
