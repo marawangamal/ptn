@@ -339,8 +339,6 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_auto_resume",
         "disable_evals",
         "val_check_interval",
-        "limit_train_batches",
-        "limit_val_batches",
         "tags",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
