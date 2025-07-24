@@ -1,4 +1,4 @@
-# Sample Efficient Learning Via Lookahead regularization
+# Sample Efficient Learning via Lookahead Regularization
 
 ## Setup
 > **Note:** Requires Python 3.10 or higher.
