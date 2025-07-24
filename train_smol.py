@@ -42,11 +42,12 @@ from pytorch_lightning.utilities import rank_zero_only
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
 EXPERIMENTS_DIR = "experiments"
-DATA_DIR = os.environ.get("HF_DATA_DIR", "data")
 
 PRETRAINING_DS_CONFIG = {
     "fineweb": {
-        "load_from_disk_path": os.path.join(DATA_DIR, "fineweb"),
+        "load_from_disk_path": os.path.join(
+            os.environ.get("HF_HOME", "data"), "processed", "fineweb"
+        ),
         # "path": "HuggingFaceFW/fineweb",
         # "name": "sample-10BT",
         # "split": "train",
@@ -103,6 +104,10 @@ class LitLM(pl.LightningModule):
             "val_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
         )
         return loss
+
+    def on_after_backward(self) -> None:
+        norm = torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        self.log("grad_norm", norm, on_step=True, on_epoch=False)
 
     def configure_optimizers(self):
         if (
@@ -176,8 +181,7 @@ class LMDataModule(pl.LightningDataModule):
             )
         else:
             self.dataset = datasets.load_dataset(
-                **PRETRAINING_DS_CONFIG[self.dataset_name],
-                data_dir=DATA_DIR,
+                **PRETRAINING_DS_CONFIG[self.dataset_name]
             )
             self.dataset = self.dataset.filter(
                 lambda x: x["text"] and x["text"].strip() != ""
@@ -335,7 +339,9 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_auto_resume",
         "disable_evals",
         "val_check_interval",
-        "limit_batches",
+        "limit_train_batches",
+        "limit_val_batches",
+        "tags",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
@@ -378,7 +384,8 @@ def main():
     p.add_argument("--disable_auto_resume", action="store_true")
     p.add_argument("--disable_evals", action="store_true")
     p.add_argument("--val_check_interval", type=int, default=5000)
-    p.add_argument("--limit_batches", type=int, default=None)  # used for hpo
+    p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
+    p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
     args = p.parse_args()
 
@@ -393,7 +400,7 @@ def main():
     )
 
     # model
-    max_steps = args.limit_batches
+    max_steps = args.limit_train_batches
     if max_steps is None:
         dm.setup()
         max_steps = args.epochs * len(dm.train_dataloader())
@@ -416,7 +423,7 @@ def main():
 
     # trainer callbacks
     callbacks = [
-        # LearningRateMonitor(logging_interval="step"),
+        LearningRateMonitor(logging_interval="step"),
         ModelCheckpoint(  # save last
             dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
             filename="last",
@@ -453,7 +460,7 @@ def main():
         max_epochs=args.epochs,
         accelerator="auto",
         logger=WandbLogger(
-            project="mtl-dev",
+            project="mtl",
             name=get_econfig_name(args),
             id=wandb_id,
             resume="allow",
@@ -462,8 +469,8 @@ def main():
         default_root_dir=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
         val_check_interval=args.val_check_interval,
         # used for hpo
-        limit_train_batches=args.limit_batches,
-        limit_val_batches=args.limit_batches,
+        limit_train_batches=args.limit_train_batches,
+        limit_val_batches=args.limit_val_batches,
     )
 
     # Tune lr

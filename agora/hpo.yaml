@@ -26,5 +26,5 @@ group:
               sweep:
                 lr: [1e-7, 5e-7, 1e-6, 5e-6, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3]
                 scheduler: ["none", "cosine"]
-              sweep_template:  "HF_HOME=$SCRATCH/huggingface HF_DATA_DIR=/home/mila/m/marawan.gamal/scratch/mtl/data python train_smol.py --tags hpo --disable_evals --limit_batches 5000 --val_check_interval 400 --model_head stp --lr {lr} --scheduler {scheduler}"
+              sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --tags hpo --disable_evals --limit_train_batches 5000 --limit_val_batches 100 --val_check_interval 1000 --model_head stp --lr {lr} --scheduler {scheduler}"
 

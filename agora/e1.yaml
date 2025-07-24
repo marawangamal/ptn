@@ -18,21 +18,12 @@ group:
   jobs:
 
     - group:
-        name: "mhead::sweep"
-        type: sweep
-        preamble: glong
-        sweep:
-          lr: [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3]
-          scheduler: ["none", "cosine"]
-        sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --disable_evals --limit_batches 5000 --val_check_interval 400 --model_head stp --lr {lr} --scheduler {scheduler}"
-
-    # - group:
-    #     name: "stp"
-    #     type: sequential
-    #     jobs:
-    #       - job:
-    #           preamble: glong
-    #           command: "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head stp"
+        name: "stp"
+        type: sequential
+        jobs:
+          - job:
+              preamble: glong
+              command: "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head stp --scheduler cosine"
 
     # - group:
     #     name: "mhead::sweep"
