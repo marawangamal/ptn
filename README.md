@@ -1,20 +1,16 @@
 # Sample Efficient Learning Via Lookahead regularization
 
 ## Setup
+> **Note:** Requires Python 3.10 or higher.
 ```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
 ## Train
-Train SmolLM model on 10B token subset of fineweb
+Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb, and occasionally evaluate on HellaSwag.
 ```python
-python train_smol.py --model_head cp --horizon 4 --rank 8
+python train.py --model_head multihead --horizon 2
 ```
 
-
-## Eval
-Run eval using lm-evaluation-harness
-```python
-python scripts/eval.py --ckpt path/to/checkpoint
-```
+Training should take apporximately 15h on 4x A100L GPUs.

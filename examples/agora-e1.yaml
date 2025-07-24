@@ -16,18 +16,19 @@ group:
   name: "main"
   type: parallel
   jobs:
+
     - group:
-        name: "stp"
+        name: "stp::cosine"
         type: sequential
         jobs:
           - job:
               preamble: glong
-              command: "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head stp"
+              command: "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head stp --lr 1e-3 --scheduler cosine"
 
     - group:
-        name: "mhead::sweep"
+        name: "mhead::sweep::cosine"
         type: sweep
         preamble: glong
         sweep:
           horizon: [1, 2, 4]
-        sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head multihead --horizon {horizon}"
+        sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --model_head multihead --horizon {horizon} --lr 1e-3 --scheduler cosine"
