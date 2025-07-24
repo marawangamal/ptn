@@ -6,15 +6,21 @@ Usage:
 """
 
 # TODO:
+# Perf improvements
 # [x] use cosine annealing lr scheduler (test on wikitext)
-# [ ] add validation set
-# [ ] add qualitative evaluation / logging (ie., x="the world is")
+# [x] add validation set
+# [x] add qualitative evaluation / logging (ie., x="the world is")
 # [ ] log norm = torch.clip_grad_norm_(1.0)
+
+# Runtime improvements
+# [ ] copy data onto $SLURM_TMPDIR
+
 
 import os
 import re
 import argparse
 from datetime import timedelta
+from typing import Literal
 
 import torch
 from torch.utils.data import DataLoader
@@ -28,13 +34,10 @@ import lm_eval
 from lm_eval import simple_evaluate
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from transformers import (
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-)
+from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-
+from orion.client import report_objective
+from pytorch_lightning.utilities import rank_zero_only
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
@@ -66,9 +69,9 @@ class LitLM(pl.LightningModule):
         model_head,
         vocab_size,
         horizon,
+        max_steps,
         lr=5e-5,
-        use_cosine_annealing=False,
-        max_steps=None,
+        scheduler: Literal["none", "cosine"] = "none",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -103,7 +106,7 @@ class LitLM(pl.LightningModule):
 
     def configure_optimizers(self):
         if (
-            self.hparams["use_cosine_annealing"] is not None
+            self.hparams["scheduler"] == "cosine"
             and self.hparams["max_steps"] is not None
         ):
             print(
@@ -211,10 +214,11 @@ class LMDataModule(pl.LightningDataModule):
 
 
 class HellaSwagEvalCallback(pl.Callback):
-    def __init__(self, model_name, eval_every_n_batches=1, device=None):
+    def __init__(self, model_name, val_check_interval=1, device=None):
+
         super().__init__()
         self.model_name = model_name
-        self.eval_every_n_batches = eval_every_n_batches
+        self.val_check_interval = val_check_interval
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
@@ -222,7 +226,7 @@ class HellaSwagEvalCallback(pl.Callback):
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
-        if (batch_idx + 1) % self.eval_every_n_batches == 0:
+        if (batch_idx + 1) % self.val_check_interval == 0:
             print(
                 f"\n[HellaSwagEvalCallback] Evaluating on HellaSwag at batch {batch_idx+1}..."
             )
@@ -260,17 +264,17 @@ class HellaSwagEvalCallback(pl.Callback):
 
 class SampleEvalCallback(pl.Callback):
     def __init__(
-        self, tokenizer, eval_every_n_batches=1, prefix="Hello, I'm a language model,"
+        self, tokenizer, val_check_interval=1, prefix="Hello, I'm a language model,"
     ):
         super().__init__()
-        self.eval_every_n_batches = eval_every_n_batches
+        self.val_check_interval = val_check_interval
         self.prefix = prefix
         self.tokenizer = tokenizer
 
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
-        if (batch_idx + 1) % self.eval_every_n_batches == 0:
+        if (batch_idx + 1) % self.val_check_interval == 0:
             outputs = pl_module.model.generate(
                 self.tokenizer.encode(self.prefix, return_tensors="pt").to(
                     pl_module.device
@@ -279,11 +283,60 @@ class SampleEvalCallback(pl.Callback):
                 do_sample=True,
                 top_k=50,
             )
-            trainer.logger.log_text(outputs, step=batch_idx + 1)
+            columns = ["text"]
+            data = [[self.tokenizer.decode(outputs[0])]]
+            trainer.logger.log_text(
+                key="samples", columns=columns, data=data, step=batch_idx + 1
+            )
+
+
+class OrionCallback(pl.Callback):
+    """
+    Track the best value of `monitor` and send it to Orion at the end of fit().
+
+    Args
+    ----
+    monitor : str
+        Metric key in ``trainer.callback_metrics`` to track
+        (e.g. "val_loss_epoch", "eval/hellaswag_acc_norm").
+    mode : {"min", "max"}
+        Whether a lower or higher value is better.
+    """
+
+    def __init__(self, monitor: str = "val_loss_epoch", mode: str = "min"):
+        super().__init__()
+        self.monitor = monitor
+        self.minimize = mode == "min"
+        self.best = float("inf") if self.minimize else -float("inf")
+
+    # ---------- helpers -----------------------------------------------------
+    def _is_better(self, current):
+        if current is None:
+            return False
+        return (current < self.best) if self.minimize else (current > self.best)
+
+    # ---------- Lightning hooks --------------------------------------------
+    def on_validation_epoch_end(self, trainer, pl_module):
+        """Update best after every validation epoch."""
+        current = trainer.callback_metrics.get(self.monitor)
+        if self._is_better(current):
+            self.best = current
+
+    @rank_zero_only
+    def on_fit_end(self, trainer, pl_module):
+        """Send the score to Orion once training is finished."""
+        value = self.best.item() if torch.is_tensor(self.best) else float(self.best)
+        report_objective(value)
+        print(f"[Orion] reported {self.monitor} = {value:.5f}")
 
 
 def get_econfig_name(args: argparse.Namespace):
-    ignore_keys = ["disable_auto_resume", "val_check_interval"]
+    ignore_keys = [
+        "disable_auto_resume",
+        "disable_evals",
+        "val_check_interval",
+        "limit_batches",
+    ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
     parts = [re.sub(r"[^a-zA-Z0-9]", "", p) for p in parts]
@@ -319,11 +372,12 @@ def main():
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_length", type=int, default=1024)
     p.add_argument("--epochs", type=int, default=1)
-    p.add_argument("--max_steps", type=int, default=None)
-    p.add_argument("--use_cosine_annealing", action="store_true")  # debug/temporary
+    p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
     # misc (untracked)
     p.add_argument("--disable_auto_resume", action="store_true")
-    p.add_argument("--val_check_interval", type=int, default=1000)
+    p.add_argument("--disable_evals", action="store_true")
+    p.add_argument("--val_check_interval", type=int, default=5000)
+    p.add_argument("--limit_batches", type=int, default=None)  # used for hpo
     args = p.parse_args()
 
     # data
@@ -337,7 +391,7 @@ def main():
     )
 
     # model
-    max_steps = args.max_steps
+    max_steps = args.limit_batches
     if max_steps is None:
         dm.setup()
         max_steps = args.epochs * len(dm.train_dataloader())
@@ -346,8 +400,8 @@ def main():
         model_head=args.model_head,
         vocab_size=tokenizer.vocab_size,
         horizon=args.horizon,
-        use_cosine_annealing=args.use_cosine_annealing,
         max_steps=max_steps,
+        scheduler=args.scheduler,
     )
 
     # maybe auto resume
@@ -358,54 +412,74 @@ def main():
         resume_ckpt = lookup_ckpt(args)
         wandb_id = lookup_wandb_run(args)
 
-    # trainer + callbacks
-    eval_callback = HellaSwagEvalCallback(args.model_name, eval_every_n_batches=5000)
-    sample_callback = SampleEvalCallback(tokenizer, eval_every_n_batches=1)
-    wandb_logger = WandbLogger(
-        project="mtl-dev",
-        name=get_econfig_name(args),
-        id=wandb_id,
-        resume="allow",
-    )
-    ckpt_best_callback = ModelCheckpoint(
-        dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-        filename="best",
-        monitor="eval/hellaswag_acc_norm",
-        mode="max",
-        save_top_k=1,
-    )
-    ckpt_last_callback = ModelCheckpoint(
-        dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-        filename="last",
-        every_n_train_steps=1000,
-    )
-    lr_monitor_callback = LearningRateMonitor(logging_interval="step")
+    # trainer callbacks
+    callbacks = [
+        # LearningRateMonitor(logging_interval="step"),
+        ModelCheckpoint(  # save last
+            dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+            filename="last",
+            every_n_train_steps=1000,
+        ),
+        OrionCallback(
+            monitor="val_loss_epoch",
+        ),
+    ]
+
+    # Add evals
+    if not args.disable_evals:
+        callbacks.extend(
+            [
+                HellaSwagEvalCallback(
+                    args.model_name,
+                    val_check_interval=args.val_check_interval,
+                ),
+                SampleEvalCallback(
+                    tokenizer,
+                    val_check_interval=args.val_check_interval,
+                ),
+                ModelCheckpoint(  # save best ckpt according to eval
+                    dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+                    filename="best",
+                    monitor="eval/hellaswag_acc_norm",
+                    mode="max",
+                    save_top_k=1,
+                ),
+            ]
+        )
 
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator="auto",
-        logger=wandb_logger,
+        logger=WandbLogger(
+            project="mtl-dev",
+            name=get_econfig_name(args),
+            id=wandb_id,
+            resume="allow",
+        ),
         default_root_dir=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
         val_check_interval=args.val_check_interval,
-        max_steps=args.max_steps,
+        # used for hpo
+        limit_train_batches=args.limit_batches,
+        limit_val_batches=args.limit_batches,
     )
 
-    # Tune lr
-    if not resume_ckpt:  # skip lr tuning if resuming from checkpoint
-        tuner = Tuner(trainer)
-        tuner.lr_find(model, dm)
+    # # Tune lr
+    # if not resume_ckpt:  # skip lr tuning if resuming from checkpoint
+    #     tuner = Tuner(trainer)
+    #     tuner.lr_find(model, dm)
 
-    # Add evaluation callback after lr tuning
-    trainer.callbacks.extend(
-        [
-            eval_callback,
-            sample_callback,
-            ckpt_best_callback,
-            ckpt_last_callback,
-            lr_monitor_callback,
-        ]
-    )
+    # NOTE: Add callback after lr tuning to avoid issues
+    trainer.callbacks.extend(callbacks)
     trainer.fit(model, dm, ckpt_path=resume_ckpt)  # for auto resume, not for saving
+    print("Done!")
+
+    # # Report to orion
+    # for cb in trainer.callbacks:
+    #     if isinstance(cb, ModelCheckpoint) and cb.monitor == "val_loss":
+    #         val_loss = cb.best_model_score
+    #         report_objective(val_loss)
+    #         print(f"Best val_loss: {val_loss}")
+    #         print(f"Best checkpoint path: {cb.best_model_path}")
 
 
 if __name__ == "__main__":
