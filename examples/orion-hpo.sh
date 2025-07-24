@@ -21,3 +21,6 @@ orion hunt -n hpo-exps \
     --lr~"loguniform(1e-8, 1e-3)" \
     --scheduler~"choices(['none', 'cosine'])"
 
+
+
+# This script will run HPO using Orion.

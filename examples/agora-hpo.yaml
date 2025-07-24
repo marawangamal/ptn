@@ -1,5 +1,4 @@
-# Experiment 1
-# Evaluating efficacy of multi-token regularization
+# Hyperparameter optimization
 preambles:
   glong:   
     - "#!/bin/bash"
