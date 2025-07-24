@@ -373,11 +373,13 @@ def main():
     p.add_argument("--max_length", type=int, default=1024)
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
+    p.add_argument("--lr", type=float, default=None)
     # misc (untracked)
     p.add_argument("--disable_auto_resume", action="store_true")
     p.add_argument("--disable_evals", action="store_true")
     p.add_argument("--val_check_interval", type=int, default=5000)
     p.add_argument("--limit_batches", type=int, default=None)  # used for hpo
+    p.add_argument("--tags", type=str, nargs="*", default=[])
     args = p.parse_args()
 
     # data
@@ -455,6 +457,7 @@ def main():
             name=get_econfig_name(args),
             id=wandb_id,
             resume="allow",
+            tags=args.tags,
         ),
         default_root_dir=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
         val_check_interval=args.val_check_interval,
@@ -463,10 +466,11 @@ def main():
         limit_val_batches=args.limit_batches,
     )
 
-    # # Tune lr
-    # if not resume_ckpt:  # skip lr tuning if resuming from checkpoint
-    #     tuner = Tuner(trainer)
-    #     tuner.lr_find(model, dm)
+    # Tune lr
+    if not resume_ckpt and args.lr is None:
+        # skip lr tuning if resuming from checkpoint
+        tuner = Tuner(trainer)
+        tuner.lr_find(model, dm)
 
     # NOTE: Add callback after lr tuning to avoid issues
     trainer.callbacks.extend(callbacks)
