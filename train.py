@@ -11,6 +11,7 @@ Usage:
 # [x] add validation set
 # [x] add qualitative evaluation / logging (ie., x="the world is")
 # [ ] log norm = torch.clip_grad_norm_(1.0)
+# [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
 
 # Runtime improvements
 # [ ] copy data onto $SLURM_TMPDIR
@@ -61,6 +62,9 @@ PRETRAINING_DS_CONFIG = {
         "streaming": True,
     },
 }
+# print("-" * 100)
+# print(f"HF_HOME: {os.environ.get('HF_HOME', 'data')}")
+# print("-" * 100)
 
 
 class LitLM(pl.LightningModule):
@@ -252,17 +256,35 @@ class HellaSwagEvalCallback(pl.Callback):
                 )
                 acc = results["results"]["hellaswag"].get("acc,none")
                 acc_norm = results["results"]["hellaswag"].get("acc_norm,none")
+                # if acc_norm is not None:
+                #     log_dict = {
+                #         "eval/hellaswag_acc": acc,
+                #         "eval/hellaswag_acc_norm": acc_norm,
+                #         "batch": batch_idx + 1,
+                #     }
+                # if (
+                #     hasattr(trainer.logger, "log_metrics")
+                #     and trainer.logger.log_metrics is not None
+                # ):
+                #     trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
                 if acc_norm is not None:
-                    log_dict = {
-                        "eval/hellaswag_acc": acc,
-                        "eval/hellaswag_acc_norm": acc_norm,
-                        "batch": batch_idx + 1,
-                    }
-                    if (
-                        hasattr(trainer.logger, "log_metrics")
-                        and trainer.logger.log_metrics is not None
-                    ):
-                        trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
+                    pl_module.log(
+                        "eval/hellaswag_acc",
+                        acc,
+                        on_step=True,
+                        prog_bar=False,
+                        logger=True,
+                        sync_dist=True,
+                    )
+                    pl_module.log(
+                        "eval/hellaswag_acc_norm",
+                        acc_norm,
+                        on_step=True,
+                        prog_bar=True,
+                        logger=True,
+                        sync_dist=True,
+                    )
+
             else:
                 print("[HellaSwagEvalCallback] HellaSwag results not available.")
 
@@ -445,13 +467,13 @@ def main():
                     tokenizer,
                     val_check_interval=args.val_check_interval,
                 ),
-                ModelCheckpoint(  # save best ckpt according to eval
-                    dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-                    filename="best",
-                    monitor="eval/hellaswag_acc_norm",
-                    mode="max",
-                    save_top_k=1,
-                ),
+                # ModelCheckpoint(  # save best ckpt according to eval
+                #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+                #     filename="best",
+                #     monitor="eval/hellaswag_acc_norm",
+                #     mode="max",
+                #     save_top_k=1,
+                # ),
             ]
         )
 
