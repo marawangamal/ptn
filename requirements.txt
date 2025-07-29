@@ -5,3 +5,4 @@ tiktoken
 datasets
 lightning
 wandb
+datatrove

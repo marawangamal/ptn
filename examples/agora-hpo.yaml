@@ -23,7 +23,15 @@ group:
               type: sweep
               preamble: glong
               sweep:
-                lr: [1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
+                lr: [3e-4, 9e-4, 3e-3, 9e-3, 3e-2]
                 scheduler: ["cosine"]
               sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --tags hpo --disable_evals --limit_train_batches 10000 --limit_val_batches 500 --val_check_interval 2500 --model_head stp --lr {lr} --scheduler {scheduler}"
+
+          # - group:
+          #     type: sweep
+          #     preamble: glong
+          #     sweep:
+          #       lr: [1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
+          #       scheduler: ["none"]
+          #     sweep_template:  "HF_HOME=$SCRATCH/huggingface python train_smol.py --tags hpo --disable_evals --limit_train_batches 10000 --limit_val_batches 500 --val_check_interval 2500 --model_head stp --lr {lr} --scheduler {scheduler}"
 
