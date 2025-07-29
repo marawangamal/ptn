@@ -19,6 +19,10 @@ class STP(AbstractDisributionHead):
     def get_output_embeddings(self):
         return self.head.weight
 
+    def freeze_decoder(self):
+        for param in self.head.parameters():
+            param.requires_grad = False
+
     def forward(self, x, y=None):
         logits = self.head(x)
         loss = None

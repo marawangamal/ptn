@@ -16,11 +16,15 @@ Usage:
 # Runtime improvements
 # [ ] copy data onto $SLURM_TMPDIR
 
+# MuToR
+# [ ] (MuToR Specific) add bi-directionl attention for prefixes
+# [ ] (All) exclude prefix prediction from loss
+# [ ] (Multihead) Addd H-1 heads and Aux loss function
+
 
 import os
 import re
 import argparse
-from datetime import timedelta
 from typing import Literal
 
 import torch
@@ -297,7 +301,7 @@ class SampleEvalCallback(pl.Callback):
             )
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
-            pl_module.log_text(key="samples", columns=columns, data=data)
+            trainer.logger.log_text(key="samples", columns=columns, data=data)
 
 
 class OrionCallback(pl.Callback):
@@ -376,6 +380,7 @@ def main():
     p.add_argument("--model_name", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
+    # p.add_argument("--pretrained", action="store_true")
     # data
     p.add_argument("--dataset_name", type=str, default="fineweb")
     # optimization

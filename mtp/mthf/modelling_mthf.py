@@ -14,6 +14,14 @@ from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads._utils import get_windowed_input_ids
 
 
+# Should use mhead as auxiliary loss with H-1 heads in addtion to basic head:
+# Multi-Token [Gloeckle et al., 2024], adapted for finetuning
+# by adding dmax − 1 auxiliary prediction heads and applying a loss-weighting strategy for these heads,
+# similar to our method. To ensure a fair comparison, for both Multi-Token and MuToR, we tune the
+# number of predicted future tokens, dmax, alongside the auxiliary loss coefficient. Implementation
+# details are provided in Appendix A.1.
+
+
 class MultiTokenHFConfig(PretrainedConfig):
     model_type = "multi_token_hfmodel"
 
@@ -63,7 +71,6 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             config.pretrained,
             vocab_size=self.vocab_size,
         )
-        del lm_head
 
         # Set multi-token head
         self.mhead_config = AbstractDisributionHeadConfig(
@@ -73,6 +80,10 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             rank=config.rank,
         )
         self.mhead = MHEADS[config.model_head](self.mhead_config)
+        if config.pretrained:
+            self.mhead.set_output_embeddings(lm_head.weight)
+            self.mhead.freeze_decoder()
+
         self.mhead.to(next(self.backbone.parameters()).dtype)
 
         # Compatibility with HF
