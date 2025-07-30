@@ -32,6 +32,10 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         pass
 
     @abstractmethod
+    def freeze_decoder(self):
+        pass
+
+    @abstractmethod
     def forward(
         self, x: torch.Tensor, y: Optional[torch.Tensor] = None
     ) -> AbstractDisributionHeadOutput:

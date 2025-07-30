@@ -11,15 +11,20 @@ Usage:
 # [x] add validation set
 # [x] add qualitative evaluation / logging (ie., x="the world is")
 # [ ] log norm = torch.clip_grad_norm_(1.0)
+# [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
 
 # Runtime improvements
 # [ ] copy data onto $SLURM_TMPDIR
+
+# MuToR
+# [ ] (MuToR Specific) add bi-directionl attention for prefixes
+# [ ] (All) exclude prefix prediction from loss
+# [ ] (Multihead) Addd H-1 heads and Aux loss function
 
 
 import os
 import re
 import argparse
-from datetime import timedelta
 from typing import Literal
 
 import torch
@@ -61,6 +66,9 @@ PRETRAINING_DS_CONFIG = {
         "streaming": True,
     },
 }
+# print("-" * 100)
+# print(f"HF_HOME: {os.environ.get('HF_HOME', 'data')}")
+# print("-" * 100)
 
 
 class LitLM(pl.LightningModule):
@@ -92,17 +100,13 @@ class LitLM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs.loss
-        self.log(
-            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
-        )
+        self.log("train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs.loss
-        self.log(
-            "val_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
-        )
+        self.log("val_loss", loss)
         return loss
 
     def on_after_backward(self) -> None:
@@ -118,7 +122,7 @@ class LitLM(pl.LightningModule):
                 f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
             )
             opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
-            warmup_steps = int(0.01 * self.hparams["max_steps"])
+            warmup_steps = int(0.005 * self.hparams["max_steps"])
             warmup_factor = lambda st: 0.05 + 0.95 * (st / max(warmup_steps, 1))
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
             cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -219,12 +223,13 @@ class LMDataModule(pl.LightningDataModule):
 
 
 class HellaSwagEvalCallback(pl.Callback):
-    def __init__(self, model_name, val_check_interval=1, device=None):
+    def __init__(self, model_name, val_check_interval=1, device=None, limit=None):
 
         super().__init__()
         self.model_name = model_name
         self.val_check_interval = val_check_interval
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.limit = limit
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
     @rank_zero_only
@@ -241,6 +246,8 @@ class HellaSwagEvalCallback(pl.Callback):
                 num_fewshot=0,
                 batch_size=2,
                 gen_kwargs={"max_new_tokens": 40},
+                # limit
+                limit=self.limit,
             )
             if (
                 results
@@ -252,17 +259,21 @@ class HellaSwagEvalCallback(pl.Callback):
                 )
                 acc = results["results"]["hellaswag"].get("acc,none")
                 acc_norm = results["results"]["hellaswag"].get("acc_norm,none")
+                # if acc_norm is not None:
+                #     log_dict = {
+                #         "eval/hellaswag_acc": acc,
+                #         "eval/hellaswag_acc_norm": acc_norm,
+                #         "batch": batch_idx + 1,
+                #     }
+                # if (
+                #     hasattr(trainer.logger, "log_metrics")
+                #     and trainer.logger.log_metrics is not None
+                # ):
+                #     trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
                 if acc_norm is not None:
-                    log_dict = {
-                        "eval/hellaswag_acc": acc,
-                        "eval/hellaswag_acc_norm": acc_norm,
-                        "batch": batch_idx + 1,
-                    }
-                    if (
-                        hasattr(trainer.logger, "log_metrics")
-                        and trainer.logger.log_metrics is not None
-                    ):
-                        trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
+                    pl_module.log("eval/hellaswag_acc", acc, sync_dist=False)
+                    pl_module.log("eval/hellaswag_acc_norm", acc_norm, sync_dist=False)
+
             else:
                 print("[HellaSwagEvalCallback] HellaSwag results not available.")
 
@@ -290,9 +301,10 @@ class SampleEvalCallback(pl.Callback):
             )
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
-            trainer.logger.log_text(
-                key="samples", columns=columns, data=data, step=batch_idx + 1
+            print(
+                f"[{batch_idx+1}] [SampleEvalCallback] Generated sample: {data[0][0]}"
             )
+            trainer.logger.log_text(key="samples", columns=columns, data=data)
 
 
 class OrionCallback(pl.Callback):
@@ -327,12 +339,12 @@ class OrionCallback(pl.Callback):
         if self._is_better(current):
             self.best = current
 
-    @rank_zero_only
-    def on_fit_end(self, trainer, pl_module):
-        """Send the score to Orion once training is finished."""
-        value = self.best.item() if torch.is_tensor(self.best) else float(self.best)
-        report_objective(value)
-        print(f"[Orion] reported {self.monitor} = {value:.5f}")
+    # @rank_zero_only
+    # def on_fit_end(self, trainer, pl_module):
+    #     """Send the score to Orion once training is finished."""
+    #     value = self.best.item() if torch.is_tensor(self.best) else float(self.best)
+    #     report_objective(value)
+    #     print(f"[Orion] reported {self.monitor} = {value:.5f}")
 
 
 def get_econfig_name(args: argparse.Namespace):
@@ -371,6 +383,7 @@ def main():
     p.add_argument("--model_name", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
+    p.add_argument("--pretrained", action="store_true")
     # data
     p.add_argument("--dataset_name", type=str, default="fineweb")
     # optimization
@@ -379,6 +392,7 @@ def main():
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
     p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--accumulate_grad_batches", type=int, default=1)
     # misc (untracked)
     p.add_argument("--disable_auto_resume", action="store_true")
     p.add_argument("--disable_evals", action="store_true")
@@ -402,7 +416,11 @@ def main():
     max_steps = args.limit_train_batches
     if max_steps is None:
         dm.setup()
-        max_steps = args.epochs * len(dm.train_dataloader())
+        max_steps = (
+            args.epochs
+            * len(dm.train_dataloader())
+            / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
+        )
     model = LitLM(
         args.model_name,
         model_head=args.model_head,
@@ -410,6 +428,7 @@ def main():
         horizon=args.horizon,
         max_steps=max_steps,
         scheduler=args.scheduler,
+        lr=args.lr,
     )
 
     # maybe auto resume
@@ -440,18 +459,19 @@ def main():
                 HellaSwagEvalCallback(
                     args.model_name,
                     val_check_interval=args.val_check_interval,
+                    limit=args.limit_val_batches,
                 ),
                 SampleEvalCallback(
                     tokenizer,
                     val_check_interval=args.val_check_interval,
                 ),
-                ModelCheckpoint(  # save best ckpt according to eval
-                    dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-                    filename="best",
-                    monitor="eval/hellaswag_acc_norm",
-                    mode="max",
-                    save_top_k=1,
-                ),
+                # ModelCheckpoint(  # save best ckpt according to eval
+                #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+                #     filename="best",
+                #     monitor="eval/hellaswag_acc_norm",
+                #     mode="max",
+                #     save_top_k=1,
+                # ),
             ]
         )
 
@@ -470,6 +490,7 @@ def main():
         # used for hpo
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
+        accumulate_grad_batches=args.accumulate_grad_batches,
     )
 
     # Tune lr

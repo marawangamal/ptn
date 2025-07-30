@@ -50,15 +50,14 @@ def process_dataset(max_length, tokenizer, output_path):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--max_length", type=int, default=1024)
-    p.add_argument("--tokenizer_name", type=str, default="distilbert/distilgpt2")
+    p.add_argument("--max_length", type=int, default=2048)
+    p.add_argument("--tokenizer_name", type=str, default="gpt2")
     p.add_argument(
         "--output_path",
         type=str,
         default=os.path.join(os.environ.get("HF_HOME", "data"), "processed", "fineweb"),
     )
     args = p.parse_args()
-
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
     dataset = process_dataset(args.max_length, tokenizer, args.output_path)
 

@@ -23,17 +23,14 @@ class Multihead(AbstractDisributionHead):
         self.decoder = nn.Linear(config.d_model, config.d_output)
 
     def set_output_embeddings(self, embeddings: torch.Tensor):
-        V, D = embeddings.shape
-        assert embeddings.shape == (
-            self.config.d_output,
-            self.config.d_model,
-        ), "embeddings shape must be (V, D)"
-        u, s, vt = torch.svd(embeddings)  # (V, R), (R,), (R, D)
-        self.decoder.weight = u[:, :D]
-        self.heads[0].weight = s[:D] * vt[:D]  # (D, D)
+        self.decoder.weight = embeddings
 
     def get_output_embeddings(self):
-        return torch.einsum("vo,oi->vi", self.decoder.weight, self.heads[0].weight)
+        return self.decoder.weight
+
+    def freeze_decoder(self):
+        for param in self.decoder.parameters():
+            param.requires_grad = False
 
     def forward(self, x, y=None):
         # if y is none (eval), only compute logits for the first head
