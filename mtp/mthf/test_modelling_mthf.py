@@ -16,6 +16,21 @@ model_name = "distilbert/distilgpt2"
 
 
 def test_model():
+    B, T = 1, 10
+    config = MultiTokenHFConfig(
+        model_name=model_name, horizon=2, loss_type="joint", model_head="multihead"
+    )
+    model = MultiTokenHF(config)
+
+    # Test forward pass & backward pass
+    x = torch.randint(0, model.vocab_size, (B, T))
+    y = torch.randint(0, model.vocab_size, (B, T))
+    outputs = model(input_ids=x, labels=y)
+    print(f"Loss: {outputs['loss'].item():.4f}")
+    print(f"Logits shape: {outputs['logits'].shape}")
+
+
+def test_pretrained_model():
     # Create model
     config = MultiTokenHFConfig(model_name=model_name, horizon=1, pretrained=True)
     model = MultiTokenHF(config)
@@ -57,3 +72,4 @@ def test_model():
 
 if __name__ == "__main__":
     test_model()
+    test_pretrained_model()

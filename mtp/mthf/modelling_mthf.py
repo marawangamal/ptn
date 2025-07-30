@@ -180,6 +180,9 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
     def forward_joint(
         self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
     ):
+        if self.lm_head is None:
+            raise ValueError("LM head is not initialized")
+
         # Get hidden states from model
         outputs = self.backbone(input_ids=input_ids, **kwargs)
         hidden_state = outputs.last_hidden_state  # (B, T-H, D)
