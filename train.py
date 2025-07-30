@@ -127,7 +127,7 @@ class LitLM(pl.LightningModule):
                 f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
             )
             opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
-            warmup_steps = int(0.005 * self.hparams["max_steps"])
+            warmup_steps = int(0.05 * self.hparams["max_steps"])
             warmup_factor = lambda st: 0.05 + 0.95 * (st / max(warmup_steps, 1))
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
             cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
