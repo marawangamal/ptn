@@ -4,6 +4,7 @@
 > **Note:** Requires Python 3.10 or higher.
 ```bash
 pip install -r requirements.txt
+pip install git+https://github.com/EleutherAI/lm-evaluation-harness.git
 pip install -e .
 ```
 

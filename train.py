@@ -37,11 +37,11 @@ import wandb
 from datasets import load_from_disk
 import lm_eval
 from lm_eval import simple_evaluate
+from datatrove.utils.dataset import DatatroveFolderDataset
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from orion.client import report_objective
 from pytorch_lightning.utilities import rank_zero_only
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
@@ -53,10 +53,11 @@ PRETRAINING_DS_CONFIG = {
         "load_from_disk_path": os.path.join(
             os.environ.get("HF_HOME", "data"), "processed", "fineweb"
         ),
-        # "path": "HuggingFaceFW/fineweb",
-        # "name": "sample-10BT",
-        # "split": "train",
-        # "streaming": True,
+    },
+    "fineweb::dt": {
+        "folder_path": os.path.join(
+            os.environ.get("HF_HOME", "data"), "processed", "fineweb"
+        ),
     },
     # small ds for testing
     "wikitext": {
@@ -186,6 +187,11 @@ class LMDataModule(pl.LightningDataModule):
             self.dataset = load_from_disk(
                 PRETRAINING_DS_CONFIG[self.dataset_name]["load_from_disk_path"]
             )
+        elif PRETRAINING_DS_CONFIG[self.dataset_name].get("folder_path"):
+            self.dataset = DatatroveFolderDataset(
+                path=PRETRAINING_DS_CONFIG[self.dataset_name]["folder_path"],
+                seq_len=self.max_length,
+            )
         else:
             self.dataset = datasets.load_dataset(
                 **PRETRAINING_DS_CONFIG[self.dataset_name]
@@ -261,17 +267,6 @@ class HellaSwagEvalCallback(pl.Callback):
                 )
                 acc = results["results"]["hellaswag"].get("acc,none")
                 acc_norm = results["results"]["hellaswag"].get("acc_norm,none")
-                # if acc_norm is not None:
-                #     log_dict = {
-                #         "eval/hellaswag_acc": acc,
-                #         "eval/hellaswag_acc_norm": acc_norm,
-                #         "batch": batch_idx + 1,
-                #     }
-                # if (
-                #     hasattr(trainer.logger, "log_metrics")
-                #     and trainer.logger.log_metrics is not None
-                # ):
-                #     trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
                 if acc_norm is not None:
                     pl_module.log("eval/hellaswag_acc", acc, sync_dist=False)
                     pl_module.log("eval/hellaswag_acc_norm", acc_norm, sync_dist=False)
@@ -382,13 +377,13 @@ def lookup_wandb_run(args: argparse.Namespace):
 def main():
     p = argparse.ArgumentParser()
     # model
-    p.add_argument("--model_name", type=str, default="HuggingFaceTB/SmolLM-135M")
+    p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
     p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
     # data
-    p.add_argument("--dataset_name", type=str, default="fineweb")
+    p.add_argument("--dataset", type=str, default="fineweb")
     # optimization
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_length", type=int, default=1024)
@@ -410,7 +405,7 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
     dm = LMDataModule(
         tokenizer,
-        args.dataset_name,
+        args.dataset,
         args.batch_size,
         args.max_length,
     )
@@ -425,7 +420,7 @@ def main():
             / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
         )
     model = LitLM(
-        args.model_name,
+        args.model,
         model_head=args.model_head,
         vocab_size=tokenizer.vocab_size,
         horizon=args.horizon,
@@ -461,7 +456,7 @@ def main():
         callbacks.extend(
             [
                 HellaSwagEvalCallback(
-                    args.model_name,
+                    args.model,
                     val_check_interval=args.val_check_interval,
                     limit=args.limit_val_batches,
                 ),

@@ -46,3 +46,9 @@ job = LocalPipelineExecutor(  # drop‑in SlurmPipelineExecutor if you’re on H
     logging_dir="./logs/fineweb10b",
 )
 job.run()
+
+
+# ------------------------------------------------------------------
+# EXAMPLE USAGE DURING TRAINING
+#  from datatrove.utils.dataset import DatatroveFolderDataset
+#  ds = DatatroveFolderDataset(ds_path, seq_len=1024)
