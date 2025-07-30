@@ -20,6 +20,7 @@ Usage:
 # [ ] (MuToR Specific) add bi-directionl attention for prefixes
 # [ ] (All) exclude prefix prediction from loss
 # [ ] (Multihead) Addd H-1 heads and Aux loss function
+# [ ] (Multihead) Tokenize using Llama tokenizer so we can finetune**
 
 
 import os
