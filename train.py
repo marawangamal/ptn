@@ -301,6 +301,9 @@ class SampleEvalCallback(pl.Callback):
             )
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
+            print(
+                f"[{batch_idx+1}] [SampleEvalCallback] Generated sample: {data[0][0]}"
+            )
             trainer.logger.log_text(key="samples", columns=columns, data=data)
 
 
@@ -380,7 +383,7 @@ def main():
     p.add_argument("--model_name", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
-    # p.add_argument("--pretrained", action="store_true")
+    p.add_argument("--pretrained", action="store_true")
     # data
     p.add_argument("--dataset_name", type=str, default="fineweb")
     # optimization
@@ -413,7 +416,11 @@ def main():
     max_steps = args.limit_train_batches
     if max_steps is None:
         dm.setup()
-        max_steps = args.epochs * len(dm.train_dataloader())
+        max_steps = (
+            args.epochs
+            * len(dm.train_dataloader())
+            / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
+        )
     model = LitLM(
         args.model_name,
         model_head=args.model_head,
