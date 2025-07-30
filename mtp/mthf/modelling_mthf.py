@@ -1,5 +1,5 @@
 import copy
-from typing import Optional
+from typing import Literal, Optional
 import torch
 import torch.nn as nn
 from transformers.configuration_utils import PretrainedConfig
@@ -11,7 +11,7 @@ from transformers.modeling_outputs import CausalLMOutput
 from mtp.mheads import MHEADS
 from mtp._types import ModelHeadType
 from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads._utils import get_windowed_input_ids
+from mtp.mheads._utils import get_windowed_input_ids, window_input_ids
 
 
 # Should use mhead as auxiliary loss with H-1 heads in addtion to basic head:
@@ -31,9 +31,11 @@ class MultiTokenHFConfig(PretrainedConfig):
         horizon: int = 1,
         rank: int = 1,
         model_head: ModelHeadType = "stp",
+        loss_type: Literal["joint", "mhead"] = "mhead",
         pretrained: bool = False,
         lambda_mhead: float = 1.0,  # weight for mhead loss
         vocab_size: Optional[int] = None,
+        **kwargs,
     ):
         super().__init__()
         self.model_name = model_name
@@ -43,6 +45,7 @@ class MultiTokenHFConfig(PretrainedConfig):
         self.pretrained = pretrained
         self.lambda_mhead = lambda_mhead
         self.vocab_size = vocab_size
+        self.loss_type = loss_type
 
 
 # TODO: standardize naming scheme (vocab_size vs d_output)
@@ -64,6 +67,8 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         self.embedding_dim = embedding_dim
         self.horizon = config.horizon
         self.vocab_size = config.vocab_size or vocab_size  # override if provided
+        self.lambda_mhead = config.lambda_mhead
+        self.loss_type = config.loss_type
 
         # Set backbone
         self.backbone, lm_head = get_backbone(
@@ -72,7 +77,12 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             vocab_size=self.vocab_size,
         )
 
-        # Set multi-token head
+        # Set lm_head
+        self.lm_head = None
+        if self.loss_type == "joint":
+            self.lm_head = lm_head
+
+        # Set mhead
         self.mhead_config = AbstractDisributionHeadConfig(
             d_model=self.embedding_dim,
             d_output=self.vocab_size,
@@ -80,16 +90,19 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             rank=config.rank,
         )
         self.mhead = MHEADS[config.model_head](self.mhead_config)
+
+        # Init both mhead and lm_head from pretrained
         if config.pretrained:
             self.mhead.set_output_embeddings(lm_head.weight)
-            self.mhead.freeze_decoder()
+            if self.lm_head is not None:
+                self.lm_head.weight = lm_head.weight
 
+        # NOTE: ensure new mhead has same dtype as backbone
         self.mhead.to(next(self.backbone.parameters()).dtype)
 
-        # Compatibility with HF
-        self.name_or_path = self.backbone.name_or_path
-
     def get_output_embeddings(self):
+        if self.lm_head is not None:
+            return self.lm_head.weight  # for forward_joint
         return self.mhead.get_output_embeddings()
 
     def get_input_embeddings(self):
@@ -102,7 +115,10 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             raise NotImplementedError("Input embeddings not found in backbone.")
 
     def set_output_embeddings(self, new_embeddings):
-        self.mhead.set_output_embeddings(new_embeddings)
+        if self.lm_head is not None:
+            self.lm_head.weight = new_embeddings  # for forward_joint
+        else:
+            self.mhead.set_output_embeddings(new_embeddings)
 
     def set_input_embeddings(self, new_embeddings):
         if hasattr(self.backbone, "wte"):
@@ -123,42 +139,99 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         # No adjustment by default
         return logits
 
-    def forward(
+    def _get_mhead_loss(
+        self, x, z, use_memory_efficient_loss: bool = True, window_shift: int = 1
+    ):
+        """Compute mhead loss.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, T).
+            z (torch.Tensor): Hidden state tensor of shape (B, T-H, D).
+            use_memory_efficient_loss (bool, optional): Whether to use memory efficient loss. Defaults to True.
+            window_shift (int, optional): The number of steps to shift the window. Defaults to 1. See example in `window_input_ids` docstring.
+
+        Returns:
+            _type_: _description_
+        """
+        H_, D = min(self.horizon, z.size(1)), z.size(-1)
+
+        # Create targets
+        # Shape: (B, T) -> (B, T, H)
+        y = window_input_ids(
+            x,
+            horizon=H_,
+            shift=window_shift,
+            ignore_index=-1,  # used to mask positions beyond seq length
+        )
+
+        # Sub-sample for memory efficiency
+        if use_memory_efficient_loss and self.horizon > 1:
+            offset = torch.randint(0, H_, (1,)).item()
+            z = z[:, offset::H_]
+            y = y[:, offset::H_]
+
+        # Merge batch and sequence dims
+        z = z.reshape(-1, D)  # (BT, D)
+        y = y.reshape(-1)  # (BT,)
+        output = self.mhead(z, y, ignore_index=-1)
+        return output.loss.mean(), output.logits
+
+    # Combined loss lm_head + mhead
+    def forward_joint(
         self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
     ):
         # Get hidden states from model
         outputs = self.backbone(input_ids=input_ids, **kwargs)
-        z = outputs.last_hidden_state  # (B, T-H, D)
+        hidden_state = outputs.last_hidden_state  # (B, T-H, D)
 
         # Compute loss if labels provided
         if labels is not None:
-            seq_len = input_ids.shape[1]
-            if seq_len <= self.horizon:
-                raise ValueError(
-                    f"Input sequence length ({seq_len}) must be greater than horizon ({self.horizon}) for loss computation."
-                )
-            # Remove last H positions since we can't predict them
-            x = z[:, : -self.horizon, :]  # (B, T-H, D)
-
-            # Create targets: (B*(T-H), H)
-            # TODO: move shift logic to mhead to support simultaneous training of conid/joint dists
-            y = get_windowed_input_ids(input_ids, self.horizon)
-            if use_memory_efficient_loss and self.horizon > 1:
-                shift = torch.randint(0, self.horizon, (1,)).item()
-                x = x[:, shift :: self.horizon]
-                y = y[:, shift :: self.horizon]
-
-            # Merge batch and sequence dims
-            x = x.reshape(-1, self.embedding_dim)  # (B*(T-H), D)
-            y = y.reshape(-1)  # (B*(T-H),)
-            output = self.mhead(x, y)
-            loss = output.loss.mean()
-            logits = output.logits
+            mhead_loss, _ = self._get_mhead_loss(
+                input_ids, hidden_state, use_memory_efficient_loss
+            )
+            logits = self.lm_head(hidden_state)  # (B, T, V)
+            lm_head_loss = torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), labels.view(-1)
+            )
+            loss = self.lambda_mhead * mhead_loss + lm_head_loss
             return CausalLMOutput(loss=loss, logits=logits)
 
         # For inference: return logits from last position
-        output = self.mhead(z)
+        logits = self.lm_head(hidden_state[:, -1:, :])
+        return CausalLMOutput(logits=logits)
+
+    # Single mhead loss
+    def forward_mhead(
+        self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
+    ):
+        # Get hidden states from model
+        outputs = self.backbone(input_ids=input_ids, **kwargs)
+        hidden_state = outputs.last_hidden_state  # (B, T, D)
+
+        # Compute loss if labels provided
+        if labels is not None:
+            loss, logits = self._get_mhead_loss(
+                input_ids, hidden_state, use_memory_efficient_loss
+            )
+            return CausalLMOutput(loss=loss, logits=logits)
+
+        # For inference: return logits from last position
+        output = self.mhead(hidden_state)
         return CausalLMOutput(logits=output.logits)
+
+    def forward(
+        self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
+    ):
+        if self.loss_type == "joint":
+            return self.forward_joint(
+                input_ids, labels, use_memory_efficient_loss, **kwargs
+            )
+        elif self.loss_type == "mhead":
+            return self.forward_mhead(
+                input_ids, labels, use_memory_efficient_loss, **kwargs
+            )
+        else:
+            raise ValueError(f"Invalid loss type: {self.loss_type}")
 
 
 def get_model_dims(model_name: str) -> tuple[int, int]:

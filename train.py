@@ -81,6 +81,7 @@ class LitLM(pl.LightningModule):
         max_steps,
         lr=5e-5,
         scheduler: Literal["none", "cosine"] = "none",
+        loss_type: Literal["joint", "mhead"] = "mhead",
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -89,6 +90,7 @@ class LitLM(pl.LightningModule):
             model_head=model_head,
             vocab_size=vocab_size,
             horizon=horizon,
+            loss_type=loss_type,
         )
         self.model = MultiTokenHF(config)
 
@@ -384,6 +386,7 @@ def main():
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
+    p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
     # data
     p.add_argument("--dataset_name", type=str, default="fineweb")
     # optimization
@@ -429,9 +432,10 @@ def main():
         max_steps=max_steps,
         scheduler=args.scheduler,
         lr=args.lr,
+        loss_type=args.loss_type,
     )
 
-    # maybe auto resume
+    # hacky way to maybe auto resume
     resume_ckpt = lookup_ckpt(args)
     wandb_id = None
     if not (args.disable_auto_resume or resume_ckpt is None):

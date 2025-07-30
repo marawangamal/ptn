@@ -23,9 +23,11 @@ class STP(AbstractDisributionHead):
         for param in self.head.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None):
+    def forward(self, x, y=None, ignore_index=-1):
         logits = self.head(x)
         loss = None
         if y is not None:
-            loss = torch.nn.functional.cross_entropy(logits, y)
+            loss = torch.nn.functional.cross_entropy(
+                logits, y, ignore_index=ignore_index
+            )
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
