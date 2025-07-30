@@ -28,21 +28,22 @@ import argparse
 from typing import Literal
 
 import torch
-from torch.utils.data import DataLoader
+import wandb
+from torch.utils.data import random_split, DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.tuner import Tuner
 from pytorch_lightning.utilities import rank_zero_only
-import datasets
-import wandb
-from datasets import load_from_disk
-import lm_eval
-from lm_eval import simple_evaluate
-from datatrove.utils.dataset import DatatroveFolderDataset
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.utilities import rank_zero_only
+
+import datasets
+from datasets import DatasetDict, load_from_disk
 from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from pytorch_lightning.utilities import rank_zero_only
+from datatrove.utils.dataset import DatatroveFolderDataset
+import lm_eval
+from lm_eval import simple_evaluate
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
@@ -58,6 +59,7 @@ PRETRAINING_DS_CONFIG = {
         "folder_path": os.path.join(
             os.environ.get("HF_HOME", "data"), "processed", "fineweb"
         ),
+        "seq_len": 1024,
     },
     # small ds for testing
     "wikitext": {
@@ -184,38 +186,45 @@ class LMDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if PRETRAINING_DS_CONFIG[self.dataset_name].get("load_from_disk_path"):
-            self.dataset = load_from_disk(
-                PRETRAINING_DS_CONFIG[self.dataset_name]["load_from_disk_path"]
-            )
+            ds = load_from_disk(**PRETRAINING_DS_CONFIG[self.dataset_name])
         elif PRETRAINING_DS_CONFIG[self.dataset_name].get("folder_path"):
-            self.dataset = DatatroveFolderDataset(
-                path=PRETRAINING_DS_CONFIG[self.dataset_name]["folder_path"],
-                seq_len=self.max_length,
-            )
+            ds = DatatroveFolderDataset(**PRETRAINING_DS_CONFIG[self.dataset_name])
         else:
-            self.dataset = datasets.load_dataset(
-                **PRETRAINING_DS_CONFIG[self.dataset_name]
-            )
-            self.dataset = self.dataset.filter(
-                lambda x: x["text"] and x["text"].strip() != ""
-            )
-            self.dataset = self.dataset.shuffle(seed=42)
+            ds = datasets.load_dataset(**PRETRAINING_DS_CONFIG[self.dataset_name])
+            ds = ds.filter(lambda x: x["text"] and x["text"].strip() != "")
+            ds = ds.shuffle(seed=42)
 
             # Tokenize
-            self.dataset = self.dataset.map(
+            ds = ds.map(
                 lambda x: self.tokenizer(x["text"]),
                 remove_columns=["text"],
                 batched=True,
             )
 
             # Group instead of padding/truncation
-            self.dataset = self.dataset.map(
+            ds = ds.map(
                 lambda x: self.group_texts(x),
                 batched=True,
             )
 
-        self.dataset = self.dataset.train_test_split(test_size=0.1)
-        self.dataset["val"] = self.dataset["test"]
+        # Split
+        train_ratio = 0.9
+        n_total = len(ds)
+        n_train = int(train_ratio * n_total)
+        n_test = n_total - n_train
+
+        # 3. Split (seeded for reproducibility)
+        g = torch.Generator().manual_seed(42)
+        train_ds, test_ds = random_split(ds, [n_train, n_test], generator=g)
+
+        self.dataset = {
+            "train": train_ds,
+            "val": test_ds,
+            "test": test_ds,
+        }
+
+        # self.dataset = self.dataset.train_test_split(test_size=0.1)
+        # self.dataset["val"] = self.dataset["test"]
 
     def train_dataloader(self):
         collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
