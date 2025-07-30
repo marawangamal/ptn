@@ -65,7 +65,8 @@ def window_input_ids(
     # print(f"Input IDs: {input_ids}")
     # print(f"Input IDs (windowed): {input_ids_windowed}")
     input_ids_windowed[
-        input_ids_windowed < torch.arange(T).reshape(1, T, -1).repeat(1, 1, H)
+        input_ids_windowed
+        < torch.arange(T, device=input_ids.device).reshape(1, T, -1).repeat(1, 1, H)
     ] = ignore_index
     return input_ids_windowed
 
