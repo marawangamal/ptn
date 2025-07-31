@@ -28,7 +28,7 @@ if __name__ == "__main__":
         dataset="HuggingFaceFW/fineweb",
         dataset_options={
             "split": "train",
-            "name": "sample-10BT",  # ≃10 billion GPT‑2 tokens (≈27 GB parquet) :contentReference[oaicite:0]{index=0}
+            "name": "sample-10BT",  # ≃10 billion GPT‑2 tokens (≈27 GB parquet)
         },
         text_key="text",  # column to feed the tokenizer
         id_key="id",  # (optional) keeps the UUID in metadata
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     tok_block = DocumentTokenizer(
         output_folder=f"./fineweb-10bt-ds-{normalize_str(args.tokenizer)}",  # local path also works
-        tokenizer_name_or_path="gpt2",  # <-- plug your own tokenizer here
+        tokenizer_name_or_path=args.tokenizer,
         eos_token=tokenizer.eos_token,  # or tok.eos_token
         batch_size=10_000,  # how many docs per tokenizer batch
         max_tokens_per_file=int(1e8),  # shard size (~400 MB with 4‑byte ints)
@@ -55,7 +55,7 @@ if __name__ == "__main__":
         pipeline=[fw_reader, tok_block],
         tasks=1,  # 128 parallel processes -> adjust to CPU quota
         workers=1,  # how many run concurrently
-        logging_dir="./logs/fineweb10b",
+        logging_dir=f"./logs/fineweb10b-{normalize_str(args.tokenizer)}",
     )
     job.run()
 

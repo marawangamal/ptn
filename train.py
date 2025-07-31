@@ -52,7 +52,7 @@ EXPERIMENTS_DIR = "experiments"
 
 PRETRAINING_DS_CONFIG = {
     "fineweb": {
-        "load_from_disk_path": os.path.join(
+        "dataset_path": os.path.join(
             os.environ.get("HF_HOME", "data"), "processed", "fineweb"
         ),
     },
@@ -186,7 +186,7 @@ class LMDataModule(pl.LightningDataModule):
         return result
 
     def setup(self, stage=None):
-        if PRETRAINING_DS_CONFIG[self.dataset_name].get("load_from_disk_path"):
+        if PRETRAINING_DS_CONFIG[self.dataset_name].get("dataset_path"):
             ds = load_from_disk(**PRETRAINING_DS_CONFIG[self.dataset_name])
         elif PRETRAINING_DS_CONFIG[self.dataset_name].get("folder_path"):
             ds = DatatroveFolderDataset(**PRETRAINING_DS_CONFIG[self.dataset_name])

@@ -100,6 +100,9 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         # NOTE: ensure new mhead has same dtype as backbone
         self.mhead.to(next(self.backbone.parameters()).dtype)
 
+        # NOTE: Important for compatibility with HF
+        self.name_or_path = self.backbone.name_or_path
+
     def get_output_embeddings(self):
         if self.lm_head is not None:
             return self.lm_head.weight  # for forward_joint
