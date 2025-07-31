@@ -1,5 +1,6 @@
 # fineweb_10b_tokenize.py
 import argparse
+import os
 import re
 from datatrove.executor import (
     LocalPipelineExecutor,
@@ -28,7 +29,9 @@ if __name__ == "__main__":
         dataset="HuggingFaceFW/fineweb",
         dataset_options={
             "split": "train",
-            "name": "sample-10BT",  # ≃10 billion GPT‑2 tokens (≈27 GB parquet)
+            "name": "sample-10BT",  # ≃10 billion GPT2 tokens (≈27GB parquet)
+            "cache_dir": f"{os.environ['SCRATCH']}/huggingface/datasets",  # Explicit cache
+            "download_mode": "reuse_cache_if_exists",  # Don't re-download
         },
         text_key="text",  # column to feed the tokenizer
         id_key="id",  # (optional) keeps the UUID in metadata
@@ -42,8 +45,8 @@ if __name__ == "__main__":
         tokenizer_name_or_path=args.tokenizer,
         eos_token=tokenizer.eos_token,  # or tok.eos_token
         batch_size=10_000,  # how many docs per tokenizer batch
-        max_tokens_per_file=int(1e8),  # shard size (~400 MB with 4‑byte ints)
-        # pack_sequences=True,  # turn docs into contiguous 2 k/4 k ctx windows
+        max_tokens_per_file=int(1e8),  # shard size (~400 MB with 4byte ints)
+        # pack_sequences=True,  # turn docs into contiguous 2k/4k ctx windows
         shuffle_documents=True,
         seed=42,
     )
@@ -51,10 +54,11 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 3) Launch – scale locally or on your cluster
     # ------------------------------------------------------------------
+    n_cpus = int(os.environ.get("SLURM_NPROCS", 1))
     job = LocalPipelineExecutor(  # drop‑in SlurmPipelineExecutor if you’re on HPC
         pipeline=[fw_reader, tok_block],
-        tasks=1,  # 128 parallel processes -> adjust to CPU quota
-        workers=1,  # how many run concurrently
+        tasks=n_cpus,
+        workers=max(1, n_cpus // 2),
         logging_dir=f"./logs/fineweb10b-{normalize_str(args.tokenizer)}",
     )
     job.run()
