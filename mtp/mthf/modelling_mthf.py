@@ -203,7 +203,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             return CausalLMOutput(loss=loss, logits=logits)
 
         # For inference: return logits from last position
-        logits = self.lm_head(hidden_state[:, -1:, :])
+        logits = self.lm_head(hidden_state)
         return CausalLMOutput(logits=logits)
 
     # Single mhead loss
@@ -211,6 +211,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
     ):
         # Get hidden states from model
+        B, T = input_ids.shape
         outputs = self.backbone(input_ids=input_ids, **kwargs)
         hidden_state = outputs.last_hidden_state  # (B, T, D)
 
@@ -219,11 +220,11 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             loss, logits = self._get_mhead_loss(
                 input_ids, hidden_state, use_memory_efficient_loss
             )
-            return CausalLMOutput(loss=loss, logits=logits)
+            return CausalLMOutput(loss=loss, logits=logits.reshape(B, T, -1))
 
         # For inference: return logits from last position
         output = self.mhead(hidden_state)
-        return CausalLMOutput(logits=output.logits)
+        return CausalLMOutput(logits=output.logits.reshape(B, T, -1))
 
     def forward(
         self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
