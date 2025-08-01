@@ -16,4 +16,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["mtp"] 
+packages = ["mtp", "dataloaders"] 

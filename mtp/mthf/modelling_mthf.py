@@ -34,7 +34,6 @@ class MultiTokenHFConfig(PretrainedConfig):
         loss_type: Literal["joint", "mhead"] = "mhead",
         pretrained: bool = False,
         lambda_mhead: float = 1.0,  # weight for mhead loss
-        vocab_size: Optional[int] = None,
         **kwargs,
     ):
         super().__init__()
@@ -44,7 +43,6 @@ class MultiTokenHFConfig(PretrainedConfig):
         self.rank = rank
         self.pretrained = pretrained
         self.lambda_mhead = lambda_mhead
-        self.vocab_size = vocab_size
         self.loss_type = loss_type
 
 
@@ -63,10 +61,8 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         super().__init__(config)
 
         # Set dims
-        vocab_size, embedding_dim = get_model_dims(config.model_name)
-        self.embedding_dim = embedding_dim
+        self.vocab_size, self.embedding_dim = get_model_dims(config.model_name)
         self.horizon = config.horizon
-        self.vocab_size = config.vocab_size or vocab_size  # override if provided
         self.lambda_mhead = config.lambda_mhead
         self.loss_type = config.loss_type
 

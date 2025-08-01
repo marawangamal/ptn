@@ -30,7 +30,7 @@ from typing import Literal
 
 import torch
 import wandb
-from torch.utils.data import random_split, DataLoader
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.tuner import Tuner
 from pytorch_lightning.utilities import rank_zero_only
@@ -39,10 +39,9 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.utilities import rank_zero_only
 
 import datasets
-from datasets import DatasetDict, load_from_disk
 from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from datatrove.utils.dataset import DatatroveFolderDataset
+from dataloaders.prepare_hf_ds import get_dataset
 import lm_eval
 from lm_eval import simple_evaluate
 
@@ -80,7 +79,6 @@ class LitLM(pl.LightningModule):
         self,
         model_name,
         model_head,
-        vocab_size,
         horizon,
         max_steps,
         lr=5e-5,
@@ -92,7 +90,6 @@ class LitLM(pl.LightningModule):
         config = MultiTokenHFConfig(
             model_name=model_name,
             model_head=model_head,
-            vocab_size=vocab_size,
             horizon=horizon,
             loss_type=loss_type,
         )
@@ -154,78 +151,40 @@ class LitLM(pl.LightningModule):
 class LMDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        tokenizer,
+        tokenizer_name,
         dataset_name,
+        subset,
+        split,
         batch_size,
         max_length,
+        split_ratio=0.1,
     ):
         super().__init__()
         self.save_hyperparameters()
         self.dataset_name = dataset_name
-        self.tokenizer = tokenizer
+        self.subset = subset
+        self.split = split
         self.batch_size = batch_size
         self.max_length = max_length
+        self.split_ratio = split_ratio
 
-    def group_texts(self, examples):
-        # Concatenate all texts.
-        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
-        if total_length >= self.max_length:
-            total_length = (total_length // self.max_length) * self.max_length
-        # Split by chunks of block_size.
-        result = {
-            k: [
-                t[i : i + self.max_length]
-                for i in range(0, total_length, self.max_length)
-            ]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
+        self.tokenizer_name = tokenizer_name
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.tokenizer_name, use_fast=True
+        )
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def setup(self, stage=None):
-        if PRETRAINING_DS_CONFIG[self.dataset_name].get("dataset_path"):
-            ds = load_from_disk(**PRETRAINING_DS_CONFIG[self.dataset_name])
-        elif PRETRAINING_DS_CONFIG[self.dataset_name].get("folder_path"):
-            ds = DatatroveFolderDataset(**PRETRAINING_DS_CONFIG[self.dataset_name])
-        else:
-            ds = datasets.load_dataset(**PRETRAINING_DS_CONFIG[self.dataset_name])
-            ds = ds.filter(lambda x: x["text"] and x["text"].strip() != "")
-            ds = ds.shuffle(seed=42)
+        ds = get_dataset(
+            dataset=self.dataset_name,
+            subset=self.subset,
+            split=self.split,
+            tokenizer=self.tokenizer_name,
+            max_length=self.max_length,
+        )
 
-            # Tokenize
-            ds = ds.map(
-                lambda x: self.tokenizer(x["text"]),
-                remove_columns=["text"],
-                batched=True,
-            )
-
-            # Group instead of padding/truncation
-            ds = ds.map(
-                lambda x: self.group_texts(x),
-                batched=True,
-            )
-
-        # Split
-        train_ratio = 0.9
-        n_total = len(ds)
-        n_train = int(train_ratio * n_total)
-        n_test = n_total - n_train
-
-        # 3. Split (seeded for reproducibility)
-        g = torch.Generator().manual_seed(42)
-        train_ds, test_ds = random_split(ds, [n_train, n_test], generator=g)
-
-        self.dataset = {
-            "train": train_ds,
-            "val": test_ds,
-            "test": test_ds,
-        }
-
-        # self.dataset = self.dataset.train_test_split(test_size=0.1)
-        # self.dataset["val"] = self.dataset["test"]
+        self.dataset = ds.train_test_split(test_size=self.split_ratio)
+        self.dataset["val"] = self.dataset["test"]
 
     def train_dataloader(self):
         collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
@@ -360,6 +319,9 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_evals",
         "val_check_interval",
         "tags",
+        # ds metadata
+        "subset",
+        "split",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
@@ -387,16 +349,18 @@ def lookup_wandb_run(args: argparse.Namespace):
 def main():
     p = argparse.ArgumentParser()
     # model
-    p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
+    p.add_argument("--model", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
     p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
     # data
-    p.add_argument("--dataset", type=str, default="fineweb")
+    p.add_argument("--dataset", type=str, default="HuggingFaceFW/fineweb")
+    p.add_argument("--subset", type=str, default="sample-10BT")
+    p.add_argument("--split", type=str, default="train")
     # optimization
     p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--max_length", type=int, default=1024)
+    p.add_argument("--max_length", type=int, default=2048)
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
     p.add_argument("--lr", type=float, default=None)
@@ -411,13 +375,13 @@ def main():
     args = p.parse_args()
 
     # data
-    tokenizer = AutoTokenizer.from_pretrained("gpt2", use_fast=True)
-    tokenizer.pad_token = tokenizer.eos_token
     dm = LMDataModule(
-        tokenizer,
-        args.dataset,
-        args.batch_size,
-        args.max_length,
+        tokenizer_name=args.model,
+        dataset_name=args.dataset,
+        subset=args.subset,
+        split=args.split,
+        batch_size=args.batch_size,
+        max_length=args.max_length,
     )
 
     # model
@@ -430,9 +394,8 @@ def main():
             / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
         )
     model = LitLM(
-        args.model,
+        model_name=args.model,
         model_head=args.model_head,
-        vocab_size=tokenizer.vocab_size,
         horizon=args.horizon,
         max_steps=max_steps,
         scheduler=args.scheduler,
@@ -471,7 +434,7 @@ def main():
                     limit=args.limit_val_batches,
                 ),
                 SampleEvalCallback(
-                    tokenizer,
+                    dm.tokenizer,
                     val_check_interval=args.val_check_interval,
                 ),
                 # ModelCheckpoint(  # save best ckpt according to eval

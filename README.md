@@ -14,7 +14,7 @@ Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb, and occa
 
 First, prepare the data using:
 ```bash
->> python dataloaders/prepare_fineweb.py --max_length 2048 # CPU intensive: `salloc --cpus-per-task=64 --mem=64G`
+>> python dataloaders/prepare_fineweb.py --tokenizer HuggingFaceTB/SmolLM-135M --max_length 2048 # CPU intensive: `salloc --cpus-per-task=64 --mem=64G`
 ```
 
 Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using next-token-prediction

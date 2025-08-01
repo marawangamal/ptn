@@ -1,29 +1,53 @@
+"""This script is used to prepares HF datasets for pre-training.
+
+Downloads, Tokenizes, and Chunks HF LM datasets. This process is CPU intensive, so we use
+multiple processes to speed it up.
+
+Example:
+    >> salloc --cpus-per-task=64 --mem=64G
+    >>  HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --dataset wikitext --subset wikitext-2-raw-v1 --split "train[:10000]"
+"""
+
+# TODO:
+# - Is attn mask valid with the chunking?
+
 import multiprocessing
 import os
 import argparse
+from typing import Union
 import datasets
 from transformers import AutoTokenizer
 
 
-def main(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+# NOTE: `num_proc`is used in the cache signature, ensure it is the same in the
+# training script. Even if you don't use it, it must be present. Otherwise, the
+# cache will be invalidated and the dataset will be re-processed.
+def get_dataset(
+    dataset, subset, split, tokenizer, max_length
+) -> Union[datasets.Dataset, datasets.DatasetDict]:
+
+    tok = AutoTokenizer.from_pretrained(tokenizer, use_fast=True)
+    cache = os.environ.get("HF_HOME", "data")
+    print(
+        f"Args: dataset={dataset}, subset={subset}, split={split}, tokenizer={tokenizer}, max_length={max_length}, cache={cache}"
+    )
 
     ds = datasets.load_dataset(
-        # args.dataset
-        # args.subset
-        # split = args.split
+        dataset,
+        subset,
+        split=split,
         # ===== DEBUG =====
-        "wikitext",
-        "wikitext-2-raw-v1",
-        split="train[:10000]",
+        # "wikitext",
+        # "wikitext-2-raw-v1",
+        # split="train[:10000]",
         # ==================
-        cache_dir=args.cache,
+        cache_dir=cache,
     )
 
     def tokenize(examples):
-        return tokenizer(examples["text"])
+        return tok(examples["text"])
 
-    def group_texts(examples, max_length=args.max_length):
+    def group_texts(examples, max_length=max_length):
         # Concatenate all texts.
         concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
@@ -42,7 +66,7 @@ def main(args):
     # Filter empty texts
     ds = ds.filter(
         lambda x: x["text"] and x["text"].strip(),
-        num_proc=args.num_proc,  # type: ignore
+        # num_proc=num_proc,  # type: ignore
         desc="Filter empty",  # type: ignore
     ).shuffle(seed=42)
 
@@ -51,8 +75,8 @@ def main(args):
     ds = ds.map(
         tokenize,
         batched=True,
-        batch_size=args.batch_size,
-        num_proc=args.num_proc,
+        # batch_size=batch_size,
+        # num_proc=num_proc,
         desc="Tokenize",
         load_from_cache_file=True,
         remove_columns=list(cols),
@@ -62,8 +86,8 @@ def main(args):
     ds = ds.map(
         group_texts,
         batched=True,
-        batch_size=args.batch_size,
-        num_proc=args.num_proc,
+        # batch_size=batch_size,
+        # num_proc=num_proc,
         desc="Chunk",
         load_from_cache_file=True,
     )
@@ -75,14 +99,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--max_length", type=int, default=2048)
     p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
-    p.add_argument("--cache", type=str, default=os.environ.get("HF_HOME", "data"))
-    p.add_argument("--num_proc", type=int, default=multiprocessing.cpu_count())
-    p.add_argument("--batch_size", type=int, default=1000)
     p.add_argument("--dataset", type=str, default="HuggingFaceFW/fineweb")
     p.add_argument("--split", type=str, default="train")
     p.add_argument("--subset", type=str, default="sample-10BT")
     args = p.parse_args()
-    ds = main(args)
+    ds = get_dataset(**vars(args))
 
     print("Number of samples:", len(ds))
     print("Features:", ds.column_names)
