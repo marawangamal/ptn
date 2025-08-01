@@ -21,7 +21,7 @@ Train `HuggingFaceTB/SmolLM-135M` model from scratch on 10B token subset of fine
 
 First, prepare the data using (CPU intensive use `salloc --cpus-per-task=64 --mem=64G`)
 ```bash
->> HF_HOME=$SCRATCH/huggingface python train.py --model HuggingFaceTB/SmolLM-135M  --prepare_ds_only
+>> HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer HuggingFaceTB/SmolLM-135M
 ```
 
 Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using next-token-prediction
@@ -33,10 +33,22 @@ Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using nex
 
 
 ### Finetune 
+
+First, prepare the data using (CPU intensive use `salloc --cpus-per-task=64 --mem=64G`)
+```bash
+>> HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py \
+    --tokenizer meta-llama/Llama-3.2-3B-Instruct \
+    --dataset nvidia/OpenMathInstruct-2 \
+    --split train \
+    --subset "" \
+    --column_names problem generated_solution
+```
+
 Finetune `meta-llama/Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss 
 ```bash
 >> HF_HOME=$SCRATCH/huggingface python train.py \
     --model meta-llama/Llama-3.2-3B-Instruct \
+    --dataset omi \
     --model_head multihead \
     --lr 4e-3 \
     --scheduler cosine \
@@ -45,7 +57,7 @@ Finetune `meta-llama/Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint lo
     --max_len 512 \
     --batch_size 1 \
     --epochs 5 \
-    --limit_train_batches 5 \
+    --limit_train_batches 5 \ 
     --limit_val_batches 1 \
     --val_check_interval 5
 ```

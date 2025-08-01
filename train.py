@@ -400,7 +400,6 @@ def main():
     p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
-    p.add_argument("--prepare_ds_only", action="store_true")  # exit after preparing ds
     p.add_argument("--evals", type=str, nargs="*", default=["hellaswag"])
     args = p.parse_args()
 
@@ -411,11 +410,6 @@ def main():
         max_length=args.max_length,
         **DS_KWARGS[args.dataset],
     )
-
-    # Prepare ds then exit
-    if args.prepare_ds_only:
-        dm.setup()
-        exit()
 
     # model
     max_steps = args.limit_train_batches
@@ -465,6 +459,8 @@ def main():
                     args.model,
                     val_check_interval=args.val_check_interval,
                     limit=args.limit_val_batches,
+                    evals=args.evals,
+                    batch_size=args.batch_size,
                 ),
                 SampleEvalCallback(
                     dm.tokenizer,
