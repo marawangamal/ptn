@@ -52,9 +52,7 @@ Finetune `meta-llama/Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint lo
 
 <!-- 
 DEBUG::
---dataset wikitext \
---subset wikitext-2-raw-v1 \
---split "train[:10000]" \ 
+--dataset wikitext --subset wikitext-2-raw-v1  --split "train[:10000]" \ 
 -->
 
 | Training Setup                | Dataset         | Hardware      | Time    |

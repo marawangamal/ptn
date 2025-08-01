@@ -7,10 +7,6 @@ Usage:
 
 # TODO:
 # Perf improvements
-# [x] use cosine annealing lr scheduler (test on wikitext)
-# [x] add validation set
-# [x] add qualitative evaluation / logging (ie., x="the world is")
-# [ ] log norm = torch.clip_grad_norm_(1.0)
 # [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
 
 # Runtime improvements
@@ -51,14 +47,20 @@ from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 EXPERIMENTS_DIR = "experiments"
 DS_KWARGS = {  # presets for diff datasets
     "omi": {
-        "dataset": "nvidia/OpenMathInstruct-2",
+        "dataset_name": "nvidia/OpenMathInstruct-2",
         "split": "train",
         "column_names": ["problem", "generated_solution"],
     },
     "fineweb": {
-        "dataset": "HuggingFaceFW/fineweb",
+        "dataset_name": "HuggingFaceFW/fineweb",
         "subset": "sample-10BT",
         "split": "train",
+        "column_names": ["text"],
+    },
+    "wikitext": {
+        "dataset_name": "wikitext",
+        "subset": "wikitext-2-raw-v1",
+        "split": "train[:10000]",
         "column_names": ["text"],
     },
 }

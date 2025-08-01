@@ -17,32 +17,32 @@ import argparse
 from typing import Union
 import datasets
 from transformers import AutoTokenizer
+import hashlib, base64
+
+
+def stable_fingerprint(s: str) -> str:
+    # 64-bit hex string, plenty for cache keys
+    return hashlib.sha1(s.encode()).hexdigest()[:16]
 
 
 def get_dataset(
-    dataset, subset, split, tokenizer, max_length, column_names=["text"]
+    dataset,
+    subset,
+    split,
+    tokenizer,
+    max_length,
+    column_names=["text"],
+    num_proc=32,
+    batch_size=1024,
 ) -> Union[datasets.Dataset, datasets.DatasetDict]:
-
-    tok = AutoTokenizer.from_pretrained(tokenizer, use_fast=True)
     cache = os.environ.get("HF_HOME", "data")
-    print(
-        f"Args: dataset={dataset}, subset={subset}, split={split}, tokenizer={tokenizer}, max_length={max_length}, cache={cache}"
+    fingerprint_str = (
+        f"{dataset}-{subset}-{split}-{tokenizer}-{max_length}-{column_names}"
     )
-
-    # ---------------------------------------------------------------------------
-    # Hard-coded parallelism & batching parameters.
-    # These speed up HF `Dataset.map`/`filter` dramatically while keeping the
-    # function signature unchanged.
-    # ---------------------------------------------------------------------------
-    BATCH_SIZE = 1024
-    NUM_PROC = 32
-
-    ds = datasets.load_dataset(
-        dataset,
-        subset,
-        split=split,
-        cache_dir=cache,
-    )
+    fingerprint = stable_fingerprint(fingerprint_str)
+    tok = AutoTokenizer.from_pretrained(tokenizer, use_fast=True)
+    print(f"Fingerprint: {fingerprint}")
+    print(f"Fingerprint string: {fingerprint_str}")
 
     def tokenize(examples):
         return tok(examples["text"])
@@ -63,19 +63,30 @@ def get_dataset(
         result["labels"] = result["input_ids"].copy()
         return result
 
+    # Load dataset
+    ds = datasets.load_dataset(
+        dataset,
+        subset,
+        split=split,
+        cache_dir=cache,
+    )
+
     # Create a new column with the text
     ds = ds.map(
         lambda x: {"text": " ".join(x[col] for col in column_names)},
-        num_proc=NUM_PROC,
+        num_proc=num_proc,
         desc="Create text column",
         load_from_cache_file=True,
+        new_fingerprint=fingerprint + "_1_concat",
     )
 
     # Filter empty texts
     ds = ds.filter(
         lambda x: x["text"] and x["text"].strip(),
-        num_proc=NUM_PROC,  # type: ignore
+        num_proc=num_proc,  # type: ignore
         desc="Filter empty",  # type: ignore
+        load_from_cache_file=True,
+        new_fingerprint=fingerprint + "_2_filter",
     ).shuffle(seed=42)
 
     # Tokenize
@@ -83,21 +94,23 @@ def get_dataset(
     ds = ds.map(
         tokenize,
         batched=True,
-        batch_size=BATCH_SIZE,
-        num_proc=NUM_PROC,
+        batch_size=batch_size,
+        num_proc=num_proc,
         desc="Tokenize",
-        load_from_cache_file=True,
         remove_columns=list(cols),
+        load_from_cache_file=True,
+        new_fingerprint=fingerprint + "_3_tokenize",
     )
 
     # Chunk
     ds = ds.map(
         group_texts,
         batched=True,
-        batch_size=BATCH_SIZE,
-        num_proc=NUM_PROC,
+        batch_size=batch_size,
+        num_proc=num_proc,
         desc="Chunk",
         load_from_cache_file=True,
+        new_fingerprint=fingerprint + "_4_chunk",
     )
 
     return ds
@@ -106,10 +119,11 @@ def get_dataset(
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--max_length", type=int, default=2048)
-    p.add_argument("--tokenizer", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
+    p.add_argument("--tokenizer", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--dataset", type=str, default="HuggingFaceFW/fineweb")
     p.add_argument("--split", type=str, default="train")
     p.add_argument("--subset", type=str, default="sample-10BT")
+    p.add_argument("--column_names", type=str, nargs="*", default=["text"])
     args = p.parse_args()
     ds = get_dataset(**vars(args))
 
