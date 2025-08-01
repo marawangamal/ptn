@@ -41,13 +41,27 @@ from pytorch_lightning.utilities import rank_zero_only
 import datasets
 from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from dataloaders.prepare_hf_ds import get_dataset
+from dataloaders import get_dataset
 import lm_eval
 from lm_eval import simple_evaluate
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
+
 EXPERIMENTS_DIR = "experiments"
+DS_KWARGS = {  # presets for diff datasets
+    "omi": {
+        "dataset": "nvidia/OpenMathInstruct-2",
+        "split": "train",
+        "column_names": ["problem", "generated_solution"],
+    },
+    "fineweb": {
+        "dataset": "HuggingFaceFW/fineweb",
+        "subset": "sample-10BT",
+        "split": "train",
+        "column_names": ["text"],
+    },
+}
 
 PRETRAINING_DS_CONFIG = {
     "fineweb": {
@@ -158,6 +172,7 @@ class LMDataModule(pl.LightningDataModule):
         batch_size,
         max_length,
         split_ratio=0.1,
+        column_names=["text"],
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -167,6 +182,7 @@ class LMDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.max_length = max_length
         self.split_ratio = split_ratio
+        self.column_names = column_names
 
         self.tokenizer_name = tokenizer_name
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -181,6 +197,7 @@ class LMDataModule(pl.LightningDataModule):
             split=self.split,
             tokenizer=self.tokenizer_name,
             max_length=self.max_length,
+            column_names=self.column_names,
         )
 
         self.dataset = ds.train_test_split(test_size=self.split_ratio)
@@ -199,11 +216,21 @@ class LMDataModule(pl.LightningDataModule):
         )
 
 
-class HellaSwagEvalCallback(pl.Callback):
-    def __init__(self, model_name, val_check_interval=1, device=None, limit=None):
+class LMEvalsCallback(pl.Callback):
+    def __init__(
+        self,
+        model_name,
+        evals,
+        batch_size,
+        val_check_interval=1,
+        device=None,
+        limit=None,
+    ):
 
         super().__init__()
         self.model_name = model_name
+        self.evals = evals
+        self.batch_size = batch_size
         self.val_check_interval = val_check_interval
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.limit = limit
@@ -217,31 +244,29 @@ class HellaSwagEvalCallback(pl.Callback):
             print(
                 f"\n[HellaSwagEvalCallback] Evaluating on HellaSwag at batch {batch_idx+1}..."
             )
-            results = simple_evaluate(
+            output = simple_evaluate(
                 model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
-                tasks=["hellaswag"],
-                num_fewshot=0,
-                batch_size=2,
-                gen_kwargs={"max_new_tokens": 40},
-                # limit
+                tasks=self.evals,
+                batch_size=self.batch_size,
                 limit=self.limit,
             )
-            if (
-                results
-                and results.get("results")
-                and results["results"].get("hellaswag")
-            ):
-                print(
-                    f"[HellaSwagEvalCallback] HellaSwag results: {results['results']['hellaswag']}"
-                )
-                acc = results["results"]["hellaswag"].get("acc,none")
-                acc_norm = results["results"]["hellaswag"].get("acc_norm,none")
-                if acc_norm is not None:
-                    pl_module.log("eval/hellaswag_acc", acc, sync_dist=False)
-                    pl_module.log("eval/hellaswag_acc_norm", acc_norm, sync_dist=False)
-
-            else:
-                print("[HellaSwagEvalCallback] HellaSwag results not available.")
+            for task_name in output["results"].keys():
+                # Example output:
+                # >> output['results']['gsm8k_cot']
+                # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
+                # 'exact_match_stderr,strict-match': 0.16666666666666666,
+                # 'exact_match,flexible-extract': np.float64(0.5),
+                # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
+                for metric_name in output["results"][task_name].keys():
+                    # if metric is a number, log it
+                    if isinstance(
+                        output["results"][task_name][metric_name], (int, float)
+                    ):
+                        pl_module.log(
+                            f"eval/{task_name}/{metric_name}",
+                            output["results"][task_name][metric_name],
+                            sync_dist=False,
+                        )
 
 
 class SampleEvalCallback(pl.Callback):
@@ -319,9 +344,12 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_evals",
         "val_check_interval",
         "tags",
+        "evals",
+        "column_names",
         # ds metadata
         "subset",
         "split",
+        "prepare_ds",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
@@ -349,15 +377,13 @@ def lookup_wandb_run(args: argparse.Namespace):
 def main():
     p = argparse.ArgumentParser()
     # model
-    p.add_argument("--model", type=str, default="meta-llama/Llama-3.2-3B-Instruct")
+    p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
     p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
     # data
-    p.add_argument("--dataset", type=str, default="HuggingFaceFW/fineweb")
-    p.add_argument("--subset", type=str, default="sample-10BT")
-    p.add_argument("--split", type=str, default="train")
+    p.add_argument("--dataset", type=str, default="fineweb", choices=DS_KWARGS.keys())
     # optimization
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--max_length", type=int, default=2048)
@@ -372,17 +398,22 @@ def main():
     p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
+    p.add_argument("--prepare_ds_only", action="store_true")  # exit after preparing ds
+    p.add_argument("--evals", type=str, nargs="*", default=["hellaswag"])
     args = p.parse_args()
 
     # data
     dm = LMDataModule(
         tokenizer_name=args.model,
-        dataset_name=args.dataset,
-        subset=args.subset,
-        split=args.split,
         batch_size=args.batch_size,
         max_length=args.max_length,
+        **DS_KWARGS[args.dataset],
     )
+
+    # Prepare ds then exit
+    if args.prepare_ds_only:
+        dm.setup()
+        exit()
 
     # model
     max_steps = args.limit_train_batches
@@ -428,7 +459,7 @@ def main():
     if not args.disable_evals:
         callbacks.extend(
             [
-                HellaSwagEvalCallback(
+                LMEvalsCallback(
                     args.model,
                     val_check_interval=args.val_check_interval,
                     limit=args.limit_val_batches,

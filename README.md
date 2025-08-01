@@ -9,12 +9,19 @@ pip install -e .
 ```
 
 ## Train
-Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb, and occasionally evaluate on HellaSwag.
 
+<!-- 
+TODO:
+[ ] Validate train from scratch setup [IPR]
+[ ] Validate finetuning setup
+ -->
 
-First, prepare the data using:
+### Training from scratch
+Train `HuggingFaceTB/SmolLM-135M` model from scratch on 10B token subset of fineweb, and occasionally evaluate on HellaSwag.
+
+First, prepare the data using (CPU intensive use `salloc --cpus-per-task=64 --mem=64G`)
 ```bash
->> python dataloaders/prepare_fineweb.py --tokenizer HuggingFaceTB/SmolLM-135M --max_length 2048 # CPU intensive: `salloc --cpus-per-task=64 --mem=64G`
+>> HF_HOME=$SCRATCH/huggingface python train.py --model HuggingFaceTB/SmolLM-135M  --prepare_ds_only
 ```
 
 Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using next-token-prediction
@@ -22,15 +29,33 @@ Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using nex
 >> python train.py --model HuggingFaceTB/SmolLM-135M --model_head stp --lr 4e-3 --scheduler cosine
 ```
 
-Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using multi-token-prediction
-```bash
->> python train.py --model HuggingFaceTB/SmolLM-135M --model_head multihead --lr 4e-3 --scheduler cosine
-```
+> **Note:** The `--model_head` option can be set to `stp` (standard next-token prediction) or `multihead` (multi-task/joint prediction).
 
+
+### Finetune 
 Finetune `meta-llama/Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss 
 ```bash
->> python train.py --model meta-llama/Llama-3.2-3B-Instruct --model_head multihead --lr 4e-3 --scheduler cosine --loss_type joint --pretrained
+>> HF_HOME=$SCRATCH/huggingface python train.py \
+    --model meta-llama/Llama-3.2-3B-Instruct \
+    --model_head multihead \
+    --lr 4e-3 \
+    --scheduler cosine \
+    --loss_type joint \
+    --pretrained \
+    --max_len 512 \
+    --batch_size 1 \
+    --epochs 5 \
+    --limit_train_batches 5 \
+    --limit_val_batches 1 \
+    --val_check_interval 5
 ```
+
+<!-- 
+DEBUG::
+--dataset wikitext \
+--subset wikitext-2-raw-v1 \
+--split "train[:10000]" \ 
+-->
 
 | Training Setup                | Dataset         | Hardware      | Time    |
 |-------------------------------|-----------------|--------------|---------|

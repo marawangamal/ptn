@@ -19,11 +19,8 @@ import datasets
 from transformers import AutoTokenizer
 
 
-# NOTE: `num_proc`is used in the cache signature, ensure it is the same in the
-# training script. Even if you don't use it, it must be present. Otherwise, the
-# cache will be invalidated and the dataset will be re-processed.
 def get_dataset(
-    dataset, subset, split, tokenizer, max_length
+    dataset, subset, split, tokenizer, max_length, column_names=["text"]
 ) -> Union[datasets.Dataset, datasets.DatasetDict]:
 
     tok = AutoTokenizer.from_pretrained(tokenizer, use_fast=True)
@@ -32,15 +29,18 @@ def get_dataset(
         f"Args: dataset={dataset}, subset={subset}, split={split}, tokenizer={tokenizer}, max_length={max_length}, cache={cache}"
     )
 
+    # ---------------------------------------------------------------------------
+    # Hard-coded parallelism & batching parameters.
+    # These speed up HF `Dataset.map`/`filter` dramatically while keeping the
+    # function signature unchanged.
+    # ---------------------------------------------------------------------------
+    BATCH_SIZE = 1024
+    NUM_PROC = 32
+
     ds = datasets.load_dataset(
         dataset,
         subset,
         split=split,
-        # ===== DEBUG =====
-        # "wikitext",
-        # "wikitext-2-raw-v1",
-        # split="train[:10000]",
-        # ==================
         cache_dir=cache,
     )
 
@@ -63,10 +63,18 @@ def get_dataset(
         result["labels"] = result["input_ids"].copy()
         return result
 
+    # Create a new column with the text
+    ds = ds.map(
+        lambda x: {"text": " ".join(x[col] for col in column_names)},
+        num_proc=NUM_PROC,
+        desc="Create text column",
+        load_from_cache_file=True,
+    )
+
     # Filter empty texts
     ds = ds.filter(
         lambda x: x["text"] and x["text"].strip(),
-        # num_proc=num_proc,  # type: ignore
+        num_proc=NUM_PROC,  # type: ignore
         desc="Filter empty",  # type: ignore
     ).shuffle(seed=42)
 
@@ -75,8 +83,8 @@ def get_dataset(
     ds = ds.map(
         tokenize,
         batched=True,
-        # batch_size=batch_size,
-        # num_proc=num_proc,
+        batch_size=BATCH_SIZE,
+        num_proc=NUM_PROC,
         desc="Tokenize",
         load_from_cache_file=True,
         remove_columns=list(cols),
@@ -86,8 +94,8 @@ def get_dataset(
     ds = ds.map(
         group_texts,
         batched=True,
-        # batch_size=batch_size,
-        # num_proc=num_proc,
+        batch_size=BATCH_SIZE,
+        num_proc=NUM_PROC,
         desc="Chunk",
         load_from_cache_file=True,
     )
