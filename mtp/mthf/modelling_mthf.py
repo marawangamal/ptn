@@ -177,13 +177,20 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
 
     # Combined loss lm_head + mhead
     def forward_joint(
-        self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
+        self,
+        input_ids,
+        labels=None,
+        use_memory_efficient_loss=False,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
     ):
         if self.lm_head is None:
             raise ValueError("LM head is not initialized")
 
         # Get hidden states from model
-        outputs = self.backbone(input_ids=input_ids, **kwargs)
+        outputs = self.backbone(
+            input_ids=input_ids, attention_mask=attention_mask, **kwargs
+        )
         hidden_state = outputs.last_hidden_state  # (B, T-H, D)
 
         # Compute loss if labels provided
@@ -204,11 +211,18 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
 
     # Single mhead loss
     def forward_mhead(
-        self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
+        self,
+        input_ids,
+        labels=None,
+        use_memory_efficient_loss=False,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
     ):
         # Get hidden states from model
         B, T = input_ids.shape
-        outputs = self.backbone(input_ids=input_ids, **kwargs)
+        outputs = self.backbone(
+            input_ids=input_ids, attention_mask=attention_mask, **kwargs
+        )
         hidden_state = outputs.last_hidden_state  # (B, T, D)
 
         # Compute loss if labels provided
@@ -223,15 +237,20 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         return CausalLMOutput(logits=output.logits.reshape(B, T, -1))
 
     def forward(
-        self, input_ids, labels=None, use_memory_efficient_loss=False, **kwargs
+        self,
+        input_ids,
+        labels=None,
+        use_memory_efficient_loss=False,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
     ):
         if self.loss_type == "joint":
             return self.forward_joint(
-                input_ids, labels, use_memory_efficient_loss, **kwargs
+                input_ids, labels, use_memory_efficient_loss, attention_mask, **kwargs
             )
         elif self.loss_type == "mhead":
             return self.forward_mhead(
-                input_ids, labels, use_memory_efficient_loss, **kwargs
+                input_ids, labels, use_memory_efficient_loss, attention_mask, **kwargs
             )
         else:
             raise ValueError(f"Invalid loss type: {self.loss_type}")

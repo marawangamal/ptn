@@ -290,6 +290,7 @@ class SampleEvalCallback(pl.Callback):
         self.prefix = prefix
         self.tokenizer = tokenizer
 
+    @rank_zero_only
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):

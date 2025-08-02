@@ -26,10 +26,10 @@ Train `SmolLM-135M` from scratch on 10B tokens (+ evaluate on HellaSwag).
 
 # 2. Train
 WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
-    --model HuggingFaceTB/SmolLM-135M \
-    --model_head stp \  # or multihead
-    --lr 4e-3 \
-    --scheduler cosine
+--model HuggingFaceTB/SmolLM-135M \
+--model_head stp \
+--lr 4e-3 \
+--scheduler cosine
 ```
 
 
@@ -50,20 +50,20 @@ Finetune `Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss
 # 2. Finetune
 # NOTE: remove limits
 WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
-    --model meta-llama/Llama-3.2-3B-Instruct \
-    --dataset omi:1m \
-    --model_head multihead \
-    --lr 2e-9 \
-    --scheduler cosine \
-    --loss_type joint \
-    --pretrained \
-    --max_len 512 \
-    --batch_size 8 \
-    --epochs 1 \
-    --evals gsm8k_cot \
-    --val_check_interval 5 \
-    --limit_val_batches 1 \
-    --limit_train_batches 5 
+--model meta-llama/Llama-3.2-3B-Instruct \
+--dataset omi:1m \
+--model_head multihead \
+--lr 2e-9 \
+--scheduler cosine \
+--loss_type joint \
+--pretrained \
+--max_len 512 \
+--batch_size 8 \
+--epochs 1 \
+--evals gsm8k_cot \
+--val_check_interval 5 \
+--limit_val_batches 1 \
+--limit_train_batches 5 
 ```
 
 <!-- 
