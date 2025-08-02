@@ -32,7 +32,7 @@ class Multihead(AbstractDisributionHead):
         for param in self.decoder.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None):
+    def forward(self, x, y=None, ignore_index=-1):
         # if y is none (eval), only compute logits for the first head
         H_ = 1 if y is None else self.config.horizon
         logits = torch.stack(
@@ -41,7 +41,9 @@ class Multihead(AbstractDisributionHead):
         loss = None
         if y is not None:
             loss = torch.nn.functional.cross_entropy(
-                logits.reshape(-1, self.config.d_output), y.reshape(-1)
+                logits.reshape(-1, self.config.d_output),
+                y.reshape(-1),
+                ignore_index=ignore_index,
             )
         return AbstractDisributionHeadOutput(logits=logits[:, 0], loss=loss)
 

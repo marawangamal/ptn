@@ -7,10 +7,6 @@ Usage:
 
 # TODO:
 # Perf improvements
-# [x] use cosine annealing lr scheduler (test on wikitext)
-# [x] add validation set
-# [x] add qualitative evaluation / logging (ie., x="the world is")
-# [ ] log norm = torch.clip_grad_norm_(1.0)
 # [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
 
 # Runtime improvements
@@ -20,6 +16,7 @@ Usage:
 # [ ] (MuToR Specific) add bi-directionl attention for prefixes
 # [ ] (All) exclude prefix prediction from loss
 # [ ] (Multihead) Addd H-1 heads and Aux loss function
+# [ ] (Multihead) Tokenize using Llama tokenizer so we can finetune**
 
 
 import os
@@ -28,35 +25,58 @@ import argparse
 from typing import Literal
 
 import torch
+import wandb
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.tuner import Tuner
 from pytorch_lightning.utilities import rank_zero_only
-import datasets
-import wandb
-from datasets import load_from_disk
-import lm_eval
-from lm_eval import simple_evaluate
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.utilities import rank_zero_only
+
+import datasets
 from transformers import AutoTokenizer
 from transformers.data.data_collator import DataCollatorForLanguageModeling
-from orion.client import report_objective
-from pytorch_lightning.utilities import rank_zero_only
+from dataloaders import get_dataset
+import lm_eval
+from lm_eval import simple_evaluate
 
 from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
+
 EXPERIMENTS_DIR = "experiments"
+DS_KWARGS = {  # presets for diff datasets
+    "omi:1m": {
+        "dataset_name": "nvidia/OpenMathInstruct-2",
+        "split": "train_1M",
+        "subset": "",
+        "column_names": ["problem", "generated_solution"],
+    },
+    "fineweb": {
+        "dataset_name": "HuggingFaceFW/fineweb",
+        "subset": "sample-10BT",
+        "split": "train",
+        "column_names": ["text"],
+    },
+    "wikitext": {
+        "dataset_name": "wikitext",
+        "subset": "wikitext-2-raw-v1",
+        "split": "train[:10000]",
+        "column_names": ["text"],
+    },
+}
 
 PRETRAINING_DS_CONFIG = {
     "fineweb": {
-        "load_from_disk_path": os.path.join(
+        "dataset_path": os.path.join(
             os.environ.get("HF_HOME", "data"), "processed", "fineweb"
         ),
-        # "path": "HuggingFaceFW/fineweb",
-        # "name": "sample-10BT",
-        # "split": "train",
-        # "streaming": True,
+    },
+    "fineweb::dt": {
+        "folder_path": os.path.join(
+            os.environ.get("HF_HOME", "data"), "processed", "fineweb"
+        ),
+        "seq_len": 1024,
     },
     # small ds for testing
     "wikitext": {
@@ -76,21 +96,27 @@ class LitLM(pl.LightningModule):
         self,
         model_name,
         model_head,
-        vocab_size,
         horizon,
         max_steps,
         lr=5e-5,
         scheduler: Literal["none", "cosine"] = "none",
+        loss_type: Literal["joint", "mhead"] = "mhead",
+        pretrained: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
-        config = MultiTokenHFConfig(
-            model_name=model_name,
-            model_head=model_head,
-            vocab_size=vocab_size,
-            horizon=horizon,
-        )
-        self.model = MultiTokenHF(config)
+        self.model = None
+
+    def configure_model(self) -> None:
+        if self.model is None:
+            config = MultiTokenHFConfig(
+                model_name=self.hparams["model_name"],
+                model_head=self.hparams["model_head"],
+                horizon=self.hparams["horizon"],
+                loss_type=self.hparams["loss_type"],
+                pretrained=self.hparams["pretrained"],
+            )
+            self.model = MultiTokenHF(config)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
         return self.model(
@@ -122,7 +148,7 @@ class LitLM(pl.LightningModule):
                 f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
             )
             opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
-            warmup_steps = int(0.005 * self.hparams["max_steps"])
+            warmup_steps = int(0.05 * self.hparams["max_steps"])
             warmup_factor = lambda st: 0.05 + 0.95 * (st / max(warmup_steps, 1))
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
             cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -148,65 +174,42 @@ class LitLM(pl.LightningModule):
 class LMDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        tokenizer,
+        tokenizer_name,
         dataset_name,
+        subset,
+        split,
         batch_size,
         max_length,
+        split_ratio=0.1,
+        column_names=["text"],
     ):
         super().__init__()
         self.save_hyperparameters()
         self.dataset_name = dataset_name
-        self.tokenizer = tokenizer
+        self.subset = subset
+        self.split = split
         self.batch_size = batch_size
         self.max_length = max_length
+        self.split_ratio = split_ratio
+        self.column_names = column_names
 
-    def group_texts(self, examples):
-        # Concatenate all texts.
-        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
-        if total_length >= self.max_length:
-            total_length = (total_length // self.max_length) * self.max_length
-        # Split by chunks of block_size.
-        result = {
-            k: [
-                t[i : i + self.max_length]
-                for i in range(0, total_length, self.max_length)
-            ]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
+        self.tokenizer_name = tokenizer_name
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.tokenizer_name, use_fast=True
+        )
+        self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def setup(self, stage=None):
-        if PRETRAINING_DS_CONFIG[self.dataset_name].get("load_from_disk_path"):
-            self.dataset = load_from_disk(
-                PRETRAINING_DS_CONFIG[self.dataset_name]["load_from_disk_path"]
-            )
-        else:
-            self.dataset = datasets.load_dataset(
-                **PRETRAINING_DS_CONFIG[self.dataset_name]
-            )
-            self.dataset = self.dataset.filter(
-                lambda x: x["text"] and x["text"].strip() != ""
-            )
-            self.dataset = self.dataset.shuffle(seed=42)
+        ds = get_dataset(
+            dataset=self.dataset_name,
+            subset=self.subset,
+            split=self.split,
+            tokenizer=self.tokenizer_name,
+            max_len=self.max_length,
+            column_names=self.column_names,
+        )
 
-            # Tokenize
-            self.dataset = self.dataset.map(
-                lambda x: self.tokenizer(x["text"]),
-                remove_columns=["text"],
-                batched=True,
-            )
-
-            # Group instead of padding/truncation
-            self.dataset = self.dataset.map(
-                lambda x: self.group_texts(x),
-                batched=True,
-            )
-
-        self.dataset = self.dataset.train_test_split(test_size=0.1)
+        self.dataset = ds.train_test_split(test_size=self.split_ratio)
         self.dataset["val"] = self.dataset["test"]
 
     def train_dataloader(self):
@@ -222,60 +225,77 @@ class LMDataModule(pl.LightningDataModule):
         )
 
 
-class HellaSwagEvalCallback(pl.Callback):
-    def __init__(self, model_name, val_check_interval=1, device=None, limit=None):
+class LMEvalsCallback(pl.Callback):
+    def __init__(
+        self,
+        model_name,
+        evals,
+        batch_size,
+        val_check_interval=1,
+        device=None,
+        limit=None,
+    ):
 
         super().__init__()
         self.model_name = model_name
+        self.evals = evals
+        self.batch_size = batch_size
         self.val_check_interval = val_check_interval
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.limit = limit
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+
+    def _run_evals(self, pl_module, logger_prefix=None):
+        output = simple_evaluate(
+            model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
+            tasks=self.evals,
+            batch_size=self.batch_size,
+            limit=self.limit,
+        )
+        for task_name in output["results"].keys():
+            # Example output:
+            # >> output['results']['gsm8k_cot']
+            # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
+            # 'exact_match_stderr,strict-match': 0.16666666666666666,
+            # 'exact_match,flexible-extract': np.float64(0.5),
+            # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
+            for metric_name in output["results"][task_name].keys():
+                # if metric is a number, log it
+                if isinstance(output["results"][task_name][metric_name], (int, float)):
+                    pl_module.log(
+                        f"eval/{task_name}/{metric_name}",
+                        output["results"][task_name][metric_name],
+                        sync_dist=False,
+                    )
+                    print(
+                        f"[{logger_prefix}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
+                    )
 
     @rank_zero_only
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
         if (batch_idx + 1) % self.val_check_interval == 0:
-            print(
-                f"\n[HellaSwagEvalCallback] Evaluating on HellaSwag at batch {batch_idx+1}..."
+            self._run_evals(
+                pl_module=pl_module,
+                logger_prefix=f"Batch {batch_idx + 1}",
             )
-            results = simple_evaluate(
-                model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
-                tasks=["hellaswag"],
-                num_fewshot=0,
-                batch_size=2,
-                gen_kwargs={"max_new_tokens": 40},
-                # limit
-                limit=self.limit,
-            )
-            if (
-                results
-                and results.get("results")
-                and results["results"].get("hellaswag")
-            ):
-                print(
-                    f"[HellaSwagEvalCallback] HellaSwag results: {results['results']['hellaswag']}"
-                )
-                acc = results["results"]["hellaswag"].get("acc,none")
-                acc_norm = results["results"]["hellaswag"].get("acc_norm,none")
-                # if acc_norm is not None:
-                #     log_dict = {
-                #         "eval/hellaswag_acc": acc,
-                #         "eval/hellaswag_acc_norm": acc_norm,
-                #         "batch": batch_idx + 1,
-                #     }
-                # if (
-                #     hasattr(trainer.logger, "log_metrics")
-                #     and trainer.logger.log_metrics is not None
-                # ):
-                #     trainer.logger.log_metrics(log_dict, step=batch_idx + 1)
-                if acc_norm is not None:
-                    pl_module.log("eval/hellaswag_acc", acc, sync_dist=False)
-                    pl_module.log("eval/hellaswag_acc_norm", acc_norm, sync_dist=False)
 
-            else:
-                print("[HellaSwagEvalCallback] HellaSwag results not available.")
+    @rank_zero_only
+    def on_train_epoch_end(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
+        if (
+            hasattr(trainer, "current_epoch")
+            and hasattr(trainer, "max_epochs")
+            and trainer.current_epoch is not None
+            and trainer.max_epochs is not None
+            and trainer.current_epoch == trainer.max_epochs - 1
+        ):
+            self._run_evals(
+                pl_module=pl_module,
+                logger_prefix="Epoch End",
+            )
 
 
 class SampleEvalCallback(pl.Callback):
@@ -287,6 +307,7 @@ class SampleEvalCallback(pl.Callback):
         self.prefix = prefix
         self.tokenizer = tokenizer
 
+    @rank_zero_only
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
@@ -295,14 +316,13 @@ class SampleEvalCallback(pl.Callback):
                 self.tokenizer.encode(self.prefix, return_tensors="pt").to(
                     pl_module.device
                 ),
-                max_new_tokens=32,
-                do_sample=True,
-                top_k=50,
+                max_new_tokens=64,
+                do_sample=False,
             )
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
             print(
-                f"[{batch_idx+1}] [SampleEvalCallback] Generated sample: {data[0][0]}"
+                f"[Batch {batch_idx+1}] (SampleEvalCallback) Generated sample: {data[0][0]}"
             )
             trainer.logger.log_text(key="samples", columns=columns, data=data)
 
@@ -353,6 +373,12 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_evals",
         "val_check_interval",
         "tags",
+        "evals",
+        "column_names",
+        # ds metadata
+        "subset",
+        "split",
+        "prepare_ds",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
@@ -380,15 +406,16 @@ def lookup_wandb_run(args: argparse.Namespace):
 def main():
     p = argparse.ArgumentParser()
     # model
-    p.add_argument("--model_name", type=str, default="HuggingFaceTB/SmolLM-135M")
+    p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
+    p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
     # data
-    p.add_argument("--dataset_name", type=str, default="fineweb")
+    p.add_argument("--dataset", type=str, default="fineweb", choices=DS_KWARGS.keys())
     # optimization
     p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--max_length", type=int, default=1024)
+    p.add_argument("--max_length", type=int, default=2048)
     p.add_argument("--epochs", type=int, default=1)
     p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
     p.add_argument("--lr", type=float, default=None)
@@ -400,16 +427,15 @@ def main():
     p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
+    p.add_argument("--evals", type=str, nargs="*", default=["hellaswag"])
     args = p.parse_args()
 
     # data
-    tokenizer = AutoTokenizer.from_pretrained("gpt2", use_fast=True)
-    tokenizer.pad_token = tokenizer.eos_token
     dm = LMDataModule(
-        tokenizer,
-        args.dataset_name,
-        args.batch_size,
-        args.max_length,
+        tokenizer_name=args.model,
+        batch_size=args.batch_size,
+        max_length=args.max_length,
+        **DS_KWARGS[args.dataset],
     )
 
     # model
@@ -422,16 +448,17 @@ def main():
             / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
         )
     model = LitLM(
-        args.model_name,
+        model_name=args.model,
         model_head=args.model_head,
-        vocab_size=tokenizer.vocab_size,
         horizon=args.horizon,
         max_steps=max_steps,
         scheduler=args.scheduler,
         lr=args.lr,
+        loss_type=args.loss_type,
+        pretrained=args.pretrained,
     )
 
-    # maybe auto resume
+    # hacky way to maybe auto resume
     resume_ckpt = lookup_ckpt(args)
     wandb_id = None
     if not (args.disable_auto_resume or resume_ckpt is None):
@@ -456,13 +483,15 @@ def main():
     if not args.disable_evals:
         callbacks.extend(
             [
-                HellaSwagEvalCallback(
-                    args.model_name,
+                LMEvalsCallback(
+                    args.model,
                     val_check_interval=args.val_check_interval,
                     limit=args.limit_val_batches,
+                    evals=args.evals,
+                    batch_size=args.batch_size,
                 ),
                 SampleEvalCallback(
-                    tokenizer,
+                    dm.tokenizer,
                     val_check_interval=args.val_check_interval,
                 ),
                 # ModelCheckpoint(  # save best ckpt according to eval
@@ -491,6 +520,7 @@ def main():
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
+        precision="bf16-mixed",
     )
 
     # Tune lr

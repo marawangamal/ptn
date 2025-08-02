@@ -5,4 +5,4 @@ PositivityFuncType = Literal[
 ]
 
 # NOTE: Should be in sync with mtp.mheads
-ModelHeadType = Literal["stp"]
+ModelHeadType = Literal["stp", "multihead"]
