@@ -30,15 +30,13 @@ def get_dataset(
     subset,
     split,
     tokenizer,
-    max_length,
+    max_len,
     column_names=["text"],
     num_proc=32,
     batch_size=1024,
 ) -> Union[datasets.Dataset, datasets.DatasetDict]:
     cache = os.environ.get("HF_HOME", "data")
-    fingerprint_str = (
-        f"{dataset}-{subset}-{split}-{tokenizer}-{max_length}-{column_names}"
-    )
+    fingerprint_str = f"{dataset}-{subset}-{split}-{tokenizer}-{max_len}-{column_names}"
     fingerprint = stable_fingerprint(fingerprint_str)
     tok = AutoTokenizer.from_pretrained(tokenizer, use_fast=True)
     print(f"Fingerprint: {fingerprint}")
@@ -47,7 +45,7 @@ def get_dataset(
     def tokenize(examples):
         return tok(examples["text"])
 
-    def group_texts(examples, max_length=max_length):
+    def group_texts(examples, max_length=max_len):
         # Concatenate all texts.
         concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
@@ -118,7 +116,7 @@ def get_dataset(
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--max_length", type=int, default=2048)
+    p.add_argument("--max_len", type=int, default=2048)
     p.add_argument("--tokenizer", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--dataset", type=str, default="HuggingFaceFW/fineweb")
     p.add_argument("--split", type=str, default="train")

@@ -51,18 +51,19 @@ Finetune `Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss
 # NOTE: remove limits
 WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
     --model meta-llama/Llama-3.2-3B-Instruct \
-    --dataset omi \
+    --dataset omi:1m \
     --model_head multihead \
-    --lr 4e-3 \
+    --lr 2e-9 \
     --scheduler cosine \
     --loss_type joint \
     --pretrained \
     --max_len 512 \
-    --batch_size 1 \
-    --epochs 5 \
-    --limit_train_batches 5 \ 
+    --batch_size 8 \
+    --epochs 1 \
+    --evals gsm8k_cot \
+    --val_check_interval 5 \
     --limit_val_batches 1 \
-    --val_check_interval 5
+    --limit_train_batches 5 
 ```
 
 <!-- 

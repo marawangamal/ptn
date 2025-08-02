@@ -46,9 +46,10 @@ from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
 
 EXPERIMENTS_DIR = "experiments"
 DS_KWARGS = {  # presets for diff datasets
-    "omi": {
+    "omi:1m": {
         "dataset_name": "nvidia/OpenMathInstruct-2",
-        "split": "train",
+        "split": "train_1M",
+        "subset": "",
         "column_names": ["problem", "generated_solution"],
     },
     "fineweb": {
@@ -100,16 +101,22 @@ class LitLM(pl.LightningModule):
         lr=5e-5,
         scheduler: Literal["none", "cosine"] = "none",
         loss_type: Literal["joint", "mhead"] = "mhead",
+        pretrained: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
-        config = MultiTokenHFConfig(
-            model_name=model_name,
-            model_head=model_head,
-            horizon=horizon,
-            loss_type=loss_type,
-        )
-        self.model = MultiTokenHF(config)
+        self.model = None
+
+    def configure_model(self) -> None:
+        if self.model is None:
+            config = MultiTokenHFConfig(
+                model_name=self.hparams["model_name"],
+                model_head=self.hparams["model_head"],
+                horizon=self.hparams["horizon"],
+                loss_type=self.hparams["loss_type"],
+                pretrained=self.hparams["pretrained"],
+            )
+            self.model = MultiTokenHF(config)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
         return self.model(
@@ -198,7 +205,7 @@ class LMDataModule(pl.LightningDataModule):
             subset=self.subset,
             split=self.split,
             tokenizer=self.tokenizer_name,
-            max_length=self.max_length,
+            max_len=self.max_length,
             column_names=self.column_names,
         )
 
@@ -244,7 +251,7 @@ class LMEvalsCallback(pl.Callback):
     ):
         if (batch_idx + 1) % self.val_check_interval == 0:
             print(
-                f"\[Batch {batch_idx+1}] (LMEvalsCallback) Evaluating on {self.evals}..."
+                f"[Batch {batch_idx+1}] (LMEvalsCallback) Evaluating on {self.evals}..."
             )
             output = simple_evaluate(
                 model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
@@ -269,6 +276,9 @@ class LMEvalsCallback(pl.Callback):
                             output["results"][task_name][metric_name],
                             sync_dist=False,
                         )
+                        print(
+                            f"[Batch {batch_idx+1}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
+                        )
 
 
 class SampleEvalCallback(pl.Callback):
@@ -288,9 +298,8 @@ class SampleEvalCallback(pl.Callback):
                 self.tokenizer.encode(self.prefix, return_tensors="pt").to(
                     pl_module.device
                 ),
-                max_new_tokens=32,
-                do_sample=True,
-                top_k=50,
+                max_new_tokens=64,
+                do_sample=False,
             )
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
@@ -428,6 +437,7 @@ def main():
         scheduler=args.scheduler,
         lr=args.lr,
         loss_type=args.loss_type,
+        pretrained=args.pretrained,
     )
 
     # hacky way to maybe auto resume
@@ -492,6 +502,7 @@ def main():
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
+        precision="bf16-mixed",
     )
 
     # Tune lr

@@ -254,9 +254,11 @@ def get_backbone(
 ) -> tuple[torch.nn.Module, torch.nn.Module]:
     """Get a randomly initialized backbone of a HuggingFace model."""
     if pretrained:
-        hf_model = AutoModelForCausalLM.from_pretrained(model_name)
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16
+        )
     else:
-        config = AutoConfig.from_pretrained(model_name)
+        config = AutoConfig.from_pretrained(model_name, torch_dtype=torch.bfloat16)
         for k, v in kwargs.items():
             setattr(config, k, v)
         hf_model = AutoModelForCausalLM.from_config(config)
