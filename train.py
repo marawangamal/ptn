@@ -245,40 +245,50 @@ class LMEvalsCallback(pl.Callback):
         self.limit = limit
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
+    def _run_evals(self, pl_module, logger_prefix=None):
+        output = simple_evaluate(
+            model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
+            tasks=self.evals,
+            batch_size=self.batch_size,
+            limit=self.limit,
+        )
+        for task_name in output["results"].keys():
+            # Example output:
+            # >> output['results']['gsm8k_cot']
+            # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
+            # 'exact_match_stderr,strict-match': 0.16666666666666666,
+            # 'exact_match,flexible-extract': np.float64(0.5),
+            # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
+            for metric_name in output["results"][task_name].keys():
+                # if metric is a number, log it
+                if isinstance(output["results"][task_name][metric_name], (int, float)):
+                    pl_module.log(
+                        f"eval/{task_name}/{metric_name}",
+                        output["results"][task_name][metric_name],
+                        sync_dist=False,
+                    )
+                    print(
+                        f"[{logger_prefix}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
+                    )
+
     @rank_zero_only
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
         if (batch_idx + 1) % self.val_check_interval == 0:
-            print(
-                f"[Batch {batch_idx+1}] (LMEvalsCallback) Evaluating on {self.evals}..."
+            self._run_evals(
+                pl_module=pl_module,
+                logger_prefix=f"Batch {batch_idx + 1}",
             )
-            output = simple_evaluate(
-                model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
-                tasks=self.evals,
-                batch_size=self.batch_size,
-                limit=self.limit,
-            )
-            for task_name in output["results"].keys():
-                # Example output:
-                # >> output['results']['gsm8k_cot']
-                # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
-                # 'exact_match_stderr,strict-match': 0.16666666666666666,
-                # 'exact_match,flexible-extract': np.float64(0.5),
-                # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
-                for metric_name in output["results"][task_name].keys():
-                    # if metric is a number, log it
-                    if isinstance(
-                        output["results"][task_name][metric_name], (int, float)
-                    ):
-                        pl_module.log(
-                            f"eval/{task_name}/{metric_name}",
-                            output["results"][task_name][metric_name],
-                            sync_dist=False,
-                        )
-                        print(
-                            f"[Batch {batch_idx+1}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
-                        )
+
+    @rank_zero_only
+    def on_train_epoch_end(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
+        self._run_evals(
+            pl_module=pl_module,
+            logger_prefix="Epoch End",
+        )
 
 
 class SampleEvalCallback(pl.Callback):
