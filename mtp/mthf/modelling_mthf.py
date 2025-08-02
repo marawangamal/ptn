@@ -46,7 +46,9 @@ class MultiTokenHFConfig(PretrainedConfig):
         self.loss_type = loss_type
 
 
-# TODO: standardize naming scheme (vocab_size vs d_output)
+# TODO:
+# [ ] standardize naming scheme (vocab_size vs d_output)
+# [ ] remove vocab_size customization
 class MultiTokenHF(PreTrainedModel, GenerationMixin):
     config_class = MultiTokenHFConfig
     supports_gradient_checkpointing = True
@@ -274,13 +276,17 @@ def get_backbone(
     """Get a randomly initialized backbone of a HuggingFace model."""
     if pretrained:
         hf_model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16
+            model_name,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
         )
     else:
-        config = AutoConfig.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+        config = AutoConfig.from_pretrained(
+            model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
+        )
         for k, v in kwargs.items():
             setattr(config, k, v)
-        hf_model = AutoModelForCausalLM.from_config(config)
+        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
 
     if hasattr(hf_model, "transformer"):
         return hf_model.transformer, hf_model.lm_head
