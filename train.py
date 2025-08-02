@@ -285,10 +285,17 @@ class LMEvalsCallback(pl.Callback):
     def on_train_epoch_end(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
     ) -> None:
-        self._run_evals(
-            pl_module=pl_module,
-            logger_prefix="Epoch End",
-        )
+        if (
+            hasattr(trainer, "current_epoch")
+            and hasattr(trainer, "max_epochs")
+            and trainer.current_epoch is not None
+            and trainer.max_epochs is not None
+            and trainer.current_epoch == trainer.max_epochs - 1
+        ):
+            self._run_evals(
+                pl_module=pl_module,
+                logger_prefix="Epoch End",
+            )
 
 
 class SampleEvalCallback(pl.Callback):

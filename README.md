@@ -53,17 +53,15 @@ WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
 --model meta-llama/Llama-3.2-3B-Instruct \
 --dataset omi:1m \
 --model_head multihead \
---lr 2e-9 \
+--lr 5e-5 \
 --scheduler cosine \
 --loss_type joint \
 --pretrained \
 --max_len 512 \
 --batch_size 8 \
---epochs 1 \
+--epochs 5 \
 --evals gsm8k_cot \
---val_check_interval 5 \
---limit_val_batches 1 \
---limit_train_batches 5 
+--val_check_interval 20000
 ```
 
 <!-- 
