@@ -244,7 +244,7 @@ class LMEvalsCallback(pl.Callback):
     ):
         if (batch_idx + 1) % self.val_check_interval == 0:
             print(
-                f"\n[HellaSwagEvalCallback] Evaluating on HellaSwag at batch {batch_idx+1}..."
+                f"\[Batch {batch_idx+1}] (LMEvalsCallback) Evaluating on {self.evals}..."
             )
             output = simple_evaluate(
                 model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
@@ -295,7 +295,7 @@ class SampleEvalCallback(pl.Callback):
             columns = ["text"]
             data = [[self.tokenizer.decode(outputs[0])]]
             print(
-                f"[{batch_idx+1}] [SampleEvalCallback] Generated sample: {data[0][0]}"
+                f"[Batch {batch_idx+1}] (SampleEvalCallback) Generated sample: {data[0][0]}"
             )
             trainer.logger.log_text(key="samples", columns=columns, data=data)
 

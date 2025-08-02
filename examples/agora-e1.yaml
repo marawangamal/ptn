@@ -23,5 +23,5 @@ group:
         jobs:
           - job:
               preamble: glong
-              command: "HF_HOME=$SCRATCH/huggingface python train.py --model_head stp --lr 4e-3 --scheduler cosine"
+              command: "HF_HOME=$SCRATCH/huggingface python train.py --model_head stp --lr 3e-3 --scheduler cosine"
 

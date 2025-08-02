@@ -16,37 +16,40 @@ TODO:
 [ ] Validate finetuning setup
  -->
 
-### Training from scratch
-Train `HuggingFaceTB/SmolLM-135M` model from scratch on 10B token subset of fineweb, and occasionally evaluate on HellaSwag.
+### Train SmolLM-135M (from scratch)
+Train `SmolLM-135M` from scratch on 10B tokens (+ evaluate on HellaSwag).
 
-First, prepare the data using (CPU intensive use `salloc --cpus-per-task=64 --mem=64G`)
 ```bash
->> HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer HuggingFaceTB/SmolLM-135M
+# 1. Extract data
+# salloc --cpus-per-task=64 --mem=64G
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py
+
+# 2. Train
+WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
+    --model HuggingFaceTB/SmolLM-135M \
+    --model_head stp \  # or multihead
+    --lr 4e-3 \
+    --scheduler cosine
 ```
 
-Train `HuggingFaceTB/SmolLM-135M` model on 10B token subset of fineweb using next-token-prediction
+
+
+### Finetune Llama-3.2-3B-Instruct
+
+Finetune `Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss 
 ```bash
->> python train.py --model HuggingFaceTB/SmolLM-135M --model_head stp --lr 4e-3 --scheduler cosine
-```
+# 1. Extract data
+# `salloc --cpus-per-task=64 --mem=64G`
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py \
+#     --tokenizer meta-llama/Llama-3.2-3B-Instruct \
+#     --dataset nvidia/OpenMathInstruct-2 \
+#     --split train \
+#     --subset "" \
+#     --column_names problem generated_solution 
 
-> **Note:** The `--model_head` option can be set to `stp` (standard next-token prediction) or `multihead` (multi-task/joint prediction).
-
-
-### Finetune 
-
-First, prepare the data using (CPU intensive use `salloc --cpus-per-task=64 --mem=64G`)
-```bash
->> HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py \
-    --tokenizer meta-llama/Llama-3.2-3B-Instruct \
-    --dataset nvidia/OpenMathInstruct-2 \
-    --split train \
-    --subset "" \
-    --column_names problem generated_solution
-```
-
-Finetune `meta-llama/Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss 
-```bash
->> HF_HOME=$SCRATCH/huggingface python train.py \
+# 2. Finetune
+# NOTE: remove limits
+WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
     --model meta-llama/Llama-3.2-3B-Instruct \
     --dataset omi \
     --model_head multihead \
