@@ -225,14 +225,14 @@ class LMDataModule(pl.LightningDataModule):
             self.dataset["val"], batch_size=self.batch_size, collate_fn=collator
         )
 
-    def state_dict(self):
-        # track whatever you want here
-        state = {"current_train_batch_index": self.current_train_batch_index}
-        return state
+    # def state_dict(self):
+    #     # track whatever you want here
+    #     state = {"current_train_batch_index": self.current_train_batch_index}
+    #     return state
 
-    def load_state_dict(self, state_dict):
-        # restore the state based on what you tracked in (def state_dict)
-        self.current_train_batch_index = state_dict["current_train_batch_index"]
+    # def load_state_dict(self, state_dict):
+    #     # restore the state based on what you tracked in (def state_dict)
+    #     self.current_train_batch_index = state_dict["current_train_batch_index"]
 
 
 class LMEvalsCallback(pl.Callback):
@@ -242,6 +242,7 @@ class LMEvalsCallback(pl.Callback):
         evals,
         batch_size,
         val_check_interval=1,
+        val_on_start=False,
         device=None,
         limit=None,
     ):
@@ -251,6 +252,7 @@ class LMEvalsCallback(pl.Callback):
         self.evals = evals
         self.batch_size = batch_size
         self.val_check_interval = val_check_interval
+        self.val_on_start = val_on_start
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.limit = limit
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
@@ -292,6 +294,11 @@ class LMEvalsCallback(pl.Callback):
             )
 
     @rank_zero_only
+    def on_train_start(self, trainer, pl_module):
+        if self.val_on_start:
+            self._run_evals(pl_module=pl_module, logger_prefix="Start")
+
+    @rank_zero_only
     def on_train_epoch_end(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
     ) -> None:
@@ -310,31 +317,42 @@ class LMEvalsCallback(pl.Callback):
 
 class SampleEvalCallback(pl.Callback):
     def __init__(
-        self, tokenizer, val_check_interval=1, prefix="Hello, I'm a language model,"
+        self,
+        tokenizer,
+        val_check_interval=1,
+        val_on_start=False,
+        prefix="Hello, I'm a language model,",
     ):
         super().__init__()
         self.val_check_interval = val_check_interval
         self.prefix = prefix
         self.tokenizer = tokenizer
+        self.val_on_start = val_on_start
+
+    def _run_eval(self, trainer, pl_module, msg="N/A"):
+        outputs = pl_module.model.generate(
+            self.tokenizer.encode(self.prefix, return_tensors="pt").to(
+                pl_module.device
+            ),
+            max_new_tokens=64,
+            do_sample=False,
+        )
+        columns = ["text"]
+        data = [[self.tokenizer.decode(outputs[0])]]
+        print(f"[{msg}] (SampleEvalCallback) Generated sample: {data[0][0]}")
+        trainer.logger.log_text(key="samples", columns=columns, data=data)
 
     @rank_zero_only
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
         if (batch_idx + 1) % self.val_check_interval == 0:
-            outputs = pl_module.model.generate(
-                self.tokenizer.encode(self.prefix, return_tensors="pt").to(
-                    pl_module.device
-                ),
-                max_new_tokens=64,
-                do_sample=False,
-            )
-            columns = ["text"]
-            data = [[self.tokenizer.decode(outputs[0])]]
-            print(
-                f"[Batch {batch_idx+1}] (SampleEvalCallback) Generated sample: {data[0][0]}"
-            )
-            trainer.logger.log_text(key="samples", columns=columns, data=data)
+            self._run_eval(trainer, pl_module, msg=f"Batch {batch_idx}")
+
+    @rank_zero_only
+    def on_train_start(self, trainer, pl_module):
+        if self.val_on_start:
+            self._run_eval(trainer, pl_module, msg="Start")
 
 
 class OrionCallback(pl.Callback):
@@ -382,6 +400,7 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_auto_resume",
         "disable_evals",
         "val_check_interval",
+        "val_on_start",
         "ckpt_interval",
         "tags",
         "evals",
@@ -435,6 +454,7 @@ def main():
     p.add_argument("--disable_auto_resume", action="store_true")
     p.add_argument("--disable_evals", action="store_true")
     p.add_argument("--val_check_interval", type=int, default=5000)
+    p.add_argument("--val_on_start", action="store_true")
     p.add_argument("--ckpt_interval", type=int, default=1000)
     p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
@@ -501,10 +521,12 @@ def main():
                     limit=args.limit_val_batches,
                     evals=args.evals,
                     batch_size=args.batch_size,
+                    val_on_start=args.val_on_start,
                 ),
                 SampleEvalCallback(
                     dm.tokenizer,
                     val_check_interval=args.val_check_interval,
+                    val_on_start=args.val_on_start,
                 ),
                 # ModelCheckpoint(  # save best ckpt according to eval
                 #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
