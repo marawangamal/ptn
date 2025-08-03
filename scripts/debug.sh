@@ -11,8 +11,90 @@
 set -euo pipefail
 
 # ---- defaults ----------------------------------------------------------------
-# Clean monitoring command with peak tracking
-MONITOR_CMD="bash -c 'max_cpu=0; max_ram=0; declare -a max_gpu; declare -a max_vram; declare -a max_temp; while true; do clear; echo \"📊 System Monitor - \$(date +\"%H:%M:%S\")\"; echo; cpu=\$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | cut -d\"%\" -f1 | cut -d\".\" -f1); ram=\$(free | awk \"NR==2{printf \\\"%.0f\\\", \\\$3/\\\$2*100}\"); if (( cpu > max_cpu )); then max_cpu=\$cpu; fi; if (( ram > max_ram )); then max_ram=\$ram; fi; echo \"💻 CPU: \${cpu}% (peak: \${max_cpu}%)\"; echo \"🧠 RAM: \${ram}% (peak: \${max_ram}%)\"; echo; echo \"🎮 GPUs:\"; nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits | while IFS=\",\" read -r idx gpu_util mem_used mem_total temp; do vram_pct=\$(awk \"BEGIN{printf \\\"%.0f\\\", \$mem_used/\$mem_total*100}\"); if [[ -z \"\${max_gpu[\$idx]}\" ]] || (( gpu_util > \${max_gpu[\$idx]:-0} )); then max_gpu[\$idx]=\$gpu_util; fi; if [[ -z \"\${max_vram[\$idx]}\" ]] || (( vram_pct > \${max_vram[\$idx]:-0} )); then max_vram[\$idx]=\$vram_pct; fi; if [[ -z \"\${max_temp[\$idx]}\" ]] || (( temp > \${max_temp[\$idx]:-0} )); then max_temp[\$idx]=\$temp; fi; printf \"  GPU\$idx: %2s%% | VRAM: %2s%% | %s°C (peaks: %s%%/%s%%/%s°C)\\n\" \"\$gpu_util\" \"\$vram_pct\" \"\$temp\" \"\${max_gpu[\$idx]:-0}\" \"\${max_vram[\$idx]:-0}\" \"\${max_temp[\$idx]:-0}\"; done; sleep 2; done'"
+# Simple monitoring command with visual bars
+MONITOR_CMD='bash -c "
+while true; do 
+  clear
+  echo \"📊 System Monitor - \$(date +\"%H:%M:%S\")\"
+  echo
+
+  # Make bar function
+  make_bar() {
+    local pct=\$1
+    local width=10
+    local filled=\$((pct * width / 100))
+    local empty=\$((width - filled))
+    printf \"[\"
+    for ((i=0; i<filled; i++)); do printf \"█\"; done
+    for ((i=0; i<empty; i++)); do printf \"░\"; done
+    printf \"] %3s%%\" \"\$pct\"
+  }
+
+  # Get system stats
+  cpu_total=\$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | cut -d\"%\" -f1 | cut -d\".\" -f1)
+  ram_pct=\$(free | awk \"NR==2{printf \\\"%d\\\", \\\$3/\\\$2*100}\")
+  ram_used=\$(free -h | awk \"NR==2{print \\\$3}\")
+  ram_total=\$(free -h | awk \"NR==2{print \\\$2}\")
+
+  echo \"💻 CPUs:\"
+  # Show 4 CPU cores (using overall CPU for each as approximation)
+  for i in 0 1 2 3; do
+    printf \"  CPU\$i: \"
+    make_bar \$cpu_total
+    printf \" | RAM: \"
+    make_bar 0
+    printf \"\\n\"
+  done
+
+  echo
+  echo \"🎮 GPUs:\"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits | while read line; do
+      IFS=\",\" read -r idx gpu_util mem_used mem_total temp <<< \"\$line\"
+      vram_pct=\$((mem_used * 100 / mem_total))
+      printf \"  GPU\$idx: \"
+      make_bar \$gpu_util
+      printf \" | VRAM: \"
+      make_bar \$vram_pct
+      printf \" | %s°C\\n\" \$temp
+    done
+  fi
+
+  echo
+  echo \"📊 Totals:\"
+  
+  # CPU and RAM totals
+  printf \"  CPU: \"
+  make_bar \$cpu_total
+  printf \" | RAM: \"
+  make_bar \$ram_pct
+  printf \" (\$ram_used/\$ram_total)\\n\"
+  
+  # GPU totals
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    gpu_avg=\$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | awk \"{sum+=\\\$1; count++} END {printf \\\"%d\\\", sum/count}\")
+    vram_used_gb=\$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | awk \"{sum+=\\\$1} END {printf \\\"%d\\\", sum/1024}\")
+    vram_total_gb=\$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | awk \"{sum+=\\\$1} END {printf \\\"%d\\\", sum/1024}\")
+    vram_pct_total=\$((vram_used_gb * 100 / vram_total_gb))
+    
+    printf \"  GPU: \"
+    make_bar \$gpu_avg
+    printf \" | VRAM: \"
+    make_bar \$vram_pct_total
+    printf \" (\${vram_used_gb}G/\${vram_total_gb}G)\\n\"
+  fi
+  
+  # Load and disk
+  load=\$(uptime | awk -F\"load average:\" \"{print \\\$2}\" | sed \"s/^ *//\")
+  disk=\$(df -h / | awk \"NR==2{printf \\\"%s/%s (%s)\\\", \\\$3,\\\$2,\\\$5}\")
+  
+  echo \"  Load:\$load\"
+  echo \"  Disk: \$disk\"
+  
+  sleep 2
+done
+"'
+
 SESSION="dev"
 
 # ---- parse overrides ---------------------------------------------------------

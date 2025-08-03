@@ -532,7 +532,7 @@ def main():
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
-        precision="bf16-mixed",
+        # precision="bf16-mixed",
     )
 
     # Tune lr

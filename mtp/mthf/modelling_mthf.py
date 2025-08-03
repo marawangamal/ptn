@@ -286,7 +286,7 @@ def get_backbone(
         )
         for k, v in kwargs.items():
             setattr(config, k, v)
-        hf_model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+        hf_model = AutoModelForCausalLM.from_config(config)
 
     if hasattr(hf_model, "transformer"):
         return hf_model.transformer, hf_model.lm_head
