@@ -30,17 +30,45 @@ while true; do
     printf \"] %3s%%\" \"\$pct\"
   }
 
-  # Get system stats
-  cpu_total=\$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | cut -d\"%\" -f1 | cut -d\".\" -f1)
-  ram_pct=\$(free | awk \"NR==2{printf \\\"%d\\\", \\\$3/\\\$2*100}\")
-  ram_used=\$(free -h | awk \"NR==2{print \\\$3}\")
-  ram_total=\$(free -h | awk \"NR==2{print \\\$2}\")
+  # Get system stats with SLURM awareness
+  cpu_total=\$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | sed \"s/%us,//\" | cut -d\".\" -f1)
+  # Fallback if top parsing fails
+  if [[ -z \"\$cpu_total\" || \"\$cpu_total\" == \"0\" ]]; then
+    cpu_total=\$(grep \"cpu \" /proc/stat | awk \"{idle=\\\$5; total=\\\$2+\\\$3+\\\$4+\\\$5+\\\$6+\\\$7+\\\$8; print int((total-idle)*100/total)}\")
+  fi
+  
+  # SLURM-aware memory reporting
+  if [[ -n \"\${SLURM_MEM_PER_NODE:-}\" ]]; then
+    # Use SLURM allocation
+    slurm_mem_gb=\$((SLURM_MEM_PER_NODE / 1024))
+    ram_used_kb=\$(free | awk \"NR==2{print \\\$3}\")
+    ram_used_gb=\$((ram_used_kb / 1024 / 1024))
+    ram_pct=\$((ram_used_gb * 100 / slurm_mem_gb))
+    ram_used=\"\${ram_used_gb}G\"
+    ram_total=\"\${slurm_mem_gb}G\"
+  else
+    # Fallback to system memory
+    ram_pct=\$(free | awk \"NR==2{printf \\\"%d\\\", \\\$3/\\\$2*100}\")
+    ram_used=\$(free -h | awk \"NR==2{print \\\$3}\")
+    ram_total=\$(free -h | awk \"NR==2{print \\\$2}\")
+  fi
+  
+  # SLURM CPU info
+  if [[ -n \"\${SLURM_CPUS_PER_TASK:-}\" ]]; then
+    slurm_cpus=\$SLURM_CPUS_PER_TASK
+  else
+    slurm_cpus=8  # Default fallback
+  fi
 
-  echo \"💻 CPUs:\"
-  # Show 4 CPU cores (using overall CPU for each as approximation)
-  for i in 0 1 2 3; do
+  echo \"💻 CPUs: (showing \$slurm_cpus cores)\"
+  # Show allocated CPUs from SLURM with actual per-CPU usage
+  for ((i=0; i<slurm_cpus && i<8; i++)); do
+    # Get per-CPU usage from /proc/stat
+    cpu_usage=\$(awk \"/^cpu\$i / {idle=\\\$5; total=\\\$2+\\\$3+\\\$4+\\\$5+\\\$6+\\\$7+\\\$8; if(total>0) print int((total-idle)*100/total); else print 0}\" /proc/stat)
+    if [[ -z \"\$cpu_usage\" ]]; then cpu_usage=0; fi
+    
     printf \"  CPU\$i: \"
-    make_bar \$cpu_total
+    make_bar \$cpu_usage
     printf \" | RAM: \"
     make_bar 0
     printf \"\\n\"
@@ -68,7 +96,11 @@ while true; do
   make_bar \$cpu_total
   printf \" | RAM: \"
   make_bar \$ram_pct
-  printf \" (\$ram_used/\$ram_total)\\n\"
+  if [[ -n \"\${SLURM_MEM_PER_NODE:-}\" ]]; then
+    printf \" (\$ram_used/\$ram_total SLURM)\\n\"
+  else
+    printf \" (\$ram_used/\$ram_total)\\n\"
+  fi
   
   # GPU totals
   if command -v nvidia-smi >/dev/null 2>&1; then
