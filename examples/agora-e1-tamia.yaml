@@ -1,0 +1,54 @@
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:a100l:4"
+    - "#SBATCH --mem=128G"
+    - "#SBATCH --cpus-per-task=16"
+    - "#SBATCH --nodes=1"
+    - "module load cuda/12.6 arrow python/3.12 httpproxy"
+    - "source /scratch/m/mgamal/mtl/.venv/bin/activate"
+
+  clong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --mem=64G"
+    - "#SBATCH --cpus-per-task=64"
+    - "module load cuda/12.6 arrow python/3.12 httpproxy"
+    - "source /scratch/m/mgamal/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+
+    - group:
+        name: "pretrain::smollm::stp"
+        type: sequential
+        jobs:
+          - job:
+              # Prepare dataset
+              preamble: clong
+              command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface dataloaders/prepare_hf_ds.py'
+          - job:
+              # Train
+              preamble: glong
+              command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags tamia --model_head stp --lr 3e-3 --scheduler cosine"
+
+    - group:
+        name: "finetune::llama::multihead"
+        type: sequential
+        jobs:
+          - job:
+              # Prepare dataset
+              preamble: clong
+              command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset nvidia/OpenMathInstruct-2 --split train_1M --subset "" --column_names problem generated_solution'
+          - job:
+              # Train
+              preamble: glong
+              command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags tamia --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 5 --evals gsm8k_cot --limit_val_batches 50"
+
+ 
