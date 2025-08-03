@@ -39,16 +39,16 @@ WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
 Finetune `Llama-3.2-3B-Instruct` on OpenMathInstruct-2 using joint loss 
 ```bash
 # 1. Extract data
-# `salloc --cpus-per-task=64 --mem=64G`
-# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py \
-#     --tokenizer meta-llama/Llama-3.2-3B-Instruct \
-#     --dataset nvidia/OpenMathInstruct-2 \
-#     --split train \
-#     --subset "" \
-#     --column_names problem generated_solution 
+# SLURM Allocation: `salloc --cpus-per-task=64 --mem=64G`
+WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py \
+    --tokenizer meta-llama/Llama-3.2-3B-Instruct \
+    --dataset nvidia/OpenMathInstruct-2 \
+    --split train \
+    --subset "" \
+    --column_names problem generated_solution 
 
 # 2. Finetune
-# NOTE: remove limits
+# SLURM Allocation: `salloc --gres=4 --cpus-per-task=8 --mem=128G`
 WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
 --model meta-llama/Llama-3.2-3B-Instruct \
 --dataset omi:1m \
@@ -62,6 +62,24 @@ WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
 --epochs 5 \
 --evals gsm8k_cot \
 --val_check_interval 20000
+
+# DEBUG:
+WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py \
+--model meta-llama/Llama-3.2-3B-Instruct \
+--dataset wikitext \
+--model_head multihead \
+--lr 5e-5 \
+--scheduler cosine \
+--loss_type joint \
+--pretrained \
+--max_len 512 \
+--batch_size 2 \
+--epochs 5 \
+--evals gsm8k_cot \
+--limit_train_batches 50 \
+--limit_val_batches 2 \
+--val_check_interval 10 \
+--ckpt_interval 5
 ```
 
 <!-- 

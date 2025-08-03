@@ -6,18 +6,19 @@ Usage:
 """
 
 # TODO:
-# Perf improvements
-# [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
-
 # Runtime improvements
 # [ ] copy data onto $SLURM_TMPDIR
+# [ ] use `torch.compile`
+# [ ] Add dl state loading for resume (https://lightning.ai/docs/pytorch/stable/data/datamodule.html#hyperparameters-in-datamodules)
 
-# MuToR
+# Performance improvements
 # [ ] (MuToR Specific) add bi-directionl attention for prefixes
 # [ ] (All) exclude prefix prediction from loss
 # [ ] (Multihead) Addd H-1 heads and Aux loss function
 # [ ] (Multihead) Tokenize using Llama tokenizer so we can finetune**
 
+# Misc:
+# [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
 
 import os
 import re
@@ -224,6 +225,15 @@ class LMDataModule(pl.LightningDataModule):
             self.dataset["val"], batch_size=self.batch_size, collate_fn=collator
         )
 
+    def state_dict(self):
+        # track whatever you want here
+        state = {"current_train_batch_index": self.current_train_batch_index}
+        return state
+
+    def load_state_dict(self, state_dict):
+        # restore the state based on what you tracked in (def state_dict)
+        self.current_train_batch_index = state_dict["current_train_batch_index"]
+
 
 class LMEvalsCallback(pl.Callback):
     def __init__(
@@ -372,6 +382,7 @@ def get_econfig_name(args: argparse.Namespace):
         "disable_auto_resume",
         "disable_evals",
         "val_check_interval",
+        "ckpt_interval",
         "tags",
         "evals",
         "column_names",
@@ -424,6 +435,7 @@ def main():
     p.add_argument("--disable_auto_resume", action="store_true")
     p.add_argument("--disable_evals", action="store_true")
     p.add_argument("--val_check_interval", type=int, default=5000)
+    p.add_argument("--ckpt_interval", type=int, default=1000)
     p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
@@ -472,7 +484,7 @@ def main():
         ModelCheckpoint(  # save last
             dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
             filename="last",
-            every_n_train_steps=1000,
+            every_n_train_steps=args.ckpt_interval,
         ),
         OrionCallback(
             monitor="val_loss_epoch",
@@ -520,7 +532,7 @@ def main():
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
-        precision="bf16-mixed",
+        # precision="bf16-mixed",
     )
 
     # Tune lr
