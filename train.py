@@ -103,6 +103,7 @@ class LitLM(pl.LightningModule):
         scheduler: Literal["none", "cosine"] = "none",
         loss_type: Literal["joint", "mhead"] = "mhead",
         pretrained: bool = False,
+        warmup_ratio: float = 0.05,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -148,14 +149,15 @@ class LitLM(pl.LightningModule):
             print(
                 f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
             )
+            wr = self.hparams["warmup_ratio"]
             opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
-            warmup_steps = int(0.05 * self.hparams["max_steps"])
-            warmup_factor = lambda st: 0.05 + 0.95 * (st / max(warmup_steps, 1))
+            warmup_steps = int(wr * self.hparams["max_steps"])
+            warmup_factor = lambda st: wr + (1 - wr) * (st / max(warmup_steps, 1))
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
             cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 opt,
                 T_max=self.hparams["max_steps"] - warmup_steps,
-                eta_min=0.1 * self.hparams["lr"],
+                eta_min=0.1 * self.hparams["lr"],  # end at 10% of lr
             )
             sched = torch.optim.lr_scheduler.SequentialLR(
                 opt,
@@ -478,6 +480,7 @@ def main():
             args.epochs
             * len(dm.train_dataloader())
             / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
+            / args.accumulate_grad_batches
         )
     model = LitLM(
         model_name=args.model,
