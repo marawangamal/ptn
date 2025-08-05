@@ -23,7 +23,7 @@ Usage:
 import os
 import re
 import argparse
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import wandb
@@ -286,19 +286,20 @@ class LMEvalsCallback(pl.Callback):
                     )
 
     @rank_zero_only
-    def on_train_batch_end(
-        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
-    ):
-        if (batch_idx + 1) % self.val_check_interval == 0:
+    def on_train_batch_start(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        batch: Any,
+        batch_idx: int,
+    ) -> None:
+        if (batch_idx + 1) % self.val_check_interval == 0 or (
+            batch_idx == 0 and self.val_on_start
+        ):
             self._run_evals(
                 pl_module=pl_module,
                 logger_prefix=f"Batch {batch_idx + 1}",
             )
-
-    @rank_zero_only
-    def on_train_start(self, trainer, pl_module):
-        if self.val_on_start:
-            self._run_evals(pl_module=pl_module, logger_prefix="Start")
 
     @rank_zero_only
     def on_train_epoch_end(
@@ -411,6 +412,7 @@ def get_econfig_name(args: argparse.Namespace):
         "subset",
         "split",
         "prepare_ds",
+        "fast_dev_run",
     ]
     parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
     # remove special characters
@@ -462,6 +464,7 @@ def main():
     p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
     p.add_argument("--tags", type=str, nargs="*", default=[])
     p.add_argument("--evals", type=str, nargs="*", default=["hellaswag"])
+    p.add_argument("--fast_dev_run", action="store_true")
     args = p.parse_args()
 
     # data
@@ -473,7 +476,7 @@ def main():
     )
 
     # model
-    max_steps = args.limit_train_batches
+    max_steps = args.limit_train_batches  # BUG: incorrect, seeing full cosine curve
     if max_steps is None:
         dm.setup()
         max_steps = (
@@ -557,7 +560,7 @@ def main():
         limit_train_batches=args.limit_train_batches,
         limit_val_batches=args.limit_val_batches,
         accumulate_grad_batches=args.accumulate_grad_batches,
-        # precision="bf16-mixed",
+        fast_dev_run=args.fast_dev_run,
     )
 
     # Tune lr

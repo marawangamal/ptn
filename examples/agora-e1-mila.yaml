@@ -25,30 +25,61 @@ group:
   type: parallel
   jobs:
 
-    - group:
-        name: "pretrain::smollm::stp"
-        type: sequential
-        jobs:
-          - job:
-              # Prepare dataset
-              preamble: clong
-              command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py'
-          - job:
-              # Train
-              preamble: glong
-              command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model_head stp --lr 3e-3 --scheduler cosine --accumulate_grad_batches 2"
-
     # - group:
-    #     name: "finetune::llama::multihead"
+    #     name: "pretrain::smollm::stp"
     #     type: sequential
     #     jobs:
     #       - job:
     #           # Prepare dataset
     #           preamble: clong
-    #           command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset nvidia/OpenMathInstruct-2 --split train_1M --subset "" --column_names problem generated_solution'
+    #           command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py'
     #       - job:
     #           # Train
     #           preamble: glong
-    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 5 --evals gsm8k_cot --limit_train_batches 1000 --limit_val_batches 20 --val_check_interval 250 --val_on_start"
+    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model_head stp --lr 3e-3 --scheduler cosine --accumulate_grad_batches 2"
+
+
+    # - group:
+    #     name: "pretrain::smollm::multihead(R=2 H=2)"
+    #     type: sequential
+    #     jobs:
+    #       - job:
+    #           # Prepare dataset
+    #           preamble: clong
+    #           command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py'
+    #       - job:
+    #           # Train
+    #           preamble: glong
+    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model_head multihead --rank 2 --horizon 2 --lr 3e-3 --scheduler cosine --accumulate_grad_batches 2"
+
+
+
+    - group:
+        name: "finetune::llama::multihead(R=1 H=1)"
+        type: sequential
+        jobs:
+          # - job:
+          #     # Prepare dataset
+          #     preamble: clong
+          #     command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset nvidia/OpenMathInstruct-2 --split train_1M --subset "" --column_names problem generated_solution'
+          - job:
+              # Train
+              preamble: glong
+              command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
+
+ 
+
+    # - group:
+    #     name: "finetune::llama::multihead(R=2 H=2)"
+    #     type: sequential
+    #     jobs:
+    #       # - job:
+    #       #     # Prepare dataset
+    #       #     preamble: clong
+    #       #     command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset nvidia/OpenMathInstruct-2 --split train_1M --subset "" --column_names problem generated_solution'
+    #       - job:
+    #           # Train
+    #           preamble: glong
+    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --rank 2 --horizon 2 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
 
  

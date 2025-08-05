@@ -33,7 +33,7 @@ class MultiTokenHFConfig(PretrainedConfig):
         model_head: ModelHeadType = "stp",
         loss_type: Literal["joint", "mhead"] = "mhead",
         pretrained: bool = False,
-        lambda_mhead: float = 1.0,  # weight for mhead loss
+        lambda_mhead: float = 0.1,  # weight for mhead loss
         **kwargs,
     ):
         super().__init__()
