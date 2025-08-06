@@ -121,7 +121,6 @@ def get_dataset(
             k: [t[i : i + max_length] for i in range(0, total_length, max_length)]
             for k, t in concatenated_examples.items()
         }
-        # result["labels"] = result["input_ids"].copy()
         return result
 
     # Load dataset
