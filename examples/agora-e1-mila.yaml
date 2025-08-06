@@ -50,7 +50,7 @@ group:
     #       - job:
     #           # Train
     #           preamble: glong
-    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model_head multihead --rank 2 --horizon 2 --lr 3e-3 --scheduler cosine --accumulate_grad_batches 2"
+    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model_head multihead --horizon 2 --lr 3e-3 --scheduler cosine --accumulate_grad_batches 2"
 
 
 
@@ -80,6 +80,6 @@ group:
     #       - job:
     #           # Train
     #           preamble: glong
-    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --rank 2 --horizon 2 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
+    #           command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags mila --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --horizon 2 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
 
  
