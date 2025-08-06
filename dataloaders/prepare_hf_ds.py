@@ -20,7 +20,9 @@ from typing import List, Union, Dict
 import datasets
 from transformers import AutoTokenizer
 import hashlib, base64
+from transformers import default_data_collator
 
+# TODO: centralize for train script and ds preparation script
 DS_KWARGS = {  # presets for diff datasets
     "omi:1m": {
         "dataset": "nvidia/OpenMathInstruct-2",
@@ -97,7 +99,7 @@ def get_dataset(
     print(f"Fingerprint: {fingerprint}")
     print(f"Fingerprint string: {fingerprint_str}")
 
-    def tokenize_and_add_labels(examples, ignore_index=-1):
+    def tokenize_and_add_labels(examples, ignore_index=-100):
         res = tok(examples["text"])
         res["labels"] = [
             [ignore_index for _ in range(max(0, examples["prefix_len"][i] - 1))]
@@ -141,7 +143,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Create text column",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_13_concat",
+        new_fingerprint=fingerprint + "_1_concat",
     )
 
     # Filter empty texts
@@ -150,7 +152,7 @@ def get_dataset(
         num_proc=num_proc,  # type: ignore
         desc="Filter empty",  # type: ignore
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_23_filter",
+        new_fingerprint=fingerprint + "_2_filter",
     ).shuffle(seed=42)
 
     # Tokenize
@@ -163,7 +165,7 @@ def get_dataset(
         desc="Tokenize",
         remove_columns=list(cols),
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_33_tokenize",
+        new_fingerprint=fingerprint + "_3_tokenize",
     )
 
     # Chunk
@@ -174,7 +176,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Chunk",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_44_chunk",
+        new_fingerprint=fingerprint + "_4_chunk",
     )
 
     return ds

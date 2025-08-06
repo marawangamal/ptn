@@ -32,7 +32,7 @@ class Multihead(AbstractDisributionHead):
         for param in self.decoder.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None, ignore_index=-1):
+    def forward(self, x, y=None, ignore_index=-100):
         # if y is none (eval), only compute logits for the first head
         H_ = 1 if y is None else self.config.horizon
         logits = torch.stack(

@@ -17,7 +17,7 @@ def get_windowed_input_ids(
 
 
 def window_input_ids(
-    input_ids: torch.Tensor, horizon: int, shift: int = 1, ignore_index: int = -1
+    input_ids: torch.Tensor, horizon: int, shift: int = 1, ignore_index: int = -100
 ):
     """Window the input_ids so that each position looks H steps ahead.
 
@@ -113,7 +113,7 @@ if __name__ == "__main__":
                 "input_ids": torch.arange(6).unsqueeze(0),
                 "horizon": 2,
                 "offset": 0,
-                "ignore_index": -1,
+                "ignore_index": -100,
             },
             "y_true": torch.tensor(
                 [
@@ -129,7 +129,7 @@ if __name__ == "__main__":
                 "input_ids": torch.arange(6).unsqueeze(0),
                 "horizon": 2,
                 "offset": 1,
-                "ignore_index": -1,
+                "ignore_index": -100,
             },
             "y_true": torch.tensor(
                 [
