@@ -11,7 +11,7 @@ from transformers.modeling_outputs import CausalLMOutput
 from mtp.mheads import MHEADS
 from mtp._types import ModelHeadType
 from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads._utils import get_windowed_input_ids, window_input_ids
+from mtp.mheads._utils import window_input_ids
 
 
 # Should use mhead as auxiliary loss with H-1 heads in addtion to basic head:

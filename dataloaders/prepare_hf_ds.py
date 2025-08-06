@@ -143,7 +143,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Create text column",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_1_concat",
+        new_fingerprint=fingerprint + "_13_concat",
     )
 
     # Filter empty texts
@@ -152,7 +152,7 @@ def get_dataset(
         num_proc=num_proc,  # type: ignore
         desc="Filter empty",  # type: ignore
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_2_filter",
+        new_fingerprint=fingerprint + "_23_filter",
     ).shuffle(seed=42)
 
     # Tokenize
@@ -165,7 +165,7 @@ def get_dataset(
         desc="Tokenize",
         remove_columns=list(cols),
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_3_tokenize",
+        new_fingerprint=fingerprint + "_33_tokenize",
     )
 
     # Chunk
@@ -176,7 +176,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Chunk",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_4_chunk",
+        new_fingerprint=fingerprint + "_43_chunk",
     )
 
     return ds
