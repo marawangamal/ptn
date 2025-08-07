@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Test script to check sequence lengths in the prepared dataset."""
 
-import sys
-
 import torch
 from transformers.data.data_collator import default_data_collator
 from dataloaders.prepare_hf_ds import get_dataset, DS_KWARGS
