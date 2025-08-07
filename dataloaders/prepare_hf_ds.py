@@ -8,19 +8,13 @@ Example:
     >>  HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --dataset wikitext --subset wikitext-2-raw-v1 --split "train[:10000]"
 """
 
-# TODO:
-# - Is attn mask valid with the chunking?
-# [ ] Add option for non-chunking, use pad token instead and avoid loss computation on prefix tokens
-# [ ] MTP only on the answer tokens
-
-import multiprocessing
+import muliprocessing
 import os
 import argparse
-from typing import List, Union, Dict
+from typing import Union
 import datasets
 from transformers import AutoTokenizer
 import hashlib, base64
-from transformers import default_data_collator
 
 # TODO: centralize for train script and ds preparation script
 DS_KWARGS = {  # presets for diff datasets
@@ -192,15 +186,15 @@ if __name__ == "__main__":
         max_len=args.max_len,
         **DS_KWARGS[args.dataset],
     )
-
-    # print("Number of samples:", len(ds))
-    # print("Features:", ds.column_names)
-
-    # test group_texts_with_boundaries
-    # examples = {
-    #     "input_ids": [[1, 2, 3], [4, 5, 6]],
-    #     "labels": [[1, 2, 3], [4, 5, 6]],
-    #     "attention_mask": [[1, 1, 1], [1, 1, 1]],
-    # }
-    # result = group_texts(examples)
-    # print(result)
+    print("Number of samples:", len(ds))
+    print("Features:", ds.column_names)
+    tok = AutoTokenizer.from_pretrained(args.tokenizer, use_fast=True)
+    print("Input ids:")
+    print(f"Raw: {ds[0]['input_ids']}")
+    print(f"Decoded: {tok.decode(ds[0]['input_ids'])}")
+    print("Labels:")
+    labels = ds[0]["labels"]
+    print(f"Raw: {labels}")
+    print(
+        f"Decoded: {tok.decode( [l  if l != -100 else tok.encode('~')[-1] for l in labels] )}"
+    )

@@ -6,16 +6,16 @@ Usage:
 """
 
 # TODO:
+# Performance improvements
+# [x] (All) exclude prefix prediction from loss
+# [x] (Multihead) Add H-1 heads and Aux loss function
+# [ ] (All) Add option for non-chunking (use PAD or EOS)
+# [ ] (MuToR Specific) add bi-directionl attention for prefixes
+
+
 # Runtime improvements
 # [ ] copy data onto $SLURM_TMPDIR
 # [ ] use `torch.compile`
-# [ ] Add dl state loading for resume (https://lightning.ai/docs/pytorch/stable/data/datamodule.html#hyperparameters-in-datamodules)
-
-# Performance improvements
-# [ ] (MuToR Specific) add bi-directionl attention for prefixes
-# [ ] (All) exclude prefix prediction from loss
-# [ ] (Multihead) Addd H-1 heads and Aux loss function
-# [ ] (Multihead) Tokenize using Llama tokenizer so we can finetune**
 
 # Misc:
 # [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
@@ -93,6 +93,7 @@ class LitLM(pl.LightningModule):
         loss_type: Literal["joint", "mhead"] = "mhead",
         pretrained: bool = False,
         warmup_ratio: float = 0.05,
+        lambda_mhead: float = 0.1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -106,12 +107,15 @@ class LitLM(pl.LightningModule):
                 horizon=self.hparams["horizon"],
                 loss_type=self.hparams["loss_type"],
                 pretrained=self.hparams["pretrained"],
+                lambda_mhead=self.hparams["lambda_mhead"],
             )
             self.model = MultiTokenHF(config)
 
     def forward(self, input_ids, attention_mask=None, labels=None):
         return self.model(
-            input_ids=input_ids, attention_mask=attention_mask, labels=labels
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
         )
 
     def training_step(self, batch, batch_idx):
@@ -139,7 +143,9 @@ class LitLM(pl.LightningModule):
                 f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
             )
             wr = self.hparams["warmup_ratio"]
-            opt = torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
+            opt = torch.optim.AdamW(
+                self.parameters(), lr=self.hparams["lr"], weight_decay=0
+            )
             warmup_steps = int(wr * self.hparams["max_steps"])
             warmup_factor = lambda st: wr + (1 - wr) * (st / max(warmup_steps, 1))
             warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
@@ -250,7 +256,7 @@ class LMEvalsCallback(pl.Callback):
         self.limit = limit
         datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
 
-    def _run_evals(self, pl_module, logger_prefix=None):
+    def _run_eval(self, pl_module, logger_prefix=None):
         output = simple_evaluate(
             model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
             tasks=self.evals,
@@ -287,7 +293,7 @@ class LMEvalsCallback(pl.Callback):
         if (batch_idx + 1) % self.val_check_interval == 0 or (
             batch_idx == 0 and self.val_on_start
         ):
-            self._run_evals(
+            self._run_eval(
                 pl_module=pl_module,
                 logger_prefix=f"Batch {batch_idx + 1}",
             )
@@ -303,7 +309,7 @@ class LMEvalsCallback(pl.Callback):
             and trainer.max_epochs is not None
             and trainer.current_epoch == trainer.max_epochs - 1
         ):
-            self._run_evals(
+            self._run_eval(
                 pl_module=pl_module,
                 logger_prefix="Epoch End",
             )
@@ -323,7 +329,7 @@ class SampleEvalCallback(pl.Callback):
         self.tokenizer = tokenizer
         self.val_on_start = val_on_start
 
-    def _run_eval(self, trainer, pl_module, msg="N/A"):
+    def _run_eval(self, trainer, pl_module, logger_prefix="N/A"):
         outputs = pl_module.model.generate(
             self.tokenizer.encode(self.prefix, return_tensors="pt").to(
                 pl_module.device
@@ -333,20 +339,37 @@ class SampleEvalCallback(pl.Callback):
         )
         columns = ["text"]
         data = [[self.tokenizer.decode(outputs[0])]]
-        print(f"[{msg}] (SampleEvalCallback) Generated sample: {data[0][0]}")
+        print(f"[{logger_prefix}] (SampleEvalCallback) Generated sample: {data[0][0]}")
         trainer.logger.log_text(key="samples", columns=columns, data=data)
 
     @rank_zero_only
-    def on_train_batch_end(
-        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
-    ):
-        if (batch_idx + 1) % self.val_check_interval == 0:
-            self._run_eval(trainer, pl_module, msg=f"Batch {batch_idx}")
+    def on_train_batch_start(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        batch: Any,
+        batch_idx: int,
+    ) -> None:
+        if (batch_idx + 1) % self.val_check_interval == 0 or (
+            batch_idx == 0 and self.val_on_start
+        ):
+            self._run_eval(
+                trainer=trainer,
+                pl_module=pl_module,
+                logger_prefix=f"Batch {batch_idx + 1}",
+            )
 
-    @rank_zero_only
-    def on_train_start(self, trainer, pl_module):
-        if self.val_on_start:
-            self._run_eval(trainer, pl_module, msg="Start")
+    # @rank_zero_only
+    # def on_train_batch_end(
+    #     self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    # ):
+    #     if (batch_idx + 1) % self.val_check_interval == 0:
+    #         self._run_eval(trainer, pl_module, logger_prefix=f"Batch {batch_idx}")
+
+    # @rank_zero_only
+    # def on_train_start(self, trainer, pl_module):
+    #     if self.val_on_start:
+    #         self._run_eval(trainer, pl_module, logger_prefix="Start")
 
 
 class OrionCallback(pl.Callback):
@@ -433,6 +456,7 @@ def main():
     # model
     p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
     p.add_argument("--model_head", type=str, default="stp")
+    p.add_argument("--lambda_mhead", type=float, default=0.1)
     p.add_argument("--horizon", type=int, default=1)
     p.add_argument("--pretrained", action="store_true")
     p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
@@ -485,6 +509,7 @@ def main():
         lr=args.lr,
         loss_type=args.loss_type,
         pretrained=args.pretrained,
+        lambda_mhead=args.lambda_mhead,
     )
 
     # hacky way to maybe auto resume
