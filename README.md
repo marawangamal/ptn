@@ -1,4 +1,4 @@
-# MTR: Multi-Token Regularization
+# Sample Efficient Learning via Multi-Token Regularization
 
 A PyTorch Lightning based script for pretraining and finetuning language models with multi-token prediction heads for improved sample efficiency.
 
