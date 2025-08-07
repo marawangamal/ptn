@@ -23,7 +23,7 @@ Usage:
 import os
 import re
 import argparse
-from typing import Any, Literal
+from typing import Any, List, Literal
 
 import torch
 import wandb
@@ -496,16 +496,16 @@ def main():
         wandb_id = lookup_wandb_run(args)
 
     # trainer callbacks
-    callbacks = [
-        LearningRateMonitor(logging_interval="step"),
-        ModelCheckpoint(  # save last
-            dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-            filename="last",
-            every_n_train_steps=args.ckpt_interval,
-        ),
-        OrionCallback(
-            monitor="val_loss_epoch",
-        ),
+    callbacks: List[pl.Callback] = [
+        LearningRateMonitor(logging_interval="step")
+        # ModelCheckpoint(  # save last
+        #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+        #     filename="last",
+        #     every_n_train_steps=args.ckpt_interval,
+        # ),
+        # OrionCallback(
+        #     monitor="val_loss_epoch",
+        # ),
     ]
 
     # Add evals

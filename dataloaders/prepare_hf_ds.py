@@ -103,7 +103,7 @@ def get_dataset(
         res = tok(examples["text"])
         res["labels"] = [
             [ignore_index for _ in range(max(0, examples["prefix_len"][i] - 1))]
-            + res["input_ids"][i][examples["prefix_len"][i] :]
+            + res["input_ids"][i][examples["prefix_len"][i] - 1 :]
             for i in range(len(res["input_ids"]))
         ]
         return res
@@ -142,7 +142,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Create text column",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_13_concat",
+        new_fingerprint=fingerprint + "_1_concat",
     )
 
     # Filter empty texts
@@ -151,7 +151,7 @@ def get_dataset(
         num_proc=num_proc,  # type: ignore
         desc="Filter empty",  # type: ignore
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_23_filter",
+        new_fingerprint=fingerprint + "_2_filter",
     ).shuffle(seed=42)
 
     # Tokenize
@@ -164,7 +164,7 @@ def get_dataset(
         desc="Tokenize",
         remove_columns=list(cols),
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_33_tokenize",
+        new_fingerprint=fingerprint + "_31_tokenize",
     )
 
     # Chunk
@@ -175,7 +175,7 @@ def get_dataset(
         num_proc=num_proc,
         desc="Chunk",
         load_from_cache_file=True,
-        new_fingerprint=fingerprint + "_43_chunk",
+        new_fingerprint=fingerprint + "_41_chunk",
     )
 
     return ds
@@ -193,24 +193,14 @@ if __name__ == "__main__":
         **DS_KWARGS[args.dataset],
     )
 
-    print("Number of samples:", len(ds))
-    print("Features:", ds.column_names)
+    # print("Number of samples:", len(ds))
+    # print("Features:", ds.column_names)
 
-    # # test group_texts_with_boundaries
+    # test group_texts_with_boundaries
     # examples = {
     #     "input_ids": [[1, 2, 3], [4, 5, 6]],
     #     "labels": [[1, 2, 3], [4, 5, 6]],
     #     "attention_mask": [[1, 1, 1], [1, 1, 1]],
     # }
-    # # boundary = {
-    # #     "input_ids": [-100, -101],
-    # #     "labels": [-100, -101],
-    # #     "attention_mask": [1, 1],
-    # # }
-    # boundary = {
-    #     "input_ids": [],
-    #     "labels": [],
-    #     "attention_mask": [],
-    # }
-    # result = group_texts_with_boundaries(examples, boundary)
+    # result = group_texts(examples)
     # print(result)
