@@ -110,6 +110,7 @@ p.add_argument("--batch_size", type=int, default=4)
 p.add_argument("--lr", type=float, default=2e-5)
 p.add_argument("--warmup_steps", type=int, default=200)
 p.add_argument("--max_epochs", type=int, default=1)
+p.add_argument("--max_steps", type=int, default=None)
 p.add_argument("--accumulate_grad_batches", type=int, default=2)
 args = p.parse_args()
 
@@ -175,12 +176,16 @@ trainer = pl.Trainer(
     accumulate_grad_batches=args.accumulate_grad_batches,
     default_root_dir=OUTPUT_DIR,
 )
-max_steps = (
-    args.max_epochs
-    * len(dl)
-    / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
-    / args.accumulate_grad_batches
-)
+
+max_steps = args.max_steps
+if max_steps is None:
+    max_steps = (
+        args.max_epochs
+        * len(dl)
+        / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
+        / args.accumulate_grad_batches
+    )
+
 trainer.fit(LitLlama(model, max_steps), train_dataloaders=dl)
 
 # Save merged adapter + base
