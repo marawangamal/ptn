@@ -9,6 +9,8 @@ Usage:
 # Performance improvements
 # [x] (All) exclude prefix prediction from loss
 # [x] (Multihead) Add H-1 heads and Aux loss function
+# [ ] (All) Use chat-template whenever we have `--pretrained` flag to differentiate sft and pretraining
+# (i.e. tok.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"))
 # [ ] (All) Add option for non-chunking (use PAD or EOS)
 # [ ] (MuToR Specific) add bi-directionl attention for prefixes
 

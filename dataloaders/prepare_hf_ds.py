@@ -8,7 +8,6 @@ Example:
     >>  HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --dataset wikitext --subset wikitext-2-raw-v1 --split "train[:10000]"
 """
 
-import muliprocessing
 import os
 import argparse
 from typing import Union
@@ -198,3 +197,20 @@ if __name__ == "__main__":
     print(
         f"Decoded: {tok.decode( [l  if l != -100 else tok.encode('~')[-1] for l in labels] )}"
     )
+
+
+# Given the following problem, reason and give a final answer to the problem
+# messages = [
+#     {
+#         "role": "system",
+#         "content": "You are a math assistant. You are given a problem and you need to reason and give a final answer to the problem.",
+#     },
+#     {
+#         "role": "user",
+#         "content": "Solve for $y$: $$\frac{y^2 - 3y + 2}{y - 2} = y + 1$$",
+#     },
+#     {
+#         "role": "assistant",
+#         "content": r"Start by multiplying both sides by $y - 2$ to eliminate the denominator: \\[ (y^2 - 3y + 2) = (y + 1)(y - 2) \\] Expand both sides: \\[ y^2 - 3y + 2 = y^2 - y - 2 \\] Subtract $y^2$ from both sides to get: \\[ -3y + 2 = -y - 2 \\] Add $3y$ to both sides: \\[ 2 = 2y - 2 \\] Add $2$ to both sides: \\[ 4 = 2y \\] Divide by $2$ to solve for $y$: \\[ y = \frac{4}{2} \\] \\[ y = \boxed{2} \\]",
+#     },
+# ]
