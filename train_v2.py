@@ -5,8 +5,12 @@
 # • Automatically launches LM-Eval-Harness on GSM8K after training
 # Author: You :-)
 
-import argparse, os, json, torch, subprocess, tempfile
+from pytorch_lightning.callbacks import ModelCheckpoint
+import argparse, os, json, torch, subprocess
+from typing import List
 import pytorch_lightning as pl
+import lm_eval
+from lm_eval import simple_evaluate
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -46,11 +50,53 @@ class PeriodicSample(pl.Callback):
             )
             print(f"[{step}] {prompt} -> {completion}")
         pl_module.train()
-        trainer.logger.log_text(
-            key="samples",
-            columns=["step", "prompt", "completion"],
-            data=[[step, prompt.strip(), completion.strip()]],
+
+
+class PeriodicEvaluate(pl.Callback):
+    def __init__(self, evals, batch_size, limit=None, every_steps=100):
+        self.evals = evals
+        self.batch_size = batch_size
+        self.limit = limit
+        self.every_steps = every_steps
+
+    def _run_eval(self, pl_module, logger_prefix=None):
+        print(
+            f"Running eval on {self.evals} with batch size {self.batch_size} and limit {self.limit}"
         )
+        output = simple_evaluate(
+            model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
+            tasks=self.evals,
+            batch_size=self.batch_size,
+            limit=self.limit,
+        )
+        for task_name in output["results"].keys():
+            # Example output:
+            # >> output['results']['gsm8k_cot']
+            # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
+            # 'exact_match_stderr,strict-match': 0.16666666666666666,
+            # 'exact_match,flexible-extract': np.float64(0.5),
+            # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
+            for metric_name in output["results"][task_name].keys():
+                # if metric is a number, log it
+                if isinstance(output["results"][task_name][metric_name], (int, float)):
+                    pl_module.log(
+                        f"eval/{task_name}/{metric_name}",
+                        output["results"][task_name][metric_name],
+                        sync_dist=False,
+                    )
+                    print(
+                        f"[{logger_prefix}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
+                    )
+
+    def on_train_batch_end(self, trainer, pl_module, *_):
+        step = trainer.global_step
+        if step == 0 or step % self.every_steps:
+            return
+
+        pl_module.eval()
+        with torch.no_grad():
+            self._run_eval(pl_module, logger_prefix=f"[{step}]")
+        pl_module.train()
 
 
 # ---------- Lightning Module ----------
@@ -110,8 +156,13 @@ p.add_argument("--batch_size", type=int, default=4)
 p.add_argument("--lr", type=float, default=2e-5)
 p.add_argument("--warmup_steps", type=int, default=200)
 p.add_argument("--max_epochs", type=int, default=1)
-p.add_argument("--max_steps", type=int, default=None)
+p.add_argument("--max_steps", type=int, default=100)
 p.add_argument("--accumulate_grad_batches", type=int, default=2)
+# eval
+p.add_argument("--eval_every", type=int, default=10)
+p.add_argument("--eval_batch_size", type=int, default=8)
+p.add_argument("--eval_limit", type=int, default=10)
+p.add_argument("--eval_evals", type=str, default="gsm8k_cot")
 args = p.parse_args()
 
 # ---------- Model & Tokenizer ----------
@@ -165,17 +216,16 @@ dl = torch.utils.data.DataLoader(
 val_prompts = [
     "A train travels 120 miles at 60 mph. How long does the trip take?",
 ]
-callbacks = [
-    PeriodicSample(val_prompts, tokenizer, every_steps=500),  # ← step freq
+callbacks: List[pl.Callback] = [
+    PeriodicSample(val_prompts, tokenizer, every_steps=args.eval_every),  # ← step freq
+    PeriodicEvaluate(
+        args.eval_evals,
+        args.eval_batch_size,
+        limit=args.eval_limit,
+        every_steps=args.eval_every,
+    ),
 ]
 
-
-trainer = pl.Trainer(
-    max_epochs=args.max_epochs,
-    gradient_clip_val=1.0,
-    accumulate_grad_batches=args.accumulate_grad_batches,
-    default_root_dir=OUTPUT_DIR,
-)
 
 max_steps = args.max_steps
 if max_steps is None:
@@ -186,27 +236,35 @@ if max_steps is None:
         / args.accumulate_grad_batches
     )
 
+trainer = pl.Trainer(
+    max_epochs=args.max_epochs,
+    gradient_clip_val=1.0,
+    accumulate_grad_batches=args.accumulate_grad_batches,
+    default_root_dir=OUTPUT_DIR,
+    max_steps=max_steps,
+    callbacks=callbacks,
+)
 trainer.fit(LitLlama(model, max_steps), train_dataloaders=dl)
 
-# Save merged adapter + base
-final_path = os.path.join(OUTPUT_DIR, "merged")
-model.save_pretrained(final_path, safe_serialization=True)
-tokenizer.save_pretrained(final_path)
+# # Save merged adapter + base
+# final_path = os.path.join(OUTPUT_DIR, "merged")
+# model.save_pretrained(final_path, safe_serialization=True)
+# tokenizer.save_pretrained(final_path)
 
 # ---------- Post-train GSM8K eval ----------
-print("\n▶ Running LM-Eval-Harness on GSM8K…")
-cmd = [
-    "lm_eval",
-    "--model",
-    "hf",
-    "--model_args",
-    f"pretrained={final_path},dtype=float16",
-    "--tasks",
-    "gsm8k",
-    "--batch_size",
-    "8",
-    "--output_path",
-    os.path.join(OUTPUT_DIR, "gsm8k.json"),
-]
-subprocess.run(cmd, check=True)
-print("✓ Done — see gsm8k.json for accuracy.")
+# print("\n▶ Running LM-Eval-Harness on GSM8K…")
+# cmd = [
+#     "lm_eval",
+#     "--model",
+#     "hf",
+#     "--model_args",
+#     f"pretrained={final_path},dtype=float16",
+#     "--tasks",
+#     "gsm8k",
+#     "--batch_size",
+#     "8",
+#     "--output_path",
+#     os.path.join(OUTPUT_DIR, "gsm8k.json"),
+# ]
+# subprocess.run(cmd, check=True)
+# print("✓ Done — see gsm8k.json for accuracy.")
