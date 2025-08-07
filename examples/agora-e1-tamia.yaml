@@ -31,7 +31,7 @@ group:
               # Prepare dataset
               name: "prepare_dataset"
               preamble: clong
-              command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m'
+              command: 'WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --tokenizer meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --max_len 512'
           - group:
               type: parallel
               jobs:
