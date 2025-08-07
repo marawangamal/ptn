@@ -141,25 +141,27 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         return logits
 
     def _get_mhead_loss(
-        self, x, z, use_memory_efficient_loss: bool = True, window_shift: int = 1
+        self, y, z, use_memory_efficient_loss: bool = True, window_shift: int = 1
     ):
         """Compute mhead loss.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (B, T).
+            y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
             z (torch.Tensor): Hidden state tensor of shape (B, T-H, D).
             use_memory_efficient_loss (bool, optional): Whether to use memory efficient loss. Defaults to True.
             window_shift (int, optional): The number of steps to shift the window. Defaults to 1. See example in `window_input_ids` docstring.
 
         Returns:
-            _type_: _description_
+            tuple[torch.Tensor, torch.Tensor]:
+                - loss (torch.Tensor): Loss tensor of shape (1,).
+                - logits (torch.Tensor): Logits tensor of shape (B, T, H, V).
         """
         H_, D = min(self.horizon, z.size(1)), z.size(-1)
 
         # Create targets
         # Shape: (B, T) -> (B, T, H)
-        y = window_input_ids(
-            x,
+        yw = window_input_ids(
+            y,
             horizon=H_,
             shift=window_shift,
             ignore_index=-100,  # used to mask positions beyond seq length
@@ -169,12 +171,12 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         if use_memory_efficient_loss and self.horizon > 1:
             offset = torch.randint(0, H_, (1,)).item()
             z = z[:, offset::H_]
-            y = y[:, offset::H_]
+            yw = yw[:, offset::H_]
 
         # Merge batch and sequence dims
         z = z.reshape(-1, D)  # (BT, D)
-        y = y.reshape(-1)  # (BT,)
-        output = self.mhead(z, y, ignore_index=-100)
+        yw = yw.reshape(-1)  # (BT,)
+        output = self.mhead(z, yw, ignore_index=-100)
         return output.loss.mean(), output.logits
 
     # Combined loss lm_head + mhead
@@ -193,12 +195,15 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         outputs = self.backbone(
             input_ids=input_ids, attention_mask=attention_mask, **kwargs
         )
-        hidden_state = outputs.last_hidden_state  # (B, T-H, D)
+        hidden_state = outputs.last_hidden_state  # (B, T, D)
 
         # Compute loss if labels provided
         if labels is not None:
             mhead_loss, _ = self._get_mhead_loss(
-                input_ids, hidden_state, use_memory_efficient_loss
+                labels,
+                hidden_state,
+                use_memory_efficient_loss,
+                window_shift=2,  # lm_head predicts first tok, mhead predicts next H tokens
             )
             logits = self.lm_head(hidden_state)  # (B, T, V)
             lm_head_loss = torch.nn.functional.cross_entropy(
@@ -230,7 +235,10 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         # Compute loss if labels provided
         if labels is not None:
             loss, logits = self._get_mhead_loss(
-                input_ids, hidden_state, use_memory_efficient_loss
+                labels,
+                hidden_state,
+                use_memory_efficient_loss,
+                window_shift=1,  # mhead predicts next H tokens
             )
             return CausalLMOutput(loss=loss, logits=logits.reshape(B, T, -1))
 
