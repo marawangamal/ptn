@@ -11,7 +11,7 @@ from transformers.modeling_outputs import CausalLMOutput
 from mtp.mheads import MHEADS
 from mtp._types import ModelHeadType
 from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads._utils import get_windowed_input_ids, window_input_ids
+from mtp.mheads._utils import window_input_ids
 
 
 # Should use mhead as auxiliary loss with H-1 heads in addtion to basic head:
@@ -162,7 +162,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             x,
             horizon=H_,
             shift=window_shift,
-            ignore_index=-1,  # used to mask positions beyond seq length
+            ignore_index=-100,  # used to mask positions beyond seq length
         )
 
         # Sub-sample for memory efficiency
@@ -174,7 +174,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         # Merge batch and sequence dims
         z = z.reshape(-1, D)  # (BT, D)
         y = y.reshape(-1)  # (BT,)
-        output = self.mhead(z, y, ignore_index=-1)
+        output = self.mhead(z, y, ignore_index=-100)
         return output.loss.mean(), output.logits
 
     # Combined loss lm_head + mhead

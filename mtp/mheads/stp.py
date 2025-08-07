@@ -23,7 +23,7 @@ class STP(AbstractDisributionHead):
         for param in self.head.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None, ignore_index=-1):
+    def forward(self, x, y=None, ignore_index=-100):
         logits = self.head(x)
         loss = None
         if y is not None:

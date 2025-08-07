@@ -1,30 +1,19 @@
 import torch
 
 
-def get_windowed_input_ids(
-    input_ids: torch.Tensor, horizon: int, offset: int = 0, ignore_index: int = -1
-):
-    # 1. Window the `input_ids` to get targets: (*, T) => (*, (T-H), H)
-    #   each position should look H steps ahead
-    batch_dims = input_ids.shape[:-1]
-    input_ids = input_ids.reshape(-1, input_ids.shape[-1])  # Flatten batch dims
-    input_ids_windowed = window_input_ids_v1(input_ids, horizon=horizon)
-
-    # 2. Make targets using windowed input_ids
-    targets = input_ids_windowed[:, :-horizon]  # (*, T-H, H)
-    targets = targets.reshape(*batch_dims, -1, horizon)  # (*,(T-H), H)
-    return targets
-
-
 def window_input_ids(
-    input_ids: torch.Tensor, horizon: int, shift: int = 1, ignore_index: int = -1
+    input_ids: torch.Tensor,
+    horizon: int = 1,
+    shift: int = 1,
+    ignore_index: int = -100,
 ):
     """Window the input_ids so that each position looks H steps ahead.
 
     Args:
         input_ids (torch.Tensor): The input tensor of shape (B, T).
-        H (int): The number of steps ahead each position should look.
-        shift (int): The number of steps to shift the window.
+        horizon (int): The number of steps ahead each position should look. Default is 1 (i.e. next-token prediction)
+        shift (int): The number of steps to shift the window. Default is 1 (i.e. next-token prediction)
+        ignore_index (int): Index for rolled-beyond positions. Default is -100 (i.e. ignore)
 
     Returns:
         torch.Tensor: The windowed tensor of shape (B, T, H).
@@ -40,7 +29,7 @@ def window_input_ids(
                  [ 2,  3],
                  [ 3,  4],
                  [ 4,  5],
-                 [ 5, -1]]])
+                 [ 5, -100]]])
 
         >>> window_input_ids(input_ids, horizon=2, shift=2)
         Input IDs:
@@ -50,8 +39,8 @@ def window_input_ids(
                  [ 3,  4],
                  [ 4,  5],
                  [ 5, -1],
-                 [-1, -1],
-                 [-1, -1]]])
+                 [-100, -100],
+                 [-100, -100]]])
 
 
     """
@@ -71,79 +60,75 @@ def window_input_ids(
     return input_ids_windowed
 
 
-def window_input_ids_v1(input_ids: torch.Tensor, horizon: int, shift: int = 1):
-    """Window the input_ids so that each position looks H steps ahead.
-
-    Args:
-        input_ids (torch.Tensor): The input tensor of shape (B, T).
-        H (int): The number of steps ahead each position should look.
-
-    Returns:
-        torch.Tensor: The windowed tensor of shape (B, T, H).
-    """
-    B, T = input_ids.shape
-
-    # Create the windowed input tensor
-    # (B, T) -> (B, T, H)
-    input_ids_windowed = torch.stack(
-        [torch.roll(input_ids, -i - shift, dims=1) for i in range(horizon)], dim=-1
-    )
-
-    # Mask out positions that roll beyond the sequence length
-    for i in range(1, horizon):
-        input_ids_windowed[:, -i - shift :, i] = (
-            0  # Replace 0 with padding token if needed
-        )
-
-    # Correct the padding (zeroing) for positions that have rolled beyond the valid sequence length
-    for i in range(horizon):
-        # Calculate the index from which zeroing should start based on the shift
-        zero_start = T - i - shift
-        if zero_start < T:  # Only apply zeroing if we're within valid range
-            input_ids_windowed[:, zero_start:, i] = 0
-
-    return input_ids_windowed
-
-
 if __name__ == "__main__":
     x = torch.arange(6).unsqueeze(0)
+    x_ignore = x.clone()
+    x_ignore[x_ignore < 3] = -100
     cases = [
         {
             "kwargs": {
-                "input_ids": torch.arange(6).unsqueeze(0),
+                "input_ids": x,
                 "horizon": 2,
-                "offset": 0,
-                "ignore_index": -1,
+                "shift": 1,
+                "ignore_index": -100,
             },
             "y_true": torch.tensor(
                 [
-                    [1, 2],  # 1
-                    [2, 3],  # 2
-                    [3, 4],  # 3
-                    [4, 5],  # 4
+                    [
+                        [1, 2],  # 1
+                        [2, 3],  # 2
+                        [3, 4],  # 3
+                        [4, 5],  # 4
+                        [5, -100],  # 5
+                        [-100, -100],  # 6
+                    ]
                 ]
             ),
         },
         {
             "kwargs": {
-                "input_ids": torch.arange(6).unsqueeze(0),
+                "input_ids": x,
                 "horizon": 2,
-                "offset": 1,
-                "ignore_index": -1,
+                "shift": 2,
+                "ignore_index": -100,
             },
             "y_true": torch.tensor(
                 [
-                    [2, 3],  # 1
-                    [3, 4],  # 2
-                    [4, 5],  # 3
-                    [5, -1],  # 4
+                    [
+                        [2, 3],  # 1
+                        [3, 4],  # 2
+                        [4, 5],  # 3
+                        [5, -100],  # 4
+                        [-100, -100],  # 5
+                        [-100, -100],  # 6
+                    ]
+                ]
+            ),
+        },
+        {
+            "kwargs": {
+                "input_ids": x_ignore,
+                "horizon": 2,
+                "shift": 2,
+                "ignore_index": -100,
+            },
+            "y_true": torch.tensor(
+                [
+                    [
+                        [-100, 3],  # 1
+                        [3, 4],  # 2
+                        [4, 5],  # 3
+                        [5, -100],  # 4
+                        [-100, -100],  # 5
+                        [-100, -100],  # 6
+                    ]
                 ]
             ),
         },
     ]
 
     for case in cases:
-        y_pred = get_windowed_input_ids(**case["kwargs"])
+        y_pred = window_input_ids(**case["kwargs"])
         assert (
             y_pred.shape == case["y_true"].shape
         ), f"Case {case['kwargs']} failed. Shape mismatch: {y_pred.shape} != {case['y_true'].shape}"

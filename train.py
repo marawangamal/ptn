@@ -23,7 +23,7 @@ Usage:
 import os
 import re
 import argparse
-from typing import Any, Literal
+from typing import Any, List, Literal
 
 import torch
 import wandb
@@ -37,7 +37,10 @@ from pytorch_lightning.utilities import rank_zero_only
 
 import datasets
 from transformers import AutoTokenizer
-from transformers.data.data_collator import DataCollatorForLanguageModeling
+from transformers.data.data_collator import (
+    DataCollatorForLanguageModeling,
+    default_data_collator,
+)
 from dataloaders import get_dataset
 import lm_eval
 from lm_eval import simple_evaluate
@@ -65,28 +68,14 @@ DS_KWARGS = {  # presets for diff datasets
         "split": "train[:10000]",
         "column_names": ["text"],
     },
+    "gsm8k": {
+        "dataset_name": "openai/gsm8k",
+        "subset": "main",
+        "split": "train",
+        "column_names": ["question", "answer"],
+    },
 }
 
-PRETRAINING_DS_CONFIG = {
-    "fineweb": {
-        "dataset_path": os.path.join(
-            os.environ.get("HF_HOME", "data"), "processed", "fineweb"
-        ),
-    },
-    "fineweb::dt": {
-        "folder_path": os.path.join(
-            os.environ.get("HF_HOME", "data"), "processed", "fineweb"
-        ),
-        "seq_len": 1024,
-    },
-    # small ds for testing
-    "wikitext": {
-        "path": "Salesforce/wikitext",
-        "name": "wikitext-2-v1",
-        "split": "test",
-        "streaming": True,
-    },
-}
 # print("-" * 100)
 # print(f"HF_HOME: {os.environ.get('HF_HOME', 'data')}")
 # print("-" * 100)
@@ -216,15 +205,17 @@ class LMDataModule(pl.LightningDataModule):
         self.dataset["val"] = self.dataset["test"]
 
     def train_dataloader(self):
-        collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
         return DataLoader(
-            self.dataset["train"], batch_size=self.batch_size, collate_fn=collator
+            self.dataset["train"],
+            batch_size=self.batch_size,
+            collate_fn=default_data_collator,
         )
 
     def val_dataloader(self):
-        collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False)
         return DataLoader(
-            self.dataset["val"], batch_size=self.batch_size, collate_fn=collator
+            self.dataset["val"],
+            batch_size=self.batch_size,
+            collate_fn=default_data_collator,
         )
 
     # def state_dict(self):
@@ -505,16 +496,16 @@ def main():
         wandb_id = lookup_wandb_run(args)
 
     # trainer callbacks
-    callbacks = [
-        LearningRateMonitor(logging_interval="step"),
-        ModelCheckpoint(  # save last
-            dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-            filename="last",
-            every_n_train_steps=args.ckpt_interval,
-        ),
-        OrionCallback(
-            monitor="val_loss_epoch",
-        ),
+    callbacks: List[pl.Callback] = [
+        LearningRateMonitor(logging_interval="step")
+        # ModelCheckpoint(  # save last
+        #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
+        #     filename="last",
+        #     every_n_train_steps=args.ckpt_interval,
+        # ),
+        # OrionCallback(
+        #     monitor="val_loss_epoch",
+        # ),
     ]
 
     # Add evals
