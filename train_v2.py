@@ -1,14 +1,15 @@
 #!/usr/bin/env python
-# finetune_l3_omi_gsm.py
+# train_v2.py
 #
-# • QLoRA fine-tune of meta-llama/Llama-3.2-3B-Instruct on OpenMathInstruct-2
-# • Automatically launches LM-Eval-Harness on GSM8K after training
-# Author: You :-)
+# To evaluate a ckpt, run:
+# accelerate launch -m lm_eval --model hf --tasks lambada_openai,arc_easy  --batch_size 16
 
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+import os
+import re
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
-import argparse, os, json, torch, subprocess
-from typing import List, Literal
+import argparse, torch
+from typing import List
 import pytorch_lightning as pl
 import lm_eval
 from lm_eval import simple_evaluate
@@ -24,7 +25,32 @@ from transformers import (
 import subprocess, json, random, torch, pytorch_lightning as pl
 from pathlib import Path
 
+import wandb
+
 from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig
+
+
+# ---------- Constants ----------
+DATASET_KWARGS = {
+    "gsm8k": {
+        "path": "openai/gsm8k",
+        "name": "main",
+        "split": "train",
+    },
+    "omi:1m": {
+        "path": "nvidia/OpenMathInstruct-2",
+        "split": "train_1M",
+    },
+}
+
+RENAMED_COLUMNS = {
+    "omi:1m": {
+        "problem": "question",
+        "generated_solution": "answer",
+    },
+}
+
+OUTPUT_DIR = "./experiments"
 
 
 class PeriodicSample(pl.Callback):
@@ -109,7 +135,7 @@ class PeriodicEvaluate(pl.Callback):
 
 # ---------- Lightning Module ----------
 class LitLlama(pl.LightningModule):
-    def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.01):
+    def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.05):
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
         self.model = model
@@ -161,44 +187,61 @@ class LitLlama(pl.LightningModule):
         self.log("grad_norm", norm, on_step=True, on_epoch=False)
 
 
-DATASET_KWARGS = {
-    "gsm8k": {
-        "path": "openai/gsm8k",
-        "name": "main",
-        "split": "train",
-    },
-    "omi:1m": {
-        "path": "nvidia/OpenMathInstruct-2",
-        "split": "train_1M",
-    },
-}
+# ------------- Utils -------------------
+def get_econfig_name(args: argparse.Namespace):
+    ignore_keys = [
+        "eval_every",
+        "eval_batch_size",
+        "eval_limit",
+        "eval_evals",
+        "tags",
+        "ckpt_every",
+    ]
+    parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
+    # remove special characters
+    parts = [re.sub(r"[^a-zA-Z0-9]", "", p) for p in parts]
+    return "_".join(parts)
 
-RENAMED_COLUMNS = {
-    "omi:1m": {
-        "problem": "question",
-        "generated_solution": "answer",
-    },
-}
 
-# ---------- CONSTANTS ----------
-OUTPUT_DIR = "./checkpoints"
+def lookup_ckpt(args: argparse.Namespace):
+    ckpt_path = f"{OUTPUT_DIR}/{get_econfig_name(args)}/last.ckpt"
+    if not os.path.exists(ckpt_path):
+        return None
+    return ckpt_path
+
+
+def lookup_wandb_run(args: argparse.Namespace):
+    run_name = get_econfig_name(args)
+    runs = wandb.Api(timeout=15).runs("mtl")
+    matches = [r for r in runs if r.name == run_name]
+    matches.sort(key=lambda x: x.created_at, reverse=True)
+    if len(matches) == 0:
+        return None
+    return matches[0].id
+
 
 # ---------- CLI ----------
 p = argparse.ArgumentParser()
 p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
-p.add_argument("--dataset", default="gsm8k")
+p.add_argument("--dataset", default="omi:1m")
 p.add_argument("--max_length", type=int, default=512)
 p.add_argument("--batch_size", type=int, default=8)
-p.add_argument("--lr", type=float, default=1e-7)
+p.add_argument("--lr", type=float, default=5e-5)
 p.add_argument("--max_epochs", type=int, default=1)
 p.add_argument("--max_steps", type=int, default=None)
 p.add_argument("--accumulate_grad_batches", type=int, default=1)
 # eval
-p.add_argument("--eval_every", type=int, default=50)
-p.add_argument("--eval_batch_size", type=int, default=8)
-p.add_argument("--eval_limit", type=int, default=50)
+p.add_argument("--eval_every", type=int, default=5000)
+p.add_argument("--eval_batch_size", type=int, default=64)
+p.add_argument("--eval_limit", type=int, default=None)
 p.add_argument("--eval_evals", type=str, default="gsm8k_cot")
+p.add_argument("--tags", type=str, nargs="*", default=[])
+# ckpt
+p.add_argument("--ckpt_every", type=int, default=1000)
 args = p.parse_args()
+
+# ---------- Setup ----------------------
+os.makedirs(os.path.join(OUTPUT_DIR, get_econfig_name(args)), exist_ok=True)
 
 # ---------- Model & Tokenizer ----------
 tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
@@ -245,13 +288,13 @@ def _tokenize(batch):
     return toks
 
 
-ds = load_dataset(**DATASET_KWARGS[args.dataset])
+ds = load_dataset(**DATASET_KWARGS[args.dataset])  # type: ignore
 ds = ds.rename_columns(RENAMED_COLUMNS.get(args.dataset, {}))
 cols = ds.column_names
-ds = ds.map(_format)
-ds = ds.map(_tokenize, batched=True, remove_columns=cols + ["text"])
+ds = ds.map(_format, desc="Formatting")  # type: ignore
+ds = ds.map(_tokenize, batched=True, remove_columns=cols + ["text"], desc="Tokenizing")  # type: ignore
 dl = torch.utils.data.DataLoader(
-    ds,
+    ds,  # type: ignore
     batch_size=args.batch_size,
     collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False),
     num_workers=4,
@@ -270,6 +313,11 @@ callbacks: List[pl.Callback] = [
         every_steps=args.eval_every,
     ),
     LearningRateMonitor(logging_interval="step"),  # Built-in LR monitoring
+    ModelCheckpoint(  # save last
+        dirpath=f"{OUTPUT_DIR}/{get_econfig_name(args)}",
+        filename="last",
+        every_n_train_steps=args.ckpt_every,
+    ),
 ]
 
 
@@ -282,6 +330,14 @@ if max_steps is None:
         / args.accumulate_grad_batches
     )
 
+# hacky way to maybe auto resume
+resume_ckpt = lookup_ckpt(args)
+wandb_id = None
+if resume_ckpt is not None:
+    print(f"[INFO] Resuming from checkpoint {resume_ckpt}.")
+    resume_ckpt = lookup_ckpt(args)
+    wandb_id = lookup_wandb_run(args)
+
 trainer = pl.Trainer(
     max_epochs=args.max_epochs,
     gradient_clip_val=1.0,
@@ -292,18 +348,28 @@ trainer = pl.Trainer(
     accelerator="auto",
     logger=WandbLogger(
         project="mtl",
-        tags=["tamia-debug"],
+        tags=args.tags,
+        name=get_econfig_name(args),
+        id=wandb_id,
+        resume="allow",
     ),
 )
 trainer.fit(
-    LitLlama(model, max_steps, lr=args.lr),
-    train_dataloaders=dl,
+    LitLlama(model, max_steps, lr=args.lr), train_dataloaders=dl, ckpt_path=resume_ckpt
 )
 
-# # Save merged adapter + base
-# final_path = os.path.join(OUTPUT_DIR, "merged")
-# model.save_pretrained(final_path, safe_serialization=True)
-# tokenizer.save_pretrained(final_path)
+# ---------- Save HF-compatible checkpoint ----------
+if trainer.is_global_zero:
+    final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
+    os.makedirs(final_dir, exist_ok=True)
+    # Save base model weights (already updated during training) + tokenizer
+    model.save_pretrained(final_dir, safe_serialization=True)
+    tokenizer.save_pretrained(final_dir)
+    print(f"[INFO] Saved HF checkpoint to {final_dir}")
+    print(
+        "Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 16 --model_args pretrained="
+        + final_dir
+    )
 
 # ---------- Post-train GSM8K eval ----------
 # print("\n▶ Running LM-Eval-Harness on GSM8K…")
