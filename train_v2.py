@@ -6,8 +6,9 @@
 # Author: You :-)
 
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers.wandb import WandbLogger
 import argparse, os, json, torch, subprocess
-from typing import List
+from typing import List, Literal
 import pytorch_lightning as pl
 import lm_eval
 from lm_eval import simple_evaluate
@@ -23,6 +24,8 @@ from transformers import (
 # --- callbacks.py (or just paste above the main if you prefer) ----------------
 import subprocess, json, random, torch, pytorch_lightning as pl
 from pathlib import Path
+
+from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig
 
 
 class PeriodicSample(pl.Callback):
@@ -49,15 +52,21 @@ class PeriodicSample(pl.Callback):
                 out_ids[0][inputs.input_ids.shape[-1] :], skip_special_tokens=True
             )
             print(f"[{step}] {prompt} -> {completion}")
+            columns = ["text"]
+            data = [[completion]]
+            trainer.logger.log_text(key="samples", columns=columns, data=data)
         pl_module.train()
 
 
 class PeriodicEvaluate(pl.Callback):
-    def __init__(self, evals, batch_size, limit=None, every_steps=100):
+    def __init__(
+        self, evals, batch_size, limit=None, every_steps=100, val_on_start=True
+    ):
         self.evals = evals
         self.batch_size = batch_size
         self.limit = limit
         self.every_steps = every_steps
+        self.val_on_start = val_on_start
 
     def _run_eval(self, pl_module, logger_prefix=None):
         print(
@@ -90,7 +99,7 @@ class PeriodicEvaluate(pl.Callback):
 
     def on_train_batch_end(self, trainer, pl_module, *_):
         step = trainer.global_step
-        if step == 0 or step % self.every_steps:
+        if (step == 0 and not self.val_on_start) or (step % self.every_steps):
             return
 
         pl_module.eval()
@@ -161,7 +170,7 @@ p.add_argument("--accumulate_grad_batches", type=int, default=2)
 # eval
 p.add_argument("--eval_every", type=int, default=100)
 p.add_argument("--eval_batch_size", type=int, default=8)
-p.add_argument("--eval_limit", type=int, default=16)
+p.add_argument("--eval_limit", type=int, default=50)
 p.add_argument("--eval_evals", type=str, default="gsm8k_cot")
 args = p.parse_args()
 
@@ -173,6 +182,16 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     trust_remote_code=True,
 )
+# model = MultiTokenHF(
+#     MultiTokenHFConfig(
+#         model_name=args.model,
+#         model_head="stp",
+#         horizon=1,
+#         loss_type="mhead",
+#         pretrained=True,
+#         lambda_mhead=0.0,
+#     )
+# )
 
 # make sure we have a pad token
 if tokenizer.pad_token is None:
@@ -243,6 +262,11 @@ trainer = pl.Trainer(
     default_root_dir=OUTPUT_DIR,
     max_steps=max_steps,
     callbacks=callbacks,
+    accelerator="auto",
+    logger=WandbLogger(
+        project="mtl",
+        tags=["debug"],
+    ),
 )
 trainer.fit(LitLlama(model, max_steps), train_dataloaders=dl)
 
