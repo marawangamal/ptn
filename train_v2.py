@@ -5,7 +5,7 @@
 # • Automatically launches LM-Eval-Harness on GSM8K after training
 # Author: You :-)
 
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers.wandb import WandbLogger
 import argparse, os, json, torch, subprocess
 from typing import List, Literal
@@ -17,7 +17,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
-    get_cosine_schedule_with_warmup,
 )
 
 
@@ -104,14 +103,15 @@ class PeriodicEvaluate(pl.Callback):
 
         pl_module.eval()
         with torch.no_grad():
-            self._run_eval(pl_module, logger_prefix=f"[{step}]")
+            self._run_eval(pl_module, logger_prefix=f"{step}")
         pl_module.train()
 
 
 # ---------- Lightning Module ----------
 class LitLlama(pl.LightningModule):
-    def __init__(self, model, max_steps):
+    def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.01):
         super().__init__()
+        self.save_hyperparameters(ignore=["model"])
         self.model = model
         self.max_steps = max_steps
 
@@ -124,14 +124,41 @@ class LitLlama(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW(self.model.parameters(), lr=args.lr)
-        sched = get_cosine_schedule_with_warmup(
-            opt, args.warmup_steps, args.max_epochs * self.max_steps
+        wr = self.hparams["warmup_ratio"]
+        opt = torch.optim.AdamW(
+            self.parameters(), lr=self.hparams["lr"], weight_decay=0
         )
+        warmup_steps = int(wr * self.hparams["max_steps"])
+        warmup_factor = lambda st: wr + (1 - wr) * (st / max(warmup_steps, 1))
+        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
+        cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt,
+            T_max=self.hparams["max_steps"] - warmup_steps,
+            eta_min=0.1 * self.hparams["lr"],  # end at 10% of lr
+        )
+        sched = torch.optim.lr_scheduler.SequentialLR(
+            opt,
+            schedulers=[warmup_scheduler, cos_scheduler],
+            milestones=[warmup_steps],
+        )
+
         return {
             "optimizer": opt,
             "lr_scheduler": {"scheduler": sched, "interval": "step"},
         }
+
+    def on_after_backward(self) -> None:
+        norm = torch.norm(
+            torch.stack(
+                [
+                    p.grad.detach().norm(2)
+                    for p in self.parameters()
+                    if p.grad is not None
+                ]
+            ),
+            2,
+        )
+        self.log("grad_norm", norm, on_step=True, on_epoch=False)
 
 
 DATASET_KWARGS = {
@@ -161,14 +188,13 @@ p = argparse.ArgumentParser()
 p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
 p.add_argument("--dataset", default="gsm8k")
 p.add_argument("--max_length", type=int, default=512)
-p.add_argument("--batch_size", type=int, default=4)
-p.add_argument("--lr", type=float, default=2e-5)
-p.add_argument("--warmup_steps", type=int, default=100)
+p.add_argument("--batch_size", type=int, default=8)
+p.add_argument("--lr", type=float, default=1e-7)
 p.add_argument("--max_epochs", type=int, default=1)
 p.add_argument("--max_steps", type=int, default=None)
-p.add_argument("--accumulate_grad_batches", type=int, default=2)
+p.add_argument("--accumulate_grad_batches", type=int, default=1)
 # eval
-p.add_argument("--eval_every", type=int, default=100)
+p.add_argument("--eval_every", type=int, default=50)
 p.add_argument("--eval_batch_size", type=int, default=8)
 p.add_argument("--eval_limit", type=int, default=50)
 p.add_argument("--eval_evals", type=str, default="gsm8k_cot")
@@ -243,6 +269,7 @@ callbacks: List[pl.Callback] = [
         limit=args.eval_limit,
         every_steps=args.eval_every,
     ),
+    LearningRateMonitor(logging_interval="step"),  # Built-in LR monitoring
 ]
 
 
@@ -265,10 +292,13 @@ trainer = pl.Trainer(
     accelerator="auto",
     logger=WandbLogger(
         project="mtl",
-        tags=["debug"],
+        tags=["tamia-debug"],
     ),
 )
-trainer.fit(LitLlama(model, max_steps), train_dataloaders=dl)
+trainer.fit(
+    LitLlama(model, max_steps, lr=args.lr),
+    train_dataloaders=dl,
+)
 
 # # Save merged adapter + base
 # final_path = os.path.join(OUTPUT_DIR, "merged")
