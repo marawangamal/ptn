@@ -29,13 +29,13 @@ class PeriodicSample(pl.Callback):
     def __init__(self, prompts, tokenizer, every_steps=200, max_new=128, **gen_kwargs):
         self.prompts = prompts
         self.tok = tokenizer
-        self.every = every_steps
+        self.every_steps = every_steps
         self.max_new = max_new
         self.gen_kwargs = dict(temperature=0.2, do_sample=True, **gen_kwargs)
 
     def on_train_batch_end(self, trainer, pl_module, *_):
         step = trainer.global_step
-        if step == 0 or step % self.every:
+        if step == 0 or step % self.every_steps:
             return
 
         pl_module.eval()
@@ -154,14 +154,14 @@ p.add_argument("--dataset", default="gsm8k")
 p.add_argument("--max_length", type=int, default=512)
 p.add_argument("--batch_size", type=int, default=4)
 p.add_argument("--lr", type=float, default=2e-5)
-p.add_argument("--warmup_steps", type=int, default=200)
+p.add_argument("--warmup_steps", type=int, default=100)
 p.add_argument("--max_epochs", type=int, default=1)
-p.add_argument("--max_steps", type=int, default=100)
+p.add_argument("--max_steps", type=int, default=None)
 p.add_argument("--accumulate_grad_batches", type=int, default=2)
 # eval
-p.add_argument("--eval_every", type=int, default=10)
+p.add_argument("--eval_every", type=int, default=100)
 p.add_argument("--eval_batch_size", type=int, default=8)
-p.add_argument("--eval_limit", type=int, default=10)
+p.add_argument("--eval_limit", type=int, default=16)
 p.add_argument("--eval_evals", type=str, default="gsm8k_cot")
 args = p.parse_args()
 
