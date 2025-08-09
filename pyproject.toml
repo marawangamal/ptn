@@ -15,5 +15,5 @@ dependencies = [
     "wandb",
 ]
 
-[tool.setuptools]
-packages = ["mtp", "dataloaders"] 
+[tool.setuptools.packages.find]
+# This will automatically find all packages with __init__.py files 
