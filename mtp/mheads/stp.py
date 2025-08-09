@@ -32,12 +32,13 @@ class STP(AbstractDisributionHead):
     ):
         assert x.ndim == 2, "x must be 2D (B, D)"
         assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
+        assert y.size(1) == 1 if y is not None else True, "y must have 1 dimension"
 
         logits = self.head(x)  # (B, V)
         loss = None
         if y is not None:
             loss = torch.nn.functional.cross_entropy(
-                logits, y, ignore_index=ignore_index
+                logits, y.reshape(-1), ignore_index=ignore_index
             )
             logits = logits.unsqueeze(1)  # (B, 1, V)
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
