@@ -14,8 +14,8 @@ class AbstractDisributionHeadConfig:
 
 @dataclass
 class AbstractDisributionHeadOutput:
-    logits: torch.Tensor
-    loss: Optional[torch.Tensor] = None
+    logits: torch.Tensor  # (B, H, V) or
+    loss: Optional[torch.Tensor] = None  # (1,)
 
 
 class AbstractDisributionHead(ABC, torch.nn.Module):
@@ -44,9 +44,9 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
 
         Args:
             x (torch.Tensor): Input features. Shape: (B, D)
-            y (Optional[torch.Tensor], optional): Target tensor. Shape: (B, V). Defaults to None.
+            y (Optional[torch.Tensor], optional): Target tensor. Shape: (B, H). Defaults to None.
 
         Returns:
-            torch.Tensor: _description_
+            AbstractDisributionHeadOutput: Output of the head.
         """
         pass

@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 # train_v2.py
 #
+# Example:
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --horizon 2
 # To evaluate a ckpt, run:
-# accelerate launch -m lm_eval --model hf --tasks lambada_openai,arc_easy  --batch_size 16
+# accelerate launch -m lm_eval --model hf --model_args pretrained=experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf --tasks gsm8k_cot  --batch_size 64
 
 import os
 import re
@@ -222,7 +224,12 @@ def lookup_wandb_run(args: argparse.Namespace):
 
 # ---------- CLI ----------
 p = argparse.ArgumentParser()
+# model
 p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
+p.add_argument("--model_head", type=str, default="multihead")
+p.add_argument("--horizon", type=int, default=1)
+p.add_argument("--lambda_mhead", type=float, default=0.0)
+# data
 p.add_argument("--dataset", default="omi:1m")
 p.add_argument("--max_length", type=int, default=512)
 p.add_argument("--batch_size", type=int, default=8)
@@ -245,22 +252,22 @@ os.makedirs(os.path.join(OUTPUT_DIR, get_econfig_name(args)), exist_ok=True)
 
 # ---------- Model & Tokenizer ----------
 tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
-model = AutoModelForCausalLM.from_pretrained(
-    args.model,
-    low_cpu_mem_usage=True,
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-)
-# model = MultiTokenHF(
-#     MultiTokenHFConfig(
-#         model_name=args.model,
-#         model_head="stp",
-#         horizon=1,
-#         loss_type="mhead",
-#         pretrained=True,
-#         lambda_mhead=0.0,
-#     )
+# model = AutoModelForCausalLM.from_pretrained(
+#     args.model,
+#     low_cpu_mem_usage=True,
+#     torch_dtype=torch.bfloat16,
+#     trust_remote_code=True,
 # )
+model = MultiTokenHF(
+    MultiTokenHFConfig(
+        model_name=args.model,
+        model_head=args.model_head,
+        horizon=args.horizon,
+        lambda_mhead=args.lambda_mhead,
+        loss_type="joint",
+        pretrained=True,
+    )
+)
 
 # make sure we have a pad token
 if tokenizer.pad_token is None:
