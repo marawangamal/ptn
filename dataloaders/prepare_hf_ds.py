@@ -8,19 +8,12 @@ Example:
     >>  HF_HOME=$SCRATCH/huggingface python dataloaders/prepare_hf_ds.py --dataset wikitext --subset wikitext-2-raw-v1 --split "train[:10000]"
 """
 
-# TODO:
-# - Is attn mask valid with the chunking?
-# [ ] Add option for non-chunking, use pad token instead and avoid loss computation on prefix tokens
-# [ ] MTP only on the answer tokens
-
-import multiprocessing
 import os
 import argparse
-from typing import List, Union, Dict
+from typing import Union
 import datasets
 from transformers import AutoTokenizer
 import hashlib, base64
-from transformers import default_data_collator
 
 # TODO: centralize for train script and ds preparation script
 DS_KWARGS = {  # presets for diff datasets
@@ -192,15 +185,32 @@ if __name__ == "__main__":
         max_len=args.max_len,
         **DS_KWARGS[args.dataset],
     )
+    print("Number of samples:", len(ds))
+    print("Features:", ds.column_names)
+    tok = AutoTokenizer.from_pretrained(args.tokenizer, use_fast=True)
+    print("Input ids:")
+    print(f"Raw: {ds[0]['input_ids']}")
+    print(f"Decoded: {tok.decode(ds[0]['input_ids'])}")
+    print("Labels:")
+    labels = ds[0]["labels"]
+    print(f"Raw: {labels}")
+    print(
+        f"Decoded: {tok.decode( [l  if l != -100 else tok.encode('~')[-1] for l in labels] )}"
+    )
 
-    # print("Number of samples:", len(ds))
-    # print("Features:", ds.column_names)
 
-    # test group_texts_with_boundaries
-    # examples = {
-    #     "input_ids": [[1, 2, 3], [4, 5, 6]],
-    #     "labels": [[1, 2, 3], [4, 5, 6]],
-    #     "attention_mask": [[1, 1, 1], [1, 1, 1]],
-    # }
-    # result = group_texts(examples)
-    # print(result)
+# Given the following problem, reason and give a final answer to the problem
+# messages = [
+#     {
+#         "role": "system",
+#         "content": "You are a math assistant. You are given a problem and you need to reason and give a final answer to the problem.",
+#     },
+#     {
+#         "role": "user",
+#         "content": "Solve for $y$: $$\frac{y^2 - 3y + 2}{y - 2} = y + 1$$",
+#     },
+#     {
+#         "role": "assistant",
+#         "content": r"Start by multiplying both sides by $y - 2$ to eliminate the denominator: \\[ (y^2 - 3y + 2) = (y + 1)(y - 2) \\] Expand both sides: \\[ y^2 - 3y + 2 = y^2 - y - 2 \\] Subtract $y^2$ from both sides to get: \\[ -3y + 2 = -y - 2 \\] Add $3y$ to both sides: \\[ 2 = 2y - 2 \\] Add $2$ to both sides: \\[ 4 = 2y \\] Divide by $2$ to solve for $y$: \\[ y = \frac{4}{2} \\] \\[ y = \boxed{2} \\]",
+#     },
+# ]

@@ -37,12 +37,17 @@ group:
               jobs:
                 - job:
                     # FT MHEAD(R=1 H=1)
-                    name: "finetune::llama::multihead(R=1 H=1)"
+                    name: "finetune::llama::multihead(R=1 H=1 lam=0)"
+                    preamble: glong
+                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags tamia --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --horizon 1 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start --lambda_mhead 0"
+                - job:
+                    # FT MHEAD(R=1 H=1)
+                    name: "finetune::llama::multihead(R=1 H=1 lam=0.1)"
                     preamble: glong
                     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags tamia --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --horizon 1 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
                 - job:
                     # FT MHEAD(R=1 H=2)
-                    name: "finetune::llama::multihead(R=1 H=2)"
+                    name: "finetune::llama::multihead(R=1 H=2 lam=0.1)"
                     preamble: glong
                     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags tamia --model meta-llama/Llama-3.2-3B-Instruct --dataset omi:1m --model_head multihead --horizon 2 --lr 5e-5 --scheduler cosine --loss_type joint --pretrained --max_len 512 --batch_size 8 --epochs 1 --evals gsm8k_cot --limit_train_batches 20000 --limit_val_batches 50 --val_check_interval 1000 --val_on_start"
 

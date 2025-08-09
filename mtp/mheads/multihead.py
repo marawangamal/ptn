@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 
@@ -32,7 +33,15 @@ class Multihead(AbstractDisributionHead):
         for param in self.decoder.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None, ignore_index=-100):
+    def forward(
+        self,
+        x: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+    ):
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
+
         # if y is none (eval), only compute logits for the first head
         H_ = 1 if y is None else self.config.horizon
         logits = torch.stack(
@@ -41,8 +50,8 @@ class Multihead(AbstractDisributionHead):
         loss = None
         if y is not None:
             loss = torch.nn.functional.cross_entropy(
-                logits.reshape(-1, self.config.d_output),
-                y.reshape(-1),
+                logits.reshape(-1, self.config.d_output),  # (BH, V)
+                y.reshape(-1),  # (BH,)
                 ignore_index=ignore_index,
             )
         return AbstractDisributionHeadOutput(logits=logits[:, 0], loss=loss)
