@@ -54,7 +54,9 @@ class Multihead(AbstractDisributionHead):
                 y.reshape(-1),  # (BH,)
                 ignore_index=ignore_index,
             )
-        return AbstractDisributionHeadOutput(logits=logits[:, 0], loss=loss)
+        else:
+            logits = logits[:, 0]  # (B, V)
+        return AbstractDisributionHeadOutput(logits=logits, loss=loss)
 
 
 if __name__ == "__main__":
@@ -63,5 +65,7 @@ if __name__ == "__main__":
     head = Multihead(config)
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    assert head(x, y).logits.shape == (B, V), "logits should be (B, V)"
+    assert head(x, y).logits.shape == (B, H, V), "logits should be (B, H, V)"
     assert head(x, y).loss is not None, "loss should be not None"
+    assert head(x).logits.shape == (B, V), "logits should be (B, V)"
+    print("✅ Test passed!")

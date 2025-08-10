@@ -1,7 +1,7 @@
 from typing import Optional
 import torch
 
-from ._abc import (
+from mtp.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
@@ -42,3 +42,15 @@ class STP(AbstractDisributionHead):
             )
             logits = logits.unsqueeze(1)  # (B, 1, V)
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
+
+
+if __name__ == "__main__":
+    B, H, D, V = 1, 1, 10, 32
+    config = AbstractDisributionHeadConfig(d_model=D, d_output=V, horizon=H, rank=1)
+    head = STP(config)
+    x = torch.randn(B, D)
+    y = torch.randint(0, V, (B, H))
+    assert head(x, y).logits.shape == (B, H, V), "logits should be (B, H, V)"
+    assert head(x, y).loss is not None, "loss should be not None"
+    assert head(x).logits.shape == (B, V), "logits should be (B, V)"
+    print("✅ Test passed!")
