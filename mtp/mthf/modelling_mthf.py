@@ -61,6 +61,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
 
         """
         super().__init__(config)
+        self._tp_plan = []  # added for compatibility with HF
 
         # Set dims
         self.vocab_size, self.embedding_dim = get_model_dims(config.model_name)
@@ -154,8 +155,9 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         Returns:
             tuple[torch.Tensor, torch.Tensor]:
                 - loss (torch.Tensor): Loss tensor of shape (1,).
-                - logits (torch.Tensor): Logits tensor of shape (B, T, H, V).
+                - logits (torch.Tensor): Logits tensor of shape (B, T, V). Note: this is the logits from the first head only, we discard the rest.
         """
+        B, T = y.shape
         H_, D = min(self.horizon, z.size(1)), z.size(-1)
 
         # Create targets
@@ -175,9 +177,11 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
 
         # Merge batch and sequence dims
         z = z.reshape(-1, D)  # (BT, D)
-        yw = yw.reshape(-1)  # (BT,)
+        yw = yw.reshape(-1, H_)  # (BT, H)
         output = self.mhead(z, yw, ignore_index=-100)
-        return output.loss.mean(), output.logits
+        loss = output.loss.mean()
+        logits = output.logits[:, 0].reshape(B, T, -1)  # (BT, H, V) -> (B, T, V)
+        return loss, logits
 
     # Combined loss lm_head + mhead
     def forward_joint(

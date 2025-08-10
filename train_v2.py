@@ -369,13 +369,36 @@ trainer.fit(
 if trainer.is_global_zero:
     final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
     os.makedirs(final_dir, exist_ok=True)
+
+    # Teach HF how to import your custom classes
+    model.config.model_type = "multi_token_hfmodel"
+    model.config.architectures = ["MultiTokenHF"]
+    model.config.auto_map = {
+        "AutoConfig": "configuration_multi_token_hfmodel.MultiTokenHFConfig",
+        "AutoModelForCausalLM": "modeling_multi_token_hfmodel.MultiTokenHF",
+    }
+
+    # Write the minimal loader stubs next to the weights
+    open(os.path.join(final_dir, "configuration_multi_token_hfmodel.py"), "w").write(
+        "from transformers.configuration_utils import PretrainedConfig\n\n"
+        "class MultiTokenHFConfig(PretrainedConfig):\n"
+        "    model_type = 'multi_token_hfmodel'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+    )
+
+    open(os.path.join(final_dir, "modeling_multi_token_hfmodel.py"), "w").write(
+        "from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
+    )
+
     # Save base model weights (already updated during training) + tokenizer
     model.save_pretrained(final_dir, safe_serialization=False)
     tokenizer.save_pretrained(final_dir, safe_serialization=True)
     print(f"[INFO] Saved HF checkpoint to {final_dir}")
     print(
-        "Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 16 --model_args pretrained="
+        "[INFO] Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 16 --model_args pretrained="
         + final_dir
+        + ",trust_remote_code=true"
     )
 
 # ---------- Post-train GSM8K eval ----------
