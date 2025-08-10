@@ -51,15 +51,9 @@ def window_input_ids(
     input_ids_windowed = torch.stack(
         [torch.roll(input_ids, -i - shift, dims=1) for i in range(H)], dim=-1
     )
-    # Replace rolled-beyond positions with ignore_index
-    # ...
-    # print(f"Input IDs: {input_ids}")
-    # print(f"Input IDs (windowed): {input_ids_windowed}")
-    # input_ids_windowed[
-    #     input_ids_windowed
-    #     < torch.arange(T, device=input_ids.device).reshape(1, T, -1).repeat(1, 1, H)
-    # ] = ignore_index
 
+    # NOTE: This next part was vibe-coded >>>
+    # Replace rolled-beyond positions with ignore_index
     # For each head i, mask out the last (shift + i) tokens that wrapped around
     for i in range(H):
         if shift + i > 0:
