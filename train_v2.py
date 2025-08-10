@@ -370,8 +370,8 @@ if trainer.is_global_zero:
     final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
     os.makedirs(final_dir, exist_ok=True)
     # Save base model weights (already updated during training) + tokenizer
-    model.save_pretrained(final_dir, safe_serialization=True)
-    tokenizer.save_pretrained(final_dir)
+    model.save_pretrained(final_dir, safe_serialization=False)
+    tokenizer.save_pretrained(final_dir, safe_serialization=True)
     print(f"[INFO] Saved HF checkpoint to {final_dir}")
     print(
         "Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 16 --model_args pretrained="

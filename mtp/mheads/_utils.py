@@ -51,12 +51,19 @@ def window_input_ids(
     input_ids_windowed = torch.stack(
         [torch.roll(input_ids, -i - shift, dims=1) for i in range(H)], dim=-1
     )
+    # Replace rolled-beyond positions with ignore_index
+    # ...
     # print(f"Input IDs: {input_ids}")
     # print(f"Input IDs (windowed): {input_ids_windowed}")
-    input_ids_windowed[
-        input_ids_windowed
-        < torch.arange(T, device=input_ids.device).reshape(1, T, -1).repeat(1, 1, H)
-    ] = ignore_index
+    # input_ids_windowed[
+    #     input_ids_windowed
+    #     < torch.arange(T, device=input_ids.device).reshape(1, T, -1).repeat(1, 1, H)
+    # ] = ignore_index
+
+    # For each head i, mask out the last (shift + i) tokens that wrapped around
+    for i in range(H):
+        if shift + i > 0:
+            input_ids_windowed[:, T - (shift + i) :, i] = ignore_index
     return input_ids_windowed
 
 
@@ -125,7 +132,52 @@ if __name__ == "__main__":
                 ]
             ),
         },
+        {
+            "kwargs": {
+                "input_ids": torch.tensor(
+                    [-1 for _ in range(5)] + [i for i in range(5)]
+                ).reshape(
+                    1, -1
+                ),  # (B, T)
+                "horizon": 1,
+                "shift": 0,
+                "ignore_index": -1,
+            },
+            "y_true": torch.tensor(
+                [-1 for _ in range(5)] + [i for i in range(5)]
+            ).reshape(
+                1, -1, 1
+            ),  # (B, T, H)
+        },
+        {
+            "kwargs": {
+                "input_ids": torch.tensor(
+                    [[0, 1, 2, 3], [10, 11, 12, 13]]
+                ),  # (B=2, T=4)
+                "horizon": 3,
+                "shift": 1,
+                "ignore_index": -100,
+            },
+            "y_true": torch.tensor(
+                [
+                    [
+                        [1, 2, 3],
+                        [2, 3, -100],
+                        [3, -100, -100],
+                        [-100, -100, -100],
+                    ],
+                    [
+                        [11, 12, 13],
+                        [12, 13, -100],
+                        [13, -100, -100],
+                        [-100, -100, -100],
+                    ],
+                ]
+            ),
+        },
     ]
+
+    # , device='cuda:0')
 
     for case in cases:
         y_pred = window_input_ids(**case["kwargs"])

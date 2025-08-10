@@ -14,7 +14,8 @@ class AbstractDisributionHeadConfig:
 
 @dataclass
 class AbstractDisributionHeadOutput:
-    logits: torch.Tensor  # (B, H, V) or
+    # TODO: logits output to always be (B, H*, V)
+    logits: torch.Tensor  # (B, H, V) or (B, V)
     loss: Optional[torch.Tensor] = None  # (1,)
 
 
