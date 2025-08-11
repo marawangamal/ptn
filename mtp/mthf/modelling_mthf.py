@@ -1,4 +1,5 @@
 import copy
+from dataclasses import dataclass
 from typing import Literal, Optional
 import torch
 import torch.nn as nn
@@ -20,6 +21,12 @@ from mtp.mheads._utils import window_input_ids
 # similar to our method. To ensure a fair comparison, for both Multi-Token and MuToR, we tune the
 # number of predicted future tokens, dmax, alongside the auxiliary loss coefficient. Implementation
 # details are provided in Appendix A.1.
+
+
+@dataclass
+class MultiTokenHFOutput(CausalLMOutput):
+    loss_main: Optional[torch.Tensor] = None
+    loss_aux: Optional[torch.Tensor] = None
 
 
 class MultiTokenHFConfig(PretrainedConfig):
@@ -214,11 +221,13 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
                 logits.view(-1, logits.size(-1)), labels.view(-1)
             )
             loss = self.lambda_mhead * mhead_loss + lm_head_loss
-            return CausalLMOutput(loss=loss, logits=logits)
+            return MultiTokenHFOutput(
+                loss=loss, logits=logits, loss_main=lm_head_loss, loss_aux=mhead_loss
+            )
 
         # For inference: return logits from last position
-        logits = self.lm_head(hidden_state)
-        return CausalLMOutput(logits=logits)
+        logits = self.lm_head(hidden_state[:, -1:])
+        return MultiTokenHFOutput(logits=logits)
 
     # Single mhead loss
     def forward_mhead(
@@ -244,11 +253,11 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
                 use_memory_efficient_loss,
                 window_shift=1,  # mhead predicts next H tokens
             )
-            return CausalLMOutput(loss=loss, logits=logits.reshape(B, T, -1))
+            return MultiTokenHFOutput(loss=loss, logits=logits.reshape(B, T, -1))
 
         # For inference: return logits from last position
         output = self.mhead(hidden_state)
-        return CausalLMOutput(logits=output.logits.reshape(B, T, -1))
+        return MultiTokenHFOutput(logits=output.logits.reshape(B, T, -1))
 
     def forward(
         self,
@@ -257,7 +266,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         use_memory_efficient_loss=False,
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
-    ):
+    ) -> MultiTokenHFOutput:
         if self.loss_type == "joint":
             return self.forward_joint(
                 input_ids, labels, use_memory_efficient_loss, attention_mask, **kwargs
