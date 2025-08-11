@@ -5,6 +5,9 @@ from torch.utils.data import Dataset
 import numpy as np
 import random
 
+from transformers import AutoTokenizer
+from transformers.tokenization_utils import PreTrainedTokenizer
+
 
 def star_graph(degSource, pathLen, numNodes, reverse=False):
     source = np.random.randint(0, numNodes, 1)[0]
@@ -264,6 +267,8 @@ def prepare_path_star(
     path_len: int,
     num_nodes: int,
     root_dir: str,
+    tokenizer_name: PreTrainedTokenizer,
+    device: Optional[str] = None,
     reverse: bool = False,
     teacherless_token: Optional[int] = None,
 ):
@@ -280,6 +285,17 @@ def prepare_path_star(
         teacherless_token (int, optional): Token to use for teacherless training. Defaults to None (i.e. teacher-forcing).
     """
 
+    # t = AutoTokenizer.from_pretrained("gpt2")
+    # tokenizer = Tokenizer(
+    #     encoder=t.encode, decoder=t.decode, vocab_size=50257, name="gpt2"
+    # )
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
+    # Create root dir if it doesn't exist
+    if not os.path.exists(root_dir):
+        os.makedirs(root_dir)
+        print(f"Created root directory: {os.path.abspath(root_dir)}")
+
     # Create ds and save to file
     generate_and_save(
         n_train=n_train,
@@ -295,7 +311,7 @@ def prepare_path_star(
     test_path = get_test_path(root_dir, deg, path_len, num_nodes, n_test)
 
     train_data = Graphs(
-        tokenizer=tokenizer,
+        tokenizer=tokenizer_name,
         n_samples=n_train,
         data_path=train_path,
         device=device,
@@ -303,7 +319,7 @@ def prepare_path_star(
         reverse=reverse,
     )
     test_data = Graphs(
-        tokenizer=tokenizer,
+        tokenizer=tokenizer_name,
         n_samples=n_test,
         data_path=test_path,
         device=device,
@@ -312,58 +328,70 @@ def prepare_path_star(
     )
 
     # Make into huggingface dataset
-    return train_data, test_data
+    return {
+        "train": train_data,
+        "test": test_data,
+    }
 
 
 if __name__ == "__main__":
-    import types
-    from data import get_dataset
-    from tokenizing import get_tokenizer
-
-    # Create graphs and save
-    n_train = 200000
-    n_test = 20000
-    deg = 5
-    path_len = 5
-    num_nodes = 50
-    reverse = False
-    generate_and_save(
-        n_train=n_train,
-        n_test=n_test,
-        degSource=deg,
-        pathLen=path_len,
-        numNodes=num_nodes,
-        reverse=reverse,
+    prepare_path_star(
+        n_train=100,
+        n_test=10,
+        deg=5,
+        path_len=5,
+        num_nodes=50,
+        root_dir="data",
+        tokenizer_name="gpt2",
     )
+    # import types
+    # from data import get_dataset
+    # from tokenizing import get_tokenizer
 
-    # Load data
-    device = "cpu"
-    args = types.SimpleNamespace(model="gpt", num_nodes=num_nodes)
-    args.dataset = "graph"
-    args.deg = deg
-    args.path_len = path_len
-    args.n_train = n_train
-    args.n_test = n_test
-    args.reverse = False
-    args.teacherless = False
+    # # Create graphs and save
+    # n_train = 200000
+    # n_test = 20000
+    # deg = 5
+    # path_len = 5
+    # num_nodes = 50
+    # reverse = False
+    # generate_and_save(
+    #     n_train=n_train,
+    #     n_test=n_test,
+    #     degSource=deg,
+    #     pathLen=path_len,
+    #     numNodes=num_nodes,
+    #     reverse=reverse,
+    # )
 
-    args.dollar = 11
-    tokenizer = get_tokenizer(args)
-    trainset, testset = get_dataset(args, tokenizer, device)
-    print(trainset.num_tokens)
-    trainset.__getitem__(10)
-    trainset.eval()
-    trainset.__getitem__(10)
+    # # Load data
+    # device = "cpu"
+    # args = types.SimpleNamespace(model="gpt", num_nodes=num_nodes)
+    # args.dataset = "graph"
+    # args.deg = deg
+    # args.path_len = path_len
+    # args.n_train = n_train
+    # args.n_test = n_test
+    # args.reverse = False
+    # args.teacherless = False
 
-    import matplotlib.pyplot as plt
-    import networkx as nx
+    # args.dollar = 11
+    # tokenizer = get_tokenizer(args)
+    # trainset, testset = get_dataset(args, tokenizer, device)
+    # print(trainset.num_tokens)
+    # trainset.__getitem__(10)
+    # trainset.eval()
+    # trainset.__getitem__(10)
 
-    path, edge_list, start, goal = star_graph(deg, path_len, num_nodes, reverse=reverse)
-    print(len(edge_list))
-    print(path)
-    print(edge_list)
-    print("Start:", start, "Goal:", goal)
-    G = nx.Graph()
-    G.add_edges_from(edge_list)
-    nx.draw(G, with_labels=True)
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # import networkx as nx
+
+    # path, edge_list, start, goal = star_graph(deg, path_len, num_nodes, reverse=reverse)
+    # print(len(edge_list))
+    # print(path)
+    # print(edge_list)
+    # print("Start:", start, "Goal:", goal)
+    # G = nx.Graph()
+    # G.add_edges_from(edge_list)
+    # nx.draw(G, with_labels=True)
+    # plt.show()

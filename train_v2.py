@@ -2,7 +2,7 @@
 # train_v2.py
 #
 # Example:
-# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --horizon 2
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --horizon 2
 # To evaluate a ckpt, run:
 # accelerate launch -m lm_eval --model hf --model_args pretrained=experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf --tasks gsm8k_cot  --batch_size 64
 
@@ -226,7 +226,7 @@ def lookup_wandb_run(args: argparse.Namespace):
 p = argparse.ArgumentParser()
 # model
 p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
-p.add_argument("--model_head", type=str, default="multihead")
+p.add_argument("--model_head", type=str, default="stp")
 p.add_argument("--horizon", type=int, default=1)
 p.add_argument("--lambda_mhead", type=float, default=0.0)
 # data
