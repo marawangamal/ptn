@@ -32,8 +32,26 @@ group:
               jobs:
                 - job:
                     # FT STP (NOTE: add --max_steps 5 for fast debugging)
-                    name: "ft::llama::omi1m::stp(lam=0.1)"
+                    name: "ft::llama::omi1m::mtp(h=2,lam=0.1)"
                     preamble: glong
-                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py  --lr 1e-7 --lambda_mhead 0.1 --horizon 2 --eval_limit 50"
+                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2"
+ 
+                - job:
+                    # FT STP (NOTE: add --max_steps 5 for fast debugging)
+                    name: "ft::llama::omi1m::mtp(h=3,lam=0.1)"
+                    preamble: glong
+                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 3"
+
+                - job:
+                    # FT STP (NOTE: add --max_steps 5 for fast debugging)
+                    name: "ft::llama::omi1m::mtp(h=2,lam=1.0)"
+                    preamble: glong
+                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 1.0 --model_head multihead --horizon 2"
+
+                - job:
+                    # FT STP (NOTE: add --max_steps 5 for fast debugging)
+                    name: "ft::llama::omi1m::mtp(h=3,lam=1.0)"
+                    preamble: glong
+                    command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 1.0 --model_head multihead --horizon 3"
 
  
