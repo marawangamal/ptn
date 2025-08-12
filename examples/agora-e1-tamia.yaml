@@ -8,6 +8,7 @@ preambles:
     - "#SBATCH --gres=gpu:4"
     - "#SBATCH --mem=128G"
     - "#SBATCH --cpus-per-task=16"
+    - "#SBATCH --time=6:00:00"
     - "module load cuda/12.6 arrow python/3.12 httpproxy"
     - "source /scratch/m/mgamal/mtl/.venv/bin/activate"
 
