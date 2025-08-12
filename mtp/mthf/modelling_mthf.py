@@ -217,12 +217,16 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
                 window_shift=2,  # lm_head predicts first tok, mhead predicts next H tokens
             )
             logits = self.lm_head(hidden_state)  # (B, T, V)
-            lm_head_loss = torch.nn.functional.cross_entropy(
+            loss_main = torch.nn.functional.cross_entropy(
                 logits.view(-1, logits.size(-1)), labels.view(-1)
             )
-            loss = self.lambda_mhead * mhead_loss + lm_head_loss
+            loss_aux = self.lambda_mhead * mhead_loss
+            loss = loss_main + loss_aux
             return MultiTokenHFOutput(
-                loss=loss, logits=logits, loss_main=lm_head_loss, loss_aux=mhead_loss
+                loss=loss,
+                logits=logits,
+                loss_main=loss_main,
+                loss_aux=loss_aux,
             )
 
         # For inference: return logits from last position

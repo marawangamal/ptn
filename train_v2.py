@@ -2,7 +2,7 @@
 # train_v2.py
 #
 # Example:
-# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --horizon 2
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --max_steps 1000
 # To evaluate a ckpt, run:
 # accelerate launch -m lm_eval --model hf --model_args pretrained=experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf --tasks gsm8k_cot  --batch_size 64
 
@@ -144,12 +144,63 @@ class LitLlama(pl.LightningModule):
         self.max_steps = max_steps
 
     def forward(self, **x):
-        return self.model(**x).loss
+        return self.model(**x)
 
-    def training_step(self, batch, _):
-        loss = self(**batch)
-        self.log("loss", loss)
-        return loss
+    def _grad_vector(self, module, max_params=1000000):
+        """Get gradient vector for a module, sampling parameters if needed to avoid OOM."""
+        all_grads = []
+
+        for p in module.parameters():
+            if p.grad is not None:
+                grad_flat = p.grad.detach().flatten()
+                all_grads.append(grad_flat)
+
+        # Concatenate all gradients
+        full_grad = torch.cat(all_grads)
+
+        # If too large, sample a subset deterministically
+        if full_grad.numel() > max_params:
+            # Use evenly spaced indices for deterministic sampling
+            step = full_grad.numel() // max_params
+            indices = torch.arange(0, full_grad.numel(), step)[:max_params]
+            return full_grad[indices]
+
+        return full_grad
+
+    def training_step(self, batch, batch_idx):
+        outputs = self(**batch)
+
+        # Only compute gradient analysis if enabled and conditions are met
+        if (
+            self.model is not None
+            and hasattr(self.model, "backbone")
+            and outputs.loss_main is not None
+            and outputs.loss_aux is not None
+        ):
+            # Only log every 50 steps to save time and memory
+            if batch_idx % 50 == 0:
+                # Get grads for main loss
+                self.zero_grad()
+                outputs.loss_main.backward(retain_graph=True)
+                g_main = self._grad_vector(self.model.backbone, 10_000)
+
+                # Get grads for aux loss
+                self.zero_grad()
+                outputs.loss_aux.backward(retain_graph=True)
+                g_aux = self._grad_vector(self.model.backbone, 10_000)
+
+                # Cosine similarity & ratio
+                cos = torch.cosine_similarity(g_main, g_aux, dim=0).item()
+                ratio = (g_aux.norm() / (g_main.norm() + 1e-12)).item()
+
+                self.log("grad_cosine_main_aux", cos, prog_bar=True)
+                self.log("grad_ratio_main_aux", ratio, prog_bar=False)
+
+                # Clean up
+                self.zero_grad()
+
+        self.log("loss", outputs.loss)
+        return outputs.loss
 
     def configure_optimizers(self):
         wr = self.hparams["warmup_ratio"]
@@ -362,7 +413,9 @@ trainer = pl.Trainer(
     ),
 )
 trainer.fit(
-    LitLlama(model, max_steps, lr=args.lr), train_dataloaders=dl, ckpt_path=resume_ckpt
+    LitLlama(model, max_steps, lr=args.lr),
+    train_dataloaders=dl,
+    ckpt_path=resume_ckpt,
 )
 
 # ---------- Save HF-compatible checkpoint ----------
