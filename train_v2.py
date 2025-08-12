@@ -195,9 +195,13 @@ class LitLlama(pl.LightningModule):
 
                 self.log("grad_cosine_main_aux", cos, prog_bar=True)
                 self.log("grad_ratio_main_aux", ratio, prog_bar=False)
-
                 # Clean up
                 self.zero_grad()
+
+        if outputs.loss_main is not None and outputs.loss_aux is not None:
+            # Log loss_main and loss_aux
+            self.log("loss_main", outputs.loss_main)
+            self.log("loss_aux", outputs.loss_aux)
 
         self.log("loss", outputs.loss)
         return outputs.loss

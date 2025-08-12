@@ -149,7 +149,7 @@ def find_best_lr(
     batch_size: int = 32,
     n_train: int = 1000,
     n_eval: int = 128,
-    lrs: list[float] = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7],
+    lrs: list[float] = [1e-2, 1e-3, 1e-4, 5e-5],
 ) -> float:
 
     accs = []
@@ -163,7 +163,7 @@ def find_best_lr(
 
 def main():
     # ---- Parameters ----
-    N_models = 10
+    N_models = 5
     N_vocab = 100
     N_train = 20000  # Number of training samples
     N_test = 50  # Number of test samples
@@ -172,16 +172,16 @@ def main():
     model_kwargs = [
         # {"d_model": 2**i}
         # for i in [1, 2, 3, 4, 5, 6, 7, 8]
-        # {"d_model": 4},
-        # {"d_model": 8},
-        # {"d_model": 16},
-        # {"d_model": 32},
-        # {"d_model": 64},
-        # {"d_model": 128},
-        # {"d_model": 256},
-        # {"d_model": 512},
-        # {"d_model": 1024},
-        # {"d_model": 2048},
+        {"d_model": 4},
+        {"d_model": 8},
+        {"d_model": 16},
+        {"d_model": 32},
+        {"d_model": 64},
+        {"d_model": 128},
+        {"d_model": 256},
+        {"d_model": 512},
+        {"d_model": 1024},
+        {"d_model": 2048},
         {"d_model": 4096},
         {"d_model": 8192},
         # i.e. 2-256
@@ -223,7 +223,7 @@ def main():
                 T_prefix=T_prefix,
                 T_suffix=T_suffix,
             )
-            lr = find_best_lr(model, X_train, Y_train)
+            lr = find_best_lr(model, X_train, Y_train, n_train=N_train, n_eval=1000)
             model = train_model(model, X_train, Y_train, lr=lr)
 
             # Get predictions on test set
@@ -248,7 +248,7 @@ def main():
         total_error_values.append(total_error)
 
         print(
-            f"  Bias: {bias:.4f}, Variance: {variance:.4f}, Total Error: {total_error:.4f} | Train Acc (subset): {train_acc:.4f}, Test Acc (subset): {test_acc:.4f}"
+            f"  Bias: {bias:.4f}, Variance: {variance:.4f}, Total Error: {total_error:.4f} | Train Acc (subset): {train_acc:.4f}, Test Acc (subset): {test_acc:.4f} | LR: {lr:.4f}"
         )
 
     # ---- Plotting ----
