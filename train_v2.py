@@ -281,6 +281,7 @@ def lookup_wandb_run(args: argparse.Namespace):
 p = argparse.ArgumentParser()
 # model
 p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
+p.add_argument("--tokenizer", default=None)
 p.add_argument("--model_head", type=str, default="stp")
 p.add_argument("--horizon", type=int, default=1)
 p.add_argument("--lambda_mhead", type=float, default=0.0)
@@ -306,13 +307,9 @@ args = p.parse_args()
 os.makedirs(os.path.join(OUTPUT_DIR, get_econfig_name(args)), exist_ok=True)
 
 # ---------- Model & Tokenizer ----------
-tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
-# model = AutoModelForCausalLM.from_pretrained(
-#     args.model,
-#     low_cpu_mem_usage=True,
-#     torch_dtype=torch.bfloat16,
-#     trust_remote_code=True,
-# )
+tokenizer = AutoTokenizer.from_pretrained(
+    args.model if args.tokenizer is None else args.tokenizer, use_fast=True
+)
 model = MultiTokenHF(
     MultiTokenHFConfig(
         model_name=args.model,

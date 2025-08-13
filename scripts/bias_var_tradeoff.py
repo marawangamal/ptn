@@ -1,3 +1,5 @@
+import copy
+import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,34 +43,34 @@ def get_dataset(
 
 
 def compute_bias_variance(P: torch.Tensor, Y: torch.Tensor) -> Tuple[float, float]:
-    """Compute bias and variance from predictions P and targets Y."""
-    # P: (N_models, N_samples, N_vocab)
-    # Y: (N_samples, T_suffix)
+    """Compute bias and variance from predictions P and targets Y.
 
-    # # ---- Compute bias ------
-    # p_bar = P.log().mean(dim=0).softmax(dim=-1)  # (N_samples, N_vocab)
-    # bias = -(P.log().gather(dim=-1, index=Y).mean())  # (1,)
+    Bias variance decomposition computed from NLL loss (https://pubmed.ncbi.nlm.nih.gov/9698350)
+
+    Args:
+        P (torch.Tensor): Probability tensor. Shape: (N_models, N_samples, N_vocab)
+        Y (torch.Tensor): Target tensor. Shape: (N_samples, T_suffix)
+
+    Returns:
+        bias (float): Bias
+        var (float): Variance
+    """
+    N_models, N_samples, _ = P.shape
+
+    # ---- Compute bias ------
+    p_bar = P.log().mean(dim=0).softmax(dim=-1)  # (N_samples, N_vocab)
+    bias = -(
+        P.log()
+        .gather(dim=-1, index=Y.reshape(1, N_samples, -1).repeat(N_models, 1, 1))
+        .mean()
+    ).item()  # (1,)
 
     # ---- Compute variance ----
-    # var = 0
-    # for i, j in itertools.product(range(N_models), range(N_samples)):
-    #     var += torch.nn.functional.kl_div(p_bar[j], P[i, j])
-    # var = var / (N_models * N_samples)
-
-    # Average prediction across models
-    p_bar = P.mean(dim=0)  # (N_samples, N_vocab)
-
-    # Bias: difference between average prediction and true target
-    # Convert Y to one-hot for comparison
-    Y_onehot = F.one_hot(
-        Y.squeeze(), num_classes=P.shape[-1]
-    ).float()  # (N_samples, N_vocab)
-    bias = F.mse_loss(p_bar, Y_onehot)
-
-    # Variance: average squared difference between individual predictions and average prediction
-    variance = torch.mean((P - p_bar.unsqueeze(0)) ** 2)
-
-    return bias.item(), variance.item()
+    var = 0.0
+    for i, j in itertools.product(range(N_models), range(N_samples)):
+        var += torch.nn.functional.kl_div(p_bar[j].log(), P[i, j]).item()
+    var = var / (N_models * N_samples)
+    return bias, var
 
 
 def evaluate(model, X: torch.Tensor, Y: torch.Tensor, max_samples=None) -> float:
@@ -152,18 +154,21 @@ def find_best_lr(
     lrs: list[float] = [1e-2, 1e-3, 1e-4, 5e-5],
 ) -> float:
 
-    accs = []
+    accs: list[float] = []
     for lr in lrs:
-        model = train_model(
-            model, X[:n_train], Y[:n_train], batch_size=batch_size, lr=lr
-        )
-        accs.append(evaluate(model, X[:n_eval], Y[:n_eval], max_samples=n_eval))
-    return lrs[torch.argmax(torch.tensor(accs))]
+        # Train a fresh copy for each LR so we don't mutate the original or
+        # carry training across different learning rates.
+        m = copy.deepcopy(model)
+        m = train_model(m, X[:n_train], Y[:n_train], batch_size=batch_size, lr=lr)
+        accs.append(evaluate(m, X[:n_eval], Y[:n_eval], max_samples=n_eval))
+
+    best_idx = int(torch.argmax(torch.tensor(accs)).item())
+    return lrs[best_idx]
 
 
 def main():
     # ---- Parameters ----
-    N_models = 5
+    N_models = 2
     N_vocab = 100
     N_train = 20000  # Number of training samples
     N_test = 50  # Number of test samples
@@ -245,7 +250,6 @@ def main():
 
         bias_values.append(bias)
         variance_values.append(variance)
-        total_error_values.append(total_error)
 
         print(
             f"  Bias: {bias:.4f}, Variance: {variance:.4f}, Total Error: {total_error:.4f} | Train Acc (subset): {train_acc:.4f}, Test Acc (subset): {test_acc:.4f} | LR: {lr:.4f}"
