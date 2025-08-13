@@ -250,6 +250,7 @@ def main():
 
         bias_values.append(bias)
         variance_values.append(variance)
+        total_error_values.append(total_error)
 
         print(
             f"  Bias: {bias:.4f}, Variance: {variance:.4f}, Total Error: {total_error:.4f} | Train Acc (subset): {train_acc:.4f}, Test Acc (subset): {test_acc:.4f} | LR: {lr:.4f}"

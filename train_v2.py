@@ -6,10 +6,16 @@
 # To evaluate a ckpt, run:
 # accelerate launch -m lm_eval --model hf --model_args pretrained=experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf --tasks gsm8k_cot  --batch_size 64
 
+# TODO:
+# [ ] Change to loss_dict
+# [ ] Ignore prefix targets (set to -100)
+
+
 import os
 import re
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
+from pytorch_lightning.utilities import rank_zero_only
 import argparse, torch
 from typing import List
 import pytorch_lightning as pl
@@ -56,16 +62,26 @@ OUTPUT_DIR = "./experiments"
 
 
 class PeriodicSample(pl.Callback):
-    def __init__(self, prompts, tokenizer, every_steps=200, max_new=128, **gen_kwargs):
+    def __init__(
+        self,
+        prompts,
+        tokenizer,
+        every_steps=200,
+        max_new=128,
+        val_on_start=True,
+        **gen_kwargs,
+    ):
         self.prompts = prompts
         self.tok = tokenizer
         self.every_steps = every_steps
         self.max_new = max_new
-        self.gen_kwargs = dict(temperature=0.2, do_sample=True, **gen_kwargs)
+        self.gen_kwargs = dict(**gen_kwargs)
+        self.val_on_start = val_on_start
 
+    @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, *_):
         step = trainer.global_step
-        if step == 0 or step % self.every_steps:
+        if (step == 0 and not self.val_on_start) or (step % self.every_steps):
             return
 
         pl_module.eval()
@@ -78,7 +94,7 @@ class PeriodicSample(pl.Callback):
             completion = self.tok.decode(
                 out_ids[0][inputs.input_ids.shape[-1] :], skip_special_tokens=True
             )
-            print(f"[{step}] {prompt} -> {completion}")
+            print(f"[{step}] (PeriodicSample) {prompt} -> {completion}")
             columns = ["text"]
             data = [[completion]]
             trainer.logger.log_text(key="samples", columns=columns, data=data)
@@ -124,6 +140,7 @@ class PeriodicEvaluate(pl.Callback):
                         f"[{logger_prefix}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
                     )
 
+    @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, *_):
         step = trainer.global_step
         if (step == 0 and not self.val_on_start) or (step % self.every_steps):
@@ -135,13 +152,38 @@ class PeriodicEvaluate(pl.Callback):
         pl_module.train()
 
 
+class BestHFCheckpoint(pl.Callback):
+    def __init__(self, output_dir, eval_metric, tokenizer):
+        self.output_dir = output_dir
+        self.eval_metric = eval_metric
+        self.tokenizer = tokenizer
+        self.best_metric = 0.0
+
+    def on_train_batch_end(self, trainer, pl_module, *_):
+        # Check if we have the metric we're monitoring
+        if self.eval_metric in trainer.logged_metrics:
+            current_value = trainer.logged_metrics[self.eval_metric]
+
+            # Save if this is the best value so far
+            if current_value > self.best_metric:
+                self.best_metric = current_value
+                final_dir = os.path.join(self.output_dir, "hf_best")
+
+                # Save HF checkpoint using shared function
+                save_hf_checkpoint(pl_module.model, self.tokenizer, final_dir)
+                print(
+                    f"[INFO] Saved best HF checkpoint to {final_dir} (metric: {self.best_metric:.4f})"
+                )
+
+
 # ---------- Lightning Module ----------
 class LitLlama(pl.LightningModule):
-    def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.05):
+    def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.1):
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
         self.model = model
         self.max_steps = max_steps
+        print(f"[INFO] Warmup ratio: {warmup_ratio} | Max steps: {max_steps}")
 
     def forward(self, **x):
         return self.model(**x)
@@ -198,8 +240,12 @@ class LitLlama(pl.LightningModule):
                 # Clean up
                 self.zero_grad()
 
-        if outputs.loss_main is not None and outputs.loss_aux is not None:
-            # Log loss_main and loss_aux
+        if (
+            hasattr(outputs, "loss_main")
+            and hasattr(outputs, "loss_aux")
+            and outputs.loss_main is not None
+            and outputs.loss_aux is not None
+        ):
             self.log("loss_main", outputs.loss_main)
             self.log("loss_aux", outputs.loss_aux)
 
@@ -219,6 +265,20 @@ class LitLlama(pl.LightningModule):
             T_max=self.hparams["max_steps"] - warmup_steps,
             eta_min=0.1 * self.hparams["lr"],  # end at 10% of lr
         )
+
+        # # Linear decay scheduler
+        # def linear_decay_factor(step):
+        #     if step < warmup_steps:
+        #         return 1.0  # During warmup, keep full LR
+        #     else:
+        #         # Linear decay from 1.0 to 0.1 over the remaining steps
+        #         decay_steps = self.hparams["max_steps"] - warmup_steps
+        #         decay_progress = (step - warmup_steps) / max(decay_steps, 1)
+        #         return max(
+        #             0.1, 1.0 - 0.9 * decay_progress
+        #         )  # Decay to 10% of original LR
+        # linear_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, linear_decay_factor)
+
         sched = torch.optim.lr_scheduler.SequentialLR(
             opt,
             schedulers=[warmup_scheduler, cos_scheduler],
@@ -242,6 +302,38 @@ class LitLlama(pl.LightningModule):
             2,
         )
         self.log("grad_norm", norm, on_step=True, on_epoch=False)
+
+
+def save_hf_checkpoint(model, tokenizer, output_dir):
+    """Save a HuggingFace-compatible checkpoint with all necessary configuration files."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Teach HF how to import your custom classes
+    model.config.model_type = "multi_token_hfmodel"
+    model.config.architectures = ["MultiTokenHF"]
+    model.config.auto_map = {
+        "AutoConfig": "configuration_multi_token_hfmodel.MultiTokenHFConfig",
+        "AutoModelForCausalLM": "modeling_multi_token_hfmodel.MultiTokenHF",
+    }
+    # IMPORTANT: prevent __init__ from re-downloading the base on load
+    model.config.pretrained = False  # ← add this line
+
+    # Write the minimal loader stubs next to the weights
+    open(os.path.join(output_dir, "configuration_multi_token_hfmodel.py"), "w").write(
+        "from transformers.configuration_utils import PretrainedConfig\n\n"
+        "class MultiTokenHFConfig(PretrainedConfig):\n"
+        "    model_type = 'multi_token_hfmodel'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+    )
+
+    open(os.path.join(output_dir, "modeling_multi_token_hfmodel.py"), "w").write(
+        "from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
+    )
+
+    # Save base model weights + tokenizer
+    model.save_pretrained(output_dir, safe_serialization=False)
+    tokenizer.save_pretrained(output_dir, safe_serialization=True)
 
 
 # ------------- Utils -------------------
@@ -321,6 +413,12 @@ model = MultiTokenHF(
     )
 )
 
+# NOTE: Would be a better api experience to load like this:
+# model = MultiTokenHF.from_pretrained(
+#     "experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf"
+# )
+# model = AutoModelForCausalLM.from_pretrained(args.model)
+
 # make sure we have a pad token
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
@@ -370,6 +468,11 @@ callbacks: List[pl.Callback] = [
         args.eval_batch_size,
         limit=args.eval_limit,
         every_steps=args.eval_every,
+    ),
+    BestHFCheckpoint(
+        output_dir=f"{OUTPUT_DIR}/{get_econfig_name(args)}",
+        eval_metric=f"eval/{args.eval_evals}/exact_match,strict-match",
+        tokenizer=tokenizer,
     ),
     LearningRateMonitor(logging_interval="step"),  # Built-in LR monitoring
     ModelCheckpoint(  # save last
@@ -422,35 +525,12 @@ trainer.fit(
 # ---------- Save HF-compatible checkpoint ----------
 if trainer.is_global_zero:
     final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
-    os.makedirs(final_dir, exist_ok=True)
 
-    # Teach HF how to import your custom classes
-    model.config.model_type = "multi_token_hfmodel"
-    model.config.architectures = ["MultiTokenHF"]
-    model.config.auto_map = {
-        "AutoConfig": "configuration_multi_token_hfmodel.MultiTokenHFConfig",
-        "AutoModelForCausalLM": "modeling_multi_token_hfmodel.MultiTokenHF",
-    }
-
-    # Write the minimal loader stubs next to the weights
-    open(os.path.join(final_dir, "configuration_multi_token_hfmodel.py"), "w").write(
-        "from transformers.configuration_utils import PretrainedConfig\n\n"
-        "class MultiTokenHFConfig(PretrainedConfig):\n"
-        "    model_type = 'multi_token_hfmodel'\n"
-        "    def __init__(self, **kwargs):\n"
-        "        super().__init__(**kwargs)\n"
-    )
-
-    open(os.path.join(final_dir, "modeling_multi_token_hfmodel.py"), "w").write(
-        "from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
-    )
-
-    # Save base model weights (already updated during training) + tokenizer
-    model.save_pretrained(final_dir, safe_serialization=False)
-    tokenizer.save_pretrained(final_dir, safe_serialization=True)
+    # Save HF checkpoint using shared function
+    save_hf_checkpoint(model, tokenizer, final_dir)
     print(f"[INFO] Saved HF checkpoint to {final_dir}")
     print(
-        "[INFO] Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 16 --model_args pretrained="
+        "[INFO] Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 64 --model_args pretrained="
         + final_dir
         + ",trust_remote_code=true"
     )
