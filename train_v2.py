@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
 import argparse, torch
-from typing import List
+from typing import Callable, List, Optional
 import pytorch_lightning as pl
 import lm_eval
 from lm_eval import simple_evaluate
@@ -103,7 +103,12 @@ class PeriodicSample(pl.Callback):
 
 class PeriodicEvaluate(pl.Callback):
     def __init__(
-        self, evals, batch_size, limit=None, every_steps=100, val_on_start=True
+        self,
+        evals,
+        batch_size,
+        limit=None,
+        every_steps=100,
+        val_on_start=True,
     ):
         self.evals = evals
         self.batch_size = batch_size
@@ -111,7 +116,7 @@ class PeriodicEvaluate(pl.Callback):
         self.every_steps = every_steps
         self.val_on_start = val_on_start
 
-    def _run_eval(self, pl_module, logger_prefix=None):
+    def _run_eval(self, pl_module, logger_prefix=None, **kwargs):
         print(
             f"Running eval on {self.evals} with batch size {self.batch_size} and limit {self.limit}"
         )
@@ -119,7 +124,7 @@ class PeriodicEvaluate(pl.Callback):
             model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
             tasks=self.evals,
             batch_size=self.batch_size,
-            limit=self.limit,
+            **kwargs,
         )
         for task_name in output["results"].keys():
             # Example output:
@@ -145,10 +150,9 @@ class PeriodicEvaluate(pl.Callback):
         step = trainer.global_step
         if (step == 0 and not self.val_on_start) or (step % self.every_steps):
             return
-
         pl_module.eval()
         with torch.no_grad():
-            self._run_eval(pl_module, logger_prefix=f"{step}")
+            self._run_eval(pl_module, logger_prefix=f"{step}", limit=self.limit)
         pl_module.train()
 
 
@@ -469,11 +473,6 @@ callbacks: List[pl.Callback] = [
         limit=args.eval_limit,
         every_steps=args.eval_every,
     ),
-    BestHFCheckpoint(
-        output_dir=f"{OUTPUT_DIR}/{get_econfig_name(args)}",
-        eval_metric=f"eval/{args.eval_evals}/exact_match,strict-match",
-        tokenizer=tokenizer,
-    ),
     LearningRateMonitor(logging_interval="step"),  # Built-in LR monitoring
     ModelCheckpoint(  # save last
         dirpath=f"{OUTPUT_DIR}/{get_econfig_name(args)}",
@@ -515,18 +514,17 @@ trainer = pl.Trainer(
         id=wandb_id,
         resume="allow",
     ),
+    log_every_n_steps=10,
 )
 trainer.fit(
     LitLlama(model, max_steps, lr=args.lr),
     train_dataloaders=dl,
     ckpt_path=resume_ckpt,
 )
+print("Done training.")
 
-# ---------- Save HF-compatible checkpoint ----------
 if trainer.is_global_zero:
     final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
-
-    # Save HF checkpoint using shared function
     save_hf_checkpoint(model, tokenizer, final_dir)
     print(f"[INFO] Saved HF checkpoint to {final_dir}")
     print(
@@ -534,21 +532,3 @@ if trainer.is_global_zero:
         + final_dir
         + ",trust_remote_code=true"
     )
-
-# ---------- Post-train GSM8K eval ----------
-# print("\n▶ Running LM-Eval-Harness on GSM8K…")
-# cmd = [
-#     "lm_eval",
-#     "--model",
-#     "hf",
-#     "--model_args",
-#     f"pretrained={final_path},dtype=float16",
-#     "--tasks",
-#     "gsm8k",
-#     "--batch_size",
-#     "8",
-#     "--output_path",
-#     os.path.join(OUTPUT_DIR, "gsm8k.json"),
-# ]
-# subprocess.run(cmd, check=True)
-# print("✓ Done — see gsm8k.json for accuracy.")

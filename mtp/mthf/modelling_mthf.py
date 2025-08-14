@@ -27,7 +27,6 @@ from mtp.mheads._utils import window_input_ids
 class MultiTokenHFOutput(CausalLMOutput):
     loss_main: Optional[torch.Tensor] = None
     loss_aux: Optional[torch.Tensor] = None
-    past_key_values: Optional[tuple] = None
 
 
 class MultiTokenHFConfig(PretrainedConfig):
@@ -139,19 +138,10 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
             raise NotImplementedError("Input embeddings not found in backbone.")
 
     def prepare_inputs_for_generation(self, input_ids, **kwargs):
-        # Enable KV caching: when cache exists, feed only the last token
-        past_key_values = kwargs.get("past_key_values", None)
-        attention_mask = kwargs.get("attention_mask", None)
-
-        if past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-
-        model_inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "past_key_values": past_key_values,
-            "use_cache": True,
-        }
+        # Standard for decoder-only models: just return input_ids and any attention_mask
+        model_inputs = {"input_ids": input_ids}
+        if "attention_mask" in kwargs and kwargs["attention_mask"] is not None:
+            model_inputs["attention_mask"] = kwargs["attention_mask"]
         return model_inputs
 
     def adjust_logits_during_generation(self, logits, **kwargs):
@@ -241,9 +231,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
 
         # For inference: return logits from last position
         logits = self.lm_head(hidden_state[:, -1:])
-        return MultiTokenHFOutput(
-            logits=logits, past_key_values=outputs.past_key_values
-        )
+        return MultiTokenHFOutput(logits=logits)
 
     # Single mhead loss
     def forward_mhead(
@@ -275,9 +263,7 @@ class MultiTokenHF(PreTrainedModel, GenerationMixin):
         last_hidden = hidden_state[:, -1]  # (B, D)
         output = self.mhead(last_hidden)
         logits = output.logits.unsqueeze(1)  # (B, 1, V)
-        return MultiTokenHFOutput(
-            logits=logits, past_key_values=outputs.past_key_values
-        )
+        return MultiTokenHFOutput(logits=logits)
 
     def forward(
         self,
