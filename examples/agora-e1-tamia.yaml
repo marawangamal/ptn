@@ -31,108 +31,66 @@ group:
           - group:
               type: parallel
               jobs:
-                # --- llama3.2-1b gsm8k ---
-                - group:
-                    # --- llama3.2-1b gsm8k stp ---
-                    name: "ft::l3.2-1b::gsm8k::stp(lam={0.0, 0.1})"
-                    type: sweep
-                    preamble: glong
-                    sweep:
-                      lr: [1e-7, 5e-8]
-                      lambda_mhead: [0.0, 0.1]
-                    sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head stp --horizon 1 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5"
-
-                # --- llama3.2-1b gsm8k mtp ---
-                - group:
-                    name: "ft::l3.2-1b::gsm8k::mtp(h={2, 3, 4}, lam=0.1)"
-                    type: sweep
-                    preamble: glong
-                    sweep:
-                      horizon: [2, 3, 4]
-                      lr: [1e-7, 5e-8]
-                      lambda_mhead: [0.1]
-                    sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head multihead --horizon {horizon} --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5"
-
-                # # --- gemma2b gsm8k stp ---
+                # # --- llama3.2-1b gsm8k stp ---
                 # - group:
-                #     # --- gemma2b gsm8k stp ---
-                #     name: "ft::g2b::gsm8k::stp(lam={0.0, 0.1})"
+                #     name: "ft::l3.2-1b::gsm8k::stp(lam={0.0, 0.1})"
                 #     type: sweep
                 #     preamble: glong
                 #     sweep:
-                #       lr: [1e-7, 5e-8]
+                #       lr: [1e-7, 5e-8, 1e-8]
                 #       lambda_mhead: [0.0, 0.1]
                 #     sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head stp --horizon 1 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5"
 
-                # # --- gemma2b gsm8k mtp ---
+                # # --- llama3.2-1b gsm8k mtp ---
                 # - group:
                 #     name: "ft::l3.2-1b::gsm8k::mtp(h={2, 3, 4}, lam=0.1)"
                 #     type: sweep
                 #     preamble: glong
                 #     sweep:
                 #       horizon: [2, 3, 4]
-                #       lr: [1e-7, 5e-8]
+                #       lr: [1e-7, 5e-8, 1e-8]
                 #       lambda_mhead: [0.1]
-                #     sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head multihead --horizon {horizon} --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset gsm8k --eval_every 230 --max_epochs 5"
+                #     sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head multihead --horizon {horizon} --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5"
 
+                # # --- llama3.2-3b gsm8k stp ---
+                # - group:
+                #     name: "ft::l3.2-1b::gsm8k::stp(lam={0.0, 0.1})"
+                #     type: sweep
+                #     preamble: glong
+                #     sweep:
+                #       lr: [1e-7, 5e-8, 1e-8]
+                #       lambda_mhead: [0.0, 0.1]
+                #     sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head stp --horizon 1 --model meta-llama/Llama-3.2-3B --tokenizer meta-llama/Llama-3.2-3B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5 --eval_limit 1000"
 
-                # # --- gemma2b gsm8k ---
-                # - job:
-                #     name: "ft::g2b::gsm8k::stp(lam=0.0)"
+                # # --- llama3.2-3b gsm8k mtp ---
+                # - group:
+                #     name: "ft::l3.2-1b::gsm8k::mtp(h={2, 3, 4}, lam=0.1)"
+                #     type: sweep
                 #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.0 --model_head stp --horizon 1 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset gsm8k --eval_every 230 --max_epochs 5"
- 
-                # - job:
-                #     name: "ft::g2b::gsm8k::stp(lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head stp --horizon 1 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset gsm8k --eval_every 230 --max_epochs 5"
- 
-                # - job:
-                #     name: "ft::g2b::gsm8k::mtp(h=2,lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset gsm8k --eval_every 230 --max_epochs 5"
- 
+                #     sweep:
+                #       horizon: [2, 3, 4]
+                #       lr: [1e-7, 5e-8, 1e-8]
+                #       lambda_mhead: [0.1]
+                #     sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head multihead --horizon {horizon} --model meta-llama/Llama-3.2-3B --tokenizer meta-llama/Llama-3.2-3B-instruct --dataset gsm8k --eval_every 230 --max_epochs 5 --eval_limit 1000"
 
-                # # --- llama3.2-1b omi:1m ---
-                # - job:
-                #     name: "ft::l3.2-1b::omi1m::stp(lam=0.0)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 100 --lr 1e-7 --lambda_mhead 0.0 --model_head stp --horizon 1 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-                # - job:
-                #     name: "ft::l3.2-1b::omi1m::stp(lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head stp --horizon 1 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
+                # --- llama3.2-3b omi:1m stp ---
+                - group:
+                    name: "ft::l3.2-1b::omi1m::stp(lam={0.0, 0.1})"
+                    type: sweep
+                    preamble: glong
+                    sweep:
+                      lr: [1e-7, 5e-8, 1e-8]
+                      lambda_mhead: [0.0, 0.1]
+                    sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head stp --horizon 1 --model meta-llama/Llama-3.2-3B --tokenizer meta-llama/Llama-3.2-3B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5 --eval_limit 1000"
 
-                # - job:
-                #     name: "ft::l3.2-1b::omi1m::mtp(h=2,lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-
-                # - job:
-                #     name: "ft::l3.2-1b::omi1m::mtp(h=3,lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 3 --model meta-llama/Llama-3.2-1B --tokenizer meta-llama/Llama-3.2-1B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-
-
-                # # --- gemma2b omi:1m ---
-                # - job:
-                #     name: "ft::g2b::omi1m::stp(lam=0.0)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.0 --model_head stp --horizon 1 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-                # - job:
-                #     name: "ft::g2b::omi1m::stp(lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head stp --horizon 1 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-                # - job:
-                #     name: "ft::g2b::omi1m::mtp(h=2,lam=0.1)"
-                #     preamble: glong
-                #     command: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --model google/gemma-2b --tokenizer google/gemma-2b-it --dataset omi:1m --eval_every 30000 --max_epochs 5"
- 
-
+                # --- llama3.2-3b omi:1m mtp ---
+                - group:
+                    name: "ft::l3.2-1b::omi1m::mtp(h={2, 3, 4}, lam=0.1)"
+                    type: sweep
+                    preamble: glong
+                    sweep:
+                      horizon: [2, 3, 4]
+                      lr: [1e-7, 5e-8, 1e-8]
+                      lambda_mhead: [0.1]
+                    sweep_template: "WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --lr {lr} --lambda_mhead {lambda_mhead} --model_head multihead --horizon {horizon} --model meta-llama/Llama-3.2-3B --tokenizer meta-llama/Llama-3.2-3B-instruct --dataset omi:1m --eval_every 30000 --max_epochs 5 --eval_limit 1000"
 

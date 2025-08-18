@@ -2,9 +2,9 @@
 # train_v2.py
 #
 # Example:
-# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train_v2.py --tags tamia --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --max_steps 1000
+# WANDB_CACHE_DIR=$SCRATCH/wandb HF_HOME=$SCRATCH/huggingface python train.py --tags debug --eval_limit 50 --lr 1e-7 --lambda_mhead 0.1 --model_head multihead --horizon 2 --max_steps 10 --dataset gsm8k
 # To evaluate a ckpt, run:
-# accelerate launch -m lm_eval --model hf --model_args pretrained=experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf --tasks gsm8k_cot  --batch_size 64
+# accelerate launch -m lm_eval --model hf --model_args pretrained=mremila/MtLlama-3.2-3B --tasks gsm8k_cot --batch_size 64
 
 # TODO:
 # [ ] Change to loss_dict
@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers.wandb import WandbLogger
 from pytorch_lightning.utilities import rank_zero_only
 import argparse, torch
-from typing import Callable, List, Optional
+from typing import List
 import pytorch_lightning as pl
 import lm_eval
 from lm_eval import simple_evaluate
@@ -30,12 +30,8 @@ from transformers import (
 
 
 # --- callbacks.py (or just paste above the main if you prefer) ----------------
-import subprocess, json, random, torch, pytorch_lightning as pl
-from pathlib import Path
-
+import random, torch, pytorch_lightning as pl
 import wandb
-
-from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig
 
 
 # ---------- Constants ----------
@@ -180,6 +176,22 @@ class PeriodicEvaluate(pl.Callback):
 #                 )
 
 
+# class SaveHFAtEnd(pl.Callback):
+#     def __init__(self, outdir, tokenizer):
+#         self.outdir = outdir
+#         self.tokenizer = tokenizer
+
+#     def on_fit_end(self, trainer, pl_module):
+#         # make sure everyone reached the end
+#         trainer.strategy.barrier()
+#         if trainer.is_global_zero:
+#             os.makedirs(self.outdir, exist_ok=True)
+#             save_hf_checkpoint(pl_module.model, self.tokenizer, self.outdir)
+#             print(f"[INFO] Saved HF checkpoint to {self.outdir}")
+#         # let others continue only after rank 0 is done
+#         trainer.strategy.barrier()
+
+
 # ---------- Lightning Module ----------
 class LitLlama(pl.LightningModule):
     def __init__(self, model, max_steps, lr=2e-5, warmup_ratio=0.1):
@@ -219,20 +231,20 @@ class LitLlama(pl.LightningModule):
         # Only compute gradient analysis if enabled and conditions are met
         if (
             self.model is not None
-            and hasattr(self.model, "backbone")
-            and outputs.loss_main is not None
-            and outputs.loss_aux is not None
+            and hasattr(self.model, "loss_dict")
+            and outputs.loss_dict["loss_main"] is not None
+            and outputs.loss_dict["loss_mt"] is not None
         ):
             # Only log every 50 steps to save time and memory
             if batch_idx % 50 == 0:
                 # Get grads for main loss
                 self.zero_grad()
-                outputs.loss_main.backward(retain_graph=True)
+                outputs.loss_dict["loss_main"].backward(retain_graph=True)
                 g_main = self._grad_vector(self.model.backbone, 10_000)
 
                 # Get grads for aux loss
                 self.zero_grad()
-                outputs.loss_aux.backward(retain_graph=True)
+                outputs.loss_dict["loss_mt"].backward(retain_graph=True)
                 g_aux = self._grad_vector(self.model.backbone, 10_000)
 
                 # Cosine similarity & ratio
@@ -308,39 +320,15 @@ class LitLlama(pl.LightningModule):
         self.log("grad_norm", norm, on_step=True, on_epoch=False)
 
 
-def save_hf_checkpoint(model, tokenizer, output_dir):
-    """Save a HuggingFace-compatible checkpoint with all necessary configuration files."""
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Teach HF how to import your custom classes
-    model.config.model_type = "multi_token_hfmodel"
-    model.config.architectures = ["MultiTokenHF"]
-    model.config.auto_map = {
-        "AutoConfig": "configuration_multi_token_hfmodel.MultiTokenHFConfig",
-        "AutoModelForCausalLM": "modeling_multi_token_hfmodel.MultiTokenHF",
-    }
-    # IMPORTANT: prevent __init__ from re-downloading the base on load
-    model.config.pretrained = False  # ← add this line
-
-    # Write the minimal loader stubs next to the weights
-    open(os.path.join(output_dir, "configuration_multi_token_hfmodel.py"), "w").write(
-        "from transformers.configuration_utils import PretrainedConfig\n\n"
-        "class MultiTokenHFConfig(PretrainedConfig):\n"
-        "    model_type = 'multi_token_hfmodel'\n"
-        "    def __init__(self, **kwargs):\n"
-        "        super().__init__(**kwargs)\n"
-    )
-
-    open(os.path.join(output_dir, "modeling_multi_token_hfmodel.py"), "w").write(
-        "from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
-    )
-
-    # Save base model weights + tokenizer
-    model.save_pretrained(output_dir, safe_serialization=False)
-    tokenizer.save_pretrained(output_dir, safe_serialization=True)
+# # ------------- Utils -------------------
+# def save_hf_checkpoint(model, tokenizer, output_dir):
+#     """Save a Hugging Face model and tokenizer checkpoint."""
+#     os.makedirs(output_dir, exist_ok=True)
+#     model.save_pretrained(output_dir)
+#     tokenizer.save_pretrained(output_dir)
+#     print(f"[INFO] Saved HF checkpoint to {output_dir}")
 
 
-# ------------- Utils -------------------
 def get_econfig_name(args: argparse.Namespace):
     ignore_keys = [
         "eval_every",
@@ -376,7 +364,7 @@ def lookup_wandb_run(args: argparse.Namespace):
 # ---------- CLI ----------
 p = argparse.ArgumentParser()
 # model
-p.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
+p.add_argument("--model", default="mremila/MtLlama-3.2-3B")
 p.add_argument("--tokenizer", default=None)
 p.add_argument("--model_head", type=str, default="stp")
 p.add_argument("--horizon", type=int, default=1)
@@ -406,22 +394,7 @@ os.makedirs(os.path.join(OUTPUT_DIR, get_econfig_name(args)), exist_ok=True)
 tokenizer = AutoTokenizer.from_pretrained(
     args.model if args.tokenizer is None else args.tokenizer, use_fast=True
 )
-model = MultiTokenHF(
-    MultiTokenHFConfig(
-        model_name=args.model,
-        model_head=args.model_head,
-        horizon=args.horizon,
-        lambda_mhead=args.lambda_mhead,
-        loss_type="joint",
-        pretrained=True,
-    )
-)
-
-# NOTE: Would be a better api experience to load like this:
-# model = MultiTokenHF.from_pretrained(
-#     "experiments/mmetallamaLlama323BInstruct_domi1m_m512_b8_l1e07_m1_mNone_a1/hf"
-# )
-# model = AutoModelForCausalLM.from_pretrained(args.model)
+model = AutoModelForCausalLM.from_pretrained(args.model)
 
 # make sure we have a pad token
 if tokenizer.pad_token is None:
@@ -479,6 +452,7 @@ callbacks: List[pl.Callback] = [
         filename="last",
         every_n_train_steps=args.ckpt_every,
     ),
+    # SaveHFAtEnd(f"{OUTPUT_DIR}/{get_econfig_name(args)}/hf", tokenizer),
 ]
 
 
@@ -522,13 +496,3 @@ trainer.fit(
     ckpt_path=resume_ckpt,
 )
 print("Done training.")
-
-# if trainer.is_global_zero:
-#     final_dir = os.path.join(OUTPUT_DIR, get_econfig_name(args), "hf")
-#     save_hf_checkpoint(model, tokenizer, final_dir)
-#     print(f"[INFO] Saved HF checkpoint to {final_dir}")
-#     print(
-#         "[INFO] Run eval with: accelerate launch -m lm_eval --model hf --tasks gsm8k_cot --batch_size 64 --model_args pretrained="
-#         + final_dir
-#         + ",trust_remote_code=true"
-#     )
