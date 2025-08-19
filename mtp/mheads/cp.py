@@ -28,6 +28,9 @@ class CP(AbstractDisributionHead):
         # second: (B, R, H, D) -> (B, R, H, V)
         theta = self.decoder(theta)
 
+        # make positive
+        theta = torch.nn.functional.sigmoid(theta)
+
         return theta
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
@@ -67,18 +70,18 @@ class CP(AbstractDisributionHead):
                     device=x.device,
                 ),
             )
-            loss = (
+            loss = (1 / H_) * (  # avg across seq dimension
                 -torch.log(p_tilde)  # (B, T')
                 + torch.log(z_tilde)  # (B, T')
                 # Contraction Stability Scale Factors
                 - sum([torch.log(z) for z in gammas_p])  # (B, T')
                 + sum([torch.log(z) for z in gammas_z])
-            )  # (B, T-H)
+            ).mean()  # avg across batch dimension
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
 
 
 def run_test():
-    B, H, D, V = 8, 2, 4096, 32000
+    B, H, D, V = 8, 4, 4096, 32000
     mt_head = CP(
         AbstractDisributionHeadConfig(
             d_model=D,
