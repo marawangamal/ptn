@@ -12,16 +12,16 @@ class STP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         super().__init__(config)
         assert config.horizon == 1, "STP only supports horizon=1"
-        self.head = torch.nn.Linear(config.d_model, config.d_output)
+        self.decoder = torch.nn.Linear(config.d_model, config.d_output)
 
     def set_output_embeddings(self, new_embeddings):
-        self.head.weight = new_embeddings
+        self.decoder.weight = new_embeddings
 
     def get_output_embeddings(self):
-        return self.head.weight
+        return self.decoder.weight
 
     def freeze_decoder(self):
-        for param in self.head.parameters():
+        for param in self.decoder.parameters():
             param.requires_grad = False
 
     def forward(
@@ -34,7 +34,7 @@ class STP(AbstractDisributionHead):
         assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
         assert y.size(1) == 1 if y is not None else True, "y must have 1 dimension"
 
-        logits = self.head(x)  # (B, V)
+        logits = self.decoder(x)  # (B, V)
         loss = None
         if y is not None:
             loss = torch.nn.functional.cross_entropy(
