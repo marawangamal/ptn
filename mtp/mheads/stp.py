@@ -12,10 +12,14 @@ class STP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         super().__init__(config)
         assert config.horizon == 1, "STP only supports horizon=1"
-        self.decoder = torch.nn.Linear(config.d_model, config.d_output)
+        self.decoder = torch.nn.Linear(config.d_model, config.d_output, bias=False)
 
-    def set_output_embeddings(self, new_embeddings):
-        self.decoder.weight = new_embeddings
+    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
+        V, D = embeddings.shape
+        # If vocab (V) or d_model (D) changed, rebuild the Linear to match
+        if self.decoder.in_features != D or self.decoder.out_features != V:
+            self.decoder = torch.nn.Linear(D, V, bias=False)
+        self.decoder.weight = embeddings
 
     def get_output_embeddings(self):
         return self.decoder.weight
