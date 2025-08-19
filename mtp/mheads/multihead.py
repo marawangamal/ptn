@@ -24,10 +24,9 @@ class Multihead(AbstractDisributionHead):
         self.decoder = nn.Linear(config.d_model, config.d_output, bias=False)
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
-        V, D = embeddings.shape
-        # If vocab (V) or d_model (D) changed, rebuild the Linear to match
-        if self.decoder.in_features != D or self.decoder.out_features != V:
-            self.decoder = nn.Linear(D, V, bias=False)
+        assert (
+            embeddings.shape == self.decoder.weight.shape
+        ), f"embeddings must be of shape {self.decoder.weight.shape} but got {embeddings.shape}"
         self.decoder.weight = embeddings
 
     def get_output_embeddings(self):
