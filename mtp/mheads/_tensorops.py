@@ -1,68 +1,8 @@
 import torch
 
 
-def window_input_ids(
-    input_ids: torch.Tensor,
-    horizon: int = 1,
-    shift: int = 1,
-    ignore_index: int = -100,
-):
-    """Window the input_ids so that each position looks H steps ahead.
-
-    Args:
-        input_ids (torch.Tensor): The input tensor of shape (B, T).
-        horizon (int): The number of steps ahead each position should look. Default is 1 (i.e. next-token prediction)
-        shift (int): The number of steps to shift the window. Default is 1 (i.e. next-token prediction)
-        ignore_index (int): Index for rolled-beyond positions. Default is -100 (i.e. ignore)
-
-    Returns:
-        torch.Tensor: The windowed tensor of shape (B, T, H).
-
-    Example:
-        >>> input_ids = torch.tensor([[0, 1, 2, 3, 4, 5]])
-        >>> window_input_ids(input_ids, horizon=2, shift=0)
-        Input IDs:
-        tensor([[0, 1, 2, 3, 4, 5]])
-        Windowed Input IDs:
-        tensor([[[ 0,  1],
-                 [ 1,  2],
-                 [ 2,  3],
-                 [ 3,  4],
-                 [ 4,  5],
-                 [ 5, -100]]])
-
-        >>> window_input_ids(input_ids, horizon=2, shift=2)
-        Input IDs:
-        tensor([[0, 1, 2, 3, 4, 5]])
-        Windowed Input IDs:
-        tensor([[[ 2,  3],
-                 [ 3,  4],
-                 [ 4,  5],
-                 [ 5, -1],
-                 [-100, -100],
-                 [-100, -100]]])
-
-
-    """
-
-    B, T, H = input_ids.size(0), input_ids.size(1), horizon
-
-    # (B, T) -> (B, T, H)
-    input_ids_windowed = torch.stack(
-        [torch.roll(input_ids, -i - shift, dims=1) for i in range(H)], dim=-1
-    )
-
-    # NOTE: This next part was vibe-coded >>>
-    # Replace rolled-beyond positions with ignore_index
-    # For each head i, mask out the last (shift + i) tokens that wrapped around
-    for i in range(H):
-        if shift + i > 0:
-            input_ids_windowed[:, T - (shift + i) :, i] = ignore_index
-    return input_ids_windowed
-
-
 def select_margin_cp_tensor_batched(
-    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=True
+    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=False
 ):
     """Performs selection and marginalization operations on a CP tensor representation.
 
@@ -218,125 +158,54 @@ def get_breakpoints(ops: torch.Tensor):
     return h_free.long(), h_mrgn.long()
 
 
+def cp_reduce(
+    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=False, margin_index=-1
+):
+    """Reduce a CP tensor via select/marginalize operations.
+    Args:
+        cp_params (torch.Tensor): CP params. Shape: (R, H, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    assert margin_index < 0, "margin_index must be negative"
+    R, H, V = cp_params.shape
+
+    # For each mode: marginalize (sum) if ops[h] == -1, else select ops[h]
+    marginalize_mask = ops == margin_index  # (H,)
+    marginalized = cp_params.sum(dim=-1)  # (R, H) - sum over V dimension
+
+    # Gather selected indices (clamp to handle -1 values safely)
+    selected_indices = ops.clamp(min=0).unsqueeze(0).unsqueeze(-1)  # (1, H, 1)
+    selected = cp_params.gather(-1, selected_indices.expand(R, -1, -1)).squeeze(
+        -1
+    )  # (R, H)
+
+    # Choose marginalized or selected values based on ops
+    factors = torch.where(marginalize_mask, marginalized, selected)  # (R, H)
+
+    scale_factors = torch.ones(H, device=cp_params.device, dtype=cp_params.dtype)
+    if use_scale_factors:
+        # norm of each factor
+        scale_factors = torch.linalg.norm(factors, dim=0, keepdim=True)
+        factors = factors / scale_factors
+        scale_factors = scale_factors.squeeze(0)  # (H,)
+
+    # Compute CP tensor value: product over modes, sum over components
+    return factors.prod(dim=1).sum(), scale_factors
+
+
+batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
+
 if __name__ == "__main__":
-    x = torch.arange(6).unsqueeze(0)
-    x_ignore = x.clone()
-    x_ignore[x_ignore < 3] = -100
-    cases = [
-        {
-            "kwargs": {
-                "input_ids": x,
-                "horizon": 2,
-                "shift": 1,
-                "ignore_index": -100,
-            },
-            "y_true": torch.tensor(
-                [
-                    [
-                        [1, 2],  # 1
-                        [2, 3],  # 2
-                        [3, 4],  # 3
-                        [4, 5],  # 4
-                        [5, -100],  # 5
-                        [-100, -100],  # 6
-                    ]
-                ]
-            ),
-        },
-        {
-            "kwargs": {
-                "input_ids": x,
-                "horizon": 2,
-                "shift": 2,
-                "ignore_index": -100,
-            },
-            "y_true": torch.tensor(
-                [
-                    [
-                        [2, 3],  # 1
-                        [3, 4],  # 2
-                        [4, 5],  # 3
-                        [5, -100],  # 4
-                        [-100, -100],  # 5
-                        [-100, -100],  # 6
-                    ]
-                ]
-            ),
-        },
-        {
-            "kwargs": {
-                "input_ids": x_ignore,
-                "horizon": 2,
-                "shift": 2,
-                "ignore_index": -100,
-            },
-            "y_true": torch.tensor(
-                [
-                    [
-                        [-100, 3],  # 1
-                        [3, 4],  # 2
-                        [4, 5],  # 3
-                        [5, -100],  # 4
-                        [-100, -100],  # 5
-                        [-100, -100],  # 6
-                    ]
-                ]
-            ),
-        },
-        {
-            "kwargs": {
-                "input_ids": torch.tensor(
-                    [-1 for _ in range(5)] + [i for i in range(5)]
-                ).reshape(
-                    1, -1
-                ),  # (B, T)
-                "horizon": 1,
-                "shift": 0,
-                "ignore_index": -1,
-            },
-            "y_true": torch.tensor(
-                [-1 for _ in range(5)] + [i for i in range(5)]
-            ).reshape(
-                1, -1, 1
-            ),  # (B, T, H)
-        },
-        {
-            "kwargs": {
-                "input_ids": torch.tensor(
-                    [[0, 1, 2, 3], [10, 11, 12, 13]]
-                ),  # (B=2, T=4)
-                "horizon": 3,
-                "shift": 1,
-                "ignore_index": -100,
-            },
-            "y_true": torch.tensor(
-                [
-                    [
-                        [1, 2, 3],
-                        [2, 3, -100],
-                        [3, -100, -100],
-                        [-100, -100, -100],
-                    ],
-                    [
-                        [11, 12, 13],
-                        [12, 13, -100],
-                        [13, -100, -100],
-                        [-100, -100, -100],
-                    ],
-                ]
-            ),
-        },
-    ]
+    # batch version
+    B, R, H, V = 2, 3, 4, 5
+    cp_params = torch.randn(B, R, H, V)
+    ops = torch.randint(0, V, (B, H))
+    res_v1, _ = select_margin_cp_tensor_batched(cp_params, ops, use_scale_factors=False)
+    res_v2, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
 
-    # , device='cuda:0')
-
-    for case in cases:
-        y_pred = window_input_ids(**case["kwargs"])
-        assert (
-            y_pred.shape == case["y_true"].shape
-        ), f"Case {case['kwargs']} failed. Shape mismatch: {y_pred.shape} != {case['y_true'].shape}"
-        assert torch.all(
-            y_pred == case["y_true"]
-        ), f"Case {case['kwargs']} failed. Values mismatch: {y_pred} != {case['y_true']}"
-
-    print("✅ All tests passed!")
+    assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
+    print("All tests passed")

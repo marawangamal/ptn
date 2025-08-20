@@ -7,3 +7,4 @@ lightning
 wandb
 datatrove
 pandas
+seaborn

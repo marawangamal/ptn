@@ -21,9 +21,12 @@ class Multihead(AbstractDisributionHead):
                 for _ in range(self.config.horizon)
             ]
         )
-        self.decoder = nn.Linear(config.d_model, config.d_output)
+        self.decoder = nn.Linear(config.d_model, config.d_output, bias=False)
 
-    def set_output_embeddings(self, embeddings: torch.Tensor):
+    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
+        assert (
+            embeddings.shape == self.decoder.weight.shape
+        ), f"embeddings must be of shape {self.decoder.weight.shape} but got {embeddings.shape}"
         self.decoder.weight = embeddings
 
     def get_output_embeddings(self):

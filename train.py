@@ -120,9 +120,48 @@ class LitLM(pl.LightningModule):
             labels=labels,
         )
 
+    def _grad_vector(self, module):
+        return torch.cat(
+            [
+                p.grad.detach().flatten()
+                for p in module.parameters()
+                if p.grad is not None
+            ]
+        )
+
     def training_step(self, batch, batch_idx):
         outputs = self(**batch)
         loss = outputs.loss
+
+        # Optional: log gradient cosine if both main and aux are present
+        if (
+            self.model is not None
+            and hasattr(self.model, "backbone")
+            and outputs.loss_main is not None
+            and outputs.loss_aux is not None
+        ):
+            # Only log every N steps to save time
+            if batch_idx % 50 == 0:
+                print(f"[{batch_idx}] Logging grads")
+                # Get grads for main loss
+                self.zero_grad()
+                outputs.loss_main.backward(retain_graph=True)
+                g_main = self._grad_vector(self.model.backbone)
+
+                # Get grads for aux loss
+                self.zero_grad()
+                outputs.loss_aux.backward(retain_graph=True)
+                g_aux = self._grad_vector(self.model.backbone)
+
+                # Cosine similarity & ratio
+                cos = torch.cosine_similarity(g_main, g_aux, dim=0).item()
+                ratio = (g_aux.norm() / (g_main.norm() + 1e-12)).item()
+
+                self.log("grad_cosine_main_aux", cos, prog_bar=True)
+                self.log("grad_ratio_main_aux", ratio, prog_bar=False)
+
+                self.zero_grad()  # clean before actual backward
+
         self.log("train_loss", loss)
         return loss
 
