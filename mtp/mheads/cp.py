@@ -1,3 +1,5 @@
+import itertools
+import random
 import torch
 import torch.nn as nn
 
@@ -80,14 +82,40 @@ class CP(AbstractDisributionHead):
                 margin_index=-1,
                 use_scale_factors=True,
             )
+
+            # loss = (
+            #     -torch.log(p_tilde)  # (B, T')
+            #     + torch.log(z_tilde)  # (B, T')
+            #     # Contraction Stability Scale Factors
+            #     - sum([torch.log(z) for z in gammas_p])  # (B, T')
+            #     + sum([torch.log(z) for z in gammas_z])
+            # )  # (B, T-H)
+
             loss = (1 / H_) * (  # avg across seq dimension
                 -torch.log(p_tilde)  # (B,)
                 + torch.log(z_tilde)  # (B,)
                 # Contraction Stability Scale Factors
-                - gammas_p.log().sum(dim=-1)  # (B, H)
-                + gammas_z.log().sum(dim=-1)  # (B, H)
+                - (gammas_p.log().sum(dim=-1))  # (B, H)
+                + (gammas_z.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
-        return AbstractDisributionHeadOutput(logits=logits, loss=loss)
+
+            def get_stat_str(v):
+                return f"{v.mean():.2f} ± {v.std():.2f}"
+
+            loss_dict = {
+                # after log
+                "p": get_stat_str(p_tilde),
+                "z": get_stat_str(z_tilde),
+                "g_p": get_stat_str(gammas_p),
+                "g_z": get_stat_str(gammas_z),
+                # params
+                "params": get_stat_str(params),
+            }
+        return AbstractDisributionHeadOutput(
+            logits=logits,
+            loss=loss,
+            loss_dict=loss_dict,
+        )
 
 
 def run_test():
@@ -102,6 +130,11 @@ def run_test():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
+    # set some 50% of y to ignore_index
+    for i, j in itertools.product(range(B), range(H)):
+        if random.random() < 0.5:
+            y[i, j] = -100
+
     out = mt_head(x, y)
     print(f"loss: {out.loss}")
 
