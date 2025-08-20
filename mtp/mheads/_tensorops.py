@@ -208,6 +208,9 @@ def cp_reduce(
     return res, scale_factors
 
 
+# Make another vec that will return a 1D dist
+
+
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
 
 if __name__ == "__main__":

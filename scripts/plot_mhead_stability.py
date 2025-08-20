@@ -12,11 +12,13 @@ import seaborn as sns
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads.cp import CP
 from mtp.mheads.cp_cond import CPCond
+from mtp.mheads.cp_condl import CPCondl
 from mtp.mheads.multihead import Multihead
 
 MT_HEADS = {
     "cp": CP,
     "cp_cond": CPCond,
+    "cp_condl": CPCondl,
     "multihead": Multihead,
 }
 
@@ -90,7 +92,7 @@ def main():
     configs = []
 
     # add cp configs
-    for model_head, rank in itertools.product(["cp", "cp_cond"], [1]):
+    for model_head, rank in itertools.product(["cp", "cp_cond", "cp_condl"], [8]):
         configs.append(
             {
                 "model_head": model_head,

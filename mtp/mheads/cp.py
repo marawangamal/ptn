@@ -53,6 +53,7 @@ class CP(AbstractDisributionHead):
         x,
         y=None,
         ignore_index: int = -100,
+        return_logits: bool = False,
     ):
         assert x.ndim == 2, "x must be 2D (B, D)"
         assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
@@ -111,6 +112,10 @@ class CP(AbstractDisributionHead):
                 # params
                 "params": get_stat_str(params),
             }
+
+            if return_logits:
+                pass
+
         return AbstractDisributionHeadOutput(
             logits=logits,
             loss=loss,

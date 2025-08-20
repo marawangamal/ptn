@@ -5,4 +5,4 @@ from mtp.mheads.cp import CP
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 # !! IMPORTANT !! ::  Keep in sync with mtp.mheads
-MHEADS = {"stp": STP, "multihead": Multihead, "CP": CP, "CPCond": CPCond}
+MHEADS = {"stp": STP, "multihead": Multihead, "cp": CP, "cp_cond": CPCond}

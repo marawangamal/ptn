@@ -196,7 +196,7 @@ class CPCond(AbstractDisributionHead):
         """
         loss = None
         if y is not None:
-            loss = -self.log_prob(x, y).mean()
+            loss = -self.log_prob(x, y).mean() * (1 / self.config.horizon)
         return AbstractDisributionHeadOutput(
             logits=torch.tensor(-1),
             loss=loss,
@@ -213,5 +213,4 @@ if __name__ == "__main__":
 
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    print(dist(x, y))
-    print(dist.sample(x, sample_fn=lambda x: x.argmax(-1)))
+    print(f"loss: {dist(x, y).loss}")
