@@ -184,7 +184,12 @@ class CPCond(AbstractDisributionHead):
 
         return y_out, prob_y_bar_xy
 
-    def forward(self, x: torch.Tensor, y: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+    ):
         """Computes loss for CPB distribution.
 
         Args:
@@ -196,7 +201,12 @@ class CPCond(AbstractDisributionHead):
         """
         loss = None
         if y is not None:
-            loss = -self.log_prob(x, y).mean() * (1 / self.config.horizon)
+
+            # NOTE: this is not optimal, as it will over-filter samples
+            # filter out entire sample if any of the H y vals are ignore_index
+            mask = (y != ignore_index).all(dim=-1)  # (B,)
+            loss = -self.log_prob(x[mask], y[mask]).mean() * (1 / self.config.horizon)
+
         return AbstractDisributionHeadOutput(
             logits=torch.tensor(-1),
             loss=loss,
