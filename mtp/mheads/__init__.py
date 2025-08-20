@@ -1,5 +1,6 @@
 from mtp.mheads.multihead import Multihead
 from mtp.mheads.stp import STP
+from mtp.mheads.cp import CP
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 # NOTE: Should be in sync with mtp._types.ModelHeadType
