@@ -67,6 +67,7 @@ class CP(AbstractDisributionHead):
                 params.reshape(B, R, H_, V),
                 y.reshape(B, H_),
                 margin_index=ignore_index,
+                use_scale_factors=True,
             )  # (B,), (B, H)
             z_tilde, gammas_z = batch_cp_reduce(
                 params.reshape(B, R, H_, V),
@@ -77,6 +78,7 @@ class CP(AbstractDisributionHead):
                     device=x.device,
                 ),
                 margin_index=-1,
+                use_scale_factors=True,
             )
             loss = (1 / H_) * (  # avg across seq dimension
                 -torch.log(p_tilde)  # (B,)
