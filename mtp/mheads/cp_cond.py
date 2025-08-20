@@ -41,7 +41,7 @@ class CPCond(AbstractDisributionHead):
             torch.nn.Parameter(torch.empty(D, H, R, D))
         )
         self.decoder = torch.nn.init.kaiming_uniform_(
-            torch.nn.Parameter(torch.empty(D, V))
+            torch.nn.Parameter(torch.empty(V, D))
         )
 
     def freeze_decoder(self):
@@ -57,7 +57,7 @@ class CPCond(AbstractDisributionHead):
         return self.decoder
 
     def w_cp(self, x: torch.Tensor):
-        return torch.einsum("be,ehrd,dv->brhv", x, self.w_cp_fac, self.decoder)
+        return torch.einsum("be,ehrd,vd->brhv", x, self.w_cp_fac, self.decoder)
 
     def prob_y_bar_x(
         self,
