@@ -6,7 +6,7 @@ from mtp.mheads._abc import (
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads._utils import select_margin_cp_tensor_batched
+from mtp.mheads._tensorops import batch_cp_reduce
 
 
 class CP(AbstractDisributionHead):
@@ -46,7 +46,12 @@ class CP(AbstractDisributionHead):
         for param in self.decoder.parameters():
             param.requires_grad = False
 
-    def forward(self, x, y=None):
+    def forward(
+        self,
+        x,
+        y=None,
+        ignore_index: int = -100,
+    ):
         assert x.ndim == 2, "x must be 2D (B, D)"
         assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
 
@@ -55,27 +60,30 @@ class CP(AbstractDisributionHead):
         B, R, V = x.size(0), self.config.rank, self.config.d_output
         loss = None
         logits = torch.zeros(B, self.config.d_output, device=x.device)
+
         if y is not None:
             params = self.get_cp_params(x)  # (B, R, H, V)
-            p_tilde, gammas_p = select_margin_cp_tensor_batched(
-                cp_params=params.reshape(B, R, H_, V),
-                ops=y.reshape(B, H_),
+            p_tilde, gammas_p = batch_cp_reduce(
+                params.reshape(B, R, H_, V),
+                y.reshape(B, H_),
+                margin_index=ignore_index,
             )  # (B,), (B, H)
-            z_tilde, gammas_z = select_margin_cp_tensor_batched(
-                cp_params=params.reshape(B, R, H_, V),
-                ops=torch.full(
+            z_tilde, gammas_z = batch_cp_reduce(
+                params.reshape(B, R, H_, V),
+                torch.full(
                     (B, H_),
-                    -2,
+                    -1,
                     dtype=torch.long,
                     device=x.device,
                 ),
+                margin_index=-1,
             )
             loss = (1 / H_) * (  # avg across seq dimension
-                -torch.log(p_tilde)  # (B, T')
-                + torch.log(z_tilde)  # (B, T')
+                -torch.log(p_tilde)  # (B,)
+                + torch.log(z_tilde)  # (B,)
                 # Contraction Stability Scale Factors
-                - sum([torch.log(z) for z in gammas_p])  # (B, T')
-                + sum([torch.log(z) for z in gammas_z])
+                - gammas_p.log().sum(dim=-1)  # (B, H)
+                + gammas_z.log().sum(dim=-1)  # (B, H)
             ).mean()  # avg across batch dimension
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
 
