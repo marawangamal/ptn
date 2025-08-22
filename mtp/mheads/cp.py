@@ -11,6 +11,13 @@ from mtp.mheads._abc import (
 from mtp.mheads._tensorops import batch_cp_reduce
 
 
+def print_tens_stats(t: torch.Tensor, name: str):
+    """Prints one line of stats for a tensor."""
+    print(
+        f"{name}: mean: {t.mean():.2f} ± {t.std():.2f}, min: {t.min():.2f}, max: {t.max():.2f}"
+    )
+
+
 class CP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
@@ -103,14 +110,23 @@ class CP(AbstractDisributionHead):
             def get_stat_str(v):
                 return f"{v.mean():.2f} ± {v.std():.2f}"
 
+            # loss_dict = {
+            #     # after log
+            #     "p": get_stat_str(p_tilde),
+            #     "z": get_stat_str(z_tilde),
+            #     "g_p": get_stat_str(gammas_p),
+            #     "g_z": get_stat_str(gammas_z),
+            #     # params
+            #     "params": get_stat_str(params),
+            # }
+
             loss_dict = {
                 # after log
-                "p": get_stat_str(p_tilde),
-                "z": get_stat_str(z_tilde),
-                "g_p": get_stat_str(gammas_p),
-                "g_z": get_stat_str(gammas_z),
-                # params
-                "params": get_stat_str(params),
+                "p": p_tilde.mean().item(),
+                "z": z_tilde.mean().item(),
+                "g_p": gammas_p.mean().item(),
+                "g_z": gammas_z.mean().item(),
+                "params": params.mean().item(),
             }
 
             if return_logits:
