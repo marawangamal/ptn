@@ -88,7 +88,7 @@ class MoE(AbstractDisributionHead):
         return self.decoder
 
     def set_output_embeddings(self, new_embeddings):
-        raise NotImplementedError("set_output_embeddings not implemented")
+        self.decoder = new_embeddings
 
     def forward(
         self,
