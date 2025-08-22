@@ -1,4 +1,5 @@
 from collections import defaultdict
+import itertools
 import random
 import torch
 import matplotlib.pyplot as plt
@@ -7,8 +8,13 @@ import pandas as pd
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads import MHEADS
 
+# set theme
+sns.set_theme()
 
-def run_train():
+
+def run_train(
+    mt_name, batch_size, horizon, rank, d_model, d_output, add_loss_dict=False
+):
     """Test if CP distribution can recover a target distribution on small scale."""
     import torch.optim as optim
 
@@ -18,10 +24,12 @@ def run_train():
 
     # Training parameters
     n_iters = 100
-    B, R, H, D, V = 32, 2, 4, 128, 100
+    B, H, D, V = batch_size, horizon, d_model, d_output
 
-    config = AbstractDisributionHeadConfig(d_model=D, d_output=V, horizon=H, rank=R)
-    mt_head = MHEADS["moe"](config)
+    config = AbstractDisributionHeadConfig(
+        d_model=d_model, d_output=d_output, horizon=horizon, rank=rank
+    )
+    mt_head = MHEADS[mt_name](config)
 
     log_dict = defaultdict(list)
 
@@ -35,7 +43,7 @@ def run_train():
         out.loss.backward()
         optimizer.step()
 
-        if out.loss_dict is not None:
+        if out.loss_dict is not None and add_loss_dict:
             for k, v in out.loss_dict.items():
                 # Add or create new key if not exists
                 if k not in log_dict:
@@ -63,24 +71,69 @@ def run_train():
 
     print("Training test completed!")
 
+    # Add mt_name to log_dict for tracking
+    log_dict["mt_name"] = mt_name
+    log_dict["iteration"] = list(range(n_iters))
+    log_dict["horizon"] = horizon
+
     # Plot training metrics using seaborn
-    plot_training_metrics(log_dict)
+    return log_dict
 
 
-def plot_training_metrics(log_dict):
+def plot_training_metrics(
+    log_dicts: list[dict], save_path: str = "results/plots/train_mheads.png"
+):
     """Plot training metrics using seaborn."""
-    df = pd.DataFrame(log_dict)
-    df["iteration"] = range(len(df))
+    df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
+
+    # Melt excluding mt_name from value columns
+    melt_df = df.melt(
+        id_vars=["iteration", "mt_name", "horizon"],
+        var_name="metric",
+        value_name="value",
+    )
+
     sns.relplot(
-        data=df.melt(id_vars=["iteration"], var_name="metric", value_name="value"),
+        data=melt_df,
         kind="line",
         x="iteration",
         y="value",
+        hue="mt_name",
         col="metric",
-        col_wrap=3,
+        row="horizon",
     )
-    plt.show()
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
+        print(f"Saved plot to {save_path}")
 
 
 if __name__ == "__main__":
-    run_train()
+    configs = [
+        {
+            "mt_name": "moe",
+            "batch_size": 32,
+            "horizon": h,
+            "rank": r,
+            "d_model": 512,
+            "d_output": 100,
+        }
+        for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+    ] + [
+        {
+            "mt_name": "cp",
+            "batch_size": 32,
+            "horizon": h,
+            "rank": r,
+            "d_model": 512,
+            "d_output": 100,
+        }
+        for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+    ]
+
+    log_dicts = []
+    for config in configs:
+        log_dict = run_train(**config)
+        log_dicts.append(log_dict)
+
+    # concat all log_dicts into a single dataframe
+    plot_training_metrics(log_dicts)
