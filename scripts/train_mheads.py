@@ -21,7 +21,7 @@ def run_train():
     B, R, H, D, V = 32, 2, 4, 128, 100
 
     config = AbstractDisributionHeadConfig(d_model=D, d_output=V, horizon=H, rank=R)
-    mt_head = MHEADS["cp"](config)
+    mt_head = MHEADS["moe"](config)
 
     log_dict = defaultdict(list)
 

@@ -13,13 +13,13 @@ from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads.cp import CP
 from mtp.mheads.cp_cond import CPCond
 from mtp.mheads.cp_condl import CPCondl
+from mtp.mheads.moe import MoE
 from mtp.mheads.multihead import Multihead
 
 MT_HEADS = {
-    "cp": CP,
-    "cp_cond": CPCond,
-    "cp_condl": CPCondl,
-    "multihead": Multihead,
+    # "cp": CP,
+    "moe": MoE,
+    # "multihead": Multihead,
 }
 
 sns.set_theme()
@@ -92,7 +92,7 @@ def main():
     configs = []
 
     # add cp configs
-    for model_head, rank in itertools.product(["cp", "cp_cond", "cp_condl"], [8]):
+    for model_head, rank in itertools.product(MT_HEADS.keys(), [8]):
         configs.append(
             {
                 "model_head": model_head,
@@ -105,13 +105,13 @@ def main():
         )
 
     # add multihead config
-    configs.append(
-        {
-            "model_head": "multihead",
-            "model_head_kwargs": {**model_hparams},
-            "rank": 1,
-        }
-    )
+    # configs.append(
+    #     {
+    #         "model_head": "multihead",
+    #         "model_head_kwargs": {**model_hparams},
+    #         "rank": 1,
+    #     }
+    # )
 
     # # add dummy dist
     # configs.append(

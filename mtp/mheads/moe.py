@@ -27,6 +27,7 @@ def log_prob_moe(
     Returns:
         torch.Tensor: Log probability. Shape: (,).
     """
+    R, H, D = p_dists_tilde.shape
     lsm_alpha = torch.log_softmax(alpha_tilde, dim=-1)  # (R)
 
     # NOTE: Can trade-off memory/speed here. Instead of loop can do in parallel but
@@ -107,7 +108,7 @@ class MoE(AbstractDisributionHead):
                 alpha_tilde,
                 p_dists_tilde,
                 self.decoder,
-            ) * (1 / self.config.horizon)
+            ).mean() * (1 / self.config.horizon)
 
         return AbstractDisributionHeadOutput(
             logits=torch.tensor(-1),
