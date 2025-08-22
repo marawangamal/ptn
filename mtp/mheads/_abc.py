@@ -17,6 +17,7 @@ class AbstractDisributionHeadOutput:
     # TODO: logits output to always be (B, H*, V)
     logits: torch.Tensor  # (B, H, V) or (B, V)
     loss: Optional[torch.Tensor] = None  # (1,)
+    loss_dict: Optional[dict] = None  # (1,)
 
 
 class AbstractDisributionHead(ABC, torch.nn.Module):

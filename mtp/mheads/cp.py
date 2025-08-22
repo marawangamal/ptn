@@ -1,3 +1,5 @@
+import itertools
+import random
 import torch
 import torch.nn as nn
 
@@ -7,6 +9,13 @@ from mtp.mheads._abc import (
     AbstractDisributionHeadOutput,
 )
 from mtp.mheads._tensorops import batch_cp_reduce
+
+
+def print_tens_stats(t: torch.Tensor, name: str):
+    """Prints one line of stats for a tensor."""
+    print(
+        f"{name}: mean: {t.mean():.2f} ± {t.std():.2f}, min: {t.min():.2f}, max: {t.max():.2f}"
+    )
 
 
 class CP(AbstractDisributionHead):
@@ -51,6 +60,7 @@ class CP(AbstractDisributionHead):
         x,
         y=None,
         ignore_index: int = -100,
+        return_logits: bool = False,
     ):
         assert x.ndim == 2, "x must be 2D (B, D)"
         assert y.ndim == 2 if y is not None else True, "y must be 2D (B, H)"
@@ -80,14 +90,53 @@ class CP(AbstractDisributionHead):
                 margin_index=-1,
                 use_scale_factors=True,
             )
+
+            # loss = (
+            #     -torch.log(p_tilde)  # (B, T')
+            #     + torch.log(z_tilde)  # (B, T')
+            #     # Contraction Stability Scale Factors
+            #     - sum([torch.log(z) for z in gammas_p])  # (B, T')
+            #     + sum([torch.log(z) for z in gammas_z])
+            # )  # (B, T-H)
+
             loss = (1 / H_) * (  # avg across seq dimension
                 -torch.log(p_tilde)  # (B,)
                 + torch.log(z_tilde)  # (B,)
                 # Contraction Stability Scale Factors
-                - gammas_p.log().sum(dim=-1)  # (B, H)
-                + gammas_z.log().sum(dim=-1)  # (B, H)
+                - (gammas_p.log().sum(dim=-1))  # (B, H)
+                + (gammas_z.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
-        return AbstractDisributionHeadOutput(logits=logits, loss=loss)
+
+            def get_stat_str(v):
+                return f"{v.mean():.2f} ± {v.std():.2f}"
+
+            # loss_dict = {
+            #     # after log
+            #     "p": get_stat_str(p_tilde),
+            #     "z": get_stat_str(z_tilde),
+            #     "g_p": get_stat_str(gammas_p),
+            #     "g_z": get_stat_str(gammas_z),
+            #     # params
+            #     "params": get_stat_str(params),
+            # }
+
+            loss_dict = {
+                # after log
+                "p": p_tilde.mean().item(),
+                "z": z_tilde.mean().item(),
+                "g_p": gammas_p.mean().item(),
+                "g_z": gammas_z.mean().item(),
+                "params": params.mean().item(),
+            }
+
+            if return_logits:
+                pass
+
+        return AbstractDisributionHeadOutput(
+            logits=logits,
+            loss=loss,
+            loss_dict=loss_dict,
+        )
 
 
 def run_test():
@@ -102,6 +151,11 @@ def run_test():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
+    # set some 50% of y to ignore_index
+    for i, j in itertools.product(range(B), range(H)):
+        if random.random() < 0.5:
+            y[i, j] = -100
+
     out = mt_head(x, y)
     print(f"loss: {out.loss}")
 

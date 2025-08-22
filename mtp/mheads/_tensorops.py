@@ -159,7 +159,7 @@ def get_breakpoints(ops: torch.Tensor):
 
 
 def cp_reduce(
-    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=False, margin_index=-1
+    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=True, margin_index=-1
 ):
     """Reduce a CP tensor via select/marginalize operations.
     Args:
@@ -186,15 +186,29 @@ def cp_reduce(
     # Choose marginalized or selected values based on ops
     factors = torch.where(marginalize_mask, marginalized, selected)  # (R, H)
 
-    scale_factors = torch.ones(H, device=cp_params.device, dtype=cp_params.dtype)
-    if use_scale_factors:
-        # norm of each factor
-        scale_factors = torch.linalg.norm(factors, dim=0, keepdim=True)
-        factors = factors / scale_factors
-        scale_factors = scale_factors.squeeze(0)  # (H,)
+    scale_factors = []
+    res = torch.ones(R, device=cp_params.device, dtype=cp_params.dtype)
+
+    # BUG: do scale factors online
+    # if use_scale_factors:
+    #     # norm of each factor
+    #     # scale_factors = torch.max(factors, dim=0)[0]
+    #     # factors = factors / scale_factors
+
+    # Do it during contraction
+    for i in range(H):
+        res = res * factors[:, i]  # (R,)
+        if use_scale_factors:
+            scale_factors.append(torch.max(res))
+            res = res / scale_factors[-1]
+    res = res.sum()
+    scale_factors = torch.stack(scale_factors)
 
     # Compute CP tensor value: product over modes, sum over components
-    return factors.prod(dim=1).sum(), scale_factors
+    return res, scale_factors
+
+
+# Make another vec that will return a 1D dist
 
 
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
