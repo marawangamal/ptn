@@ -12,7 +12,7 @@ pip install -e .
 
 # Train SmolLM-135M from scratch
 # NOTE: set --model_head multihead --rank 2 --horizon 2 for multi-token prediction
-python train_pt.py \
+python train.py \
     --model HuggingFaceTB/SmolLM-135M \
     --model_head stp \
     --lr 4e-3 \
