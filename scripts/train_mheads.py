@@ -81,7 +81,7 @@ def run_train(
 
 
 def plot_training_metrics(
-    log_dicts: list[dict], save_path: str = "results/plots/train_mheads.png"
+    log_dicts: list[dict], save_path: str = "results/plots/train_mhead_moe.png"
 ):
     """Plot training metrics using seaborn."""
     df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
@@ -108,27 +108,41 @@ def plot_training_metrics(
 
 
 if __name__ == "__main__":
-    configs = [
-        {
-            "mt_name": "moe",
-            "batch_size": 32,
-            "horizon": h,
-            "rank": r,
-            "d_model": 512,
-            "d_output": 100,
-        }
-        for r, h in itertools.product([2, 4, 8], [2, 4, 8])
-    ] + [
-        {
-            "mt_name": "cp",
-            "batch_size": 32,
-            "horizon": h,
-            "rank": r,
-            "d_model": 512,
-            "d_output": 100,
-        }
-        for r, h in itertools.product([2, 4, 8], [2, 4, 8])
-    ]
+    configs = (
+        # [
+        #     {
+        #         "mt_name": "moe",
+        #         "batch_size": 32,
+        #         "horizon": h,
+        #         "rank": r,
+        #         "d_model": 512,
+        #         "d_output": 100,
+        #     }
+        #     for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+        # ]
+        [
+            {
+                "mt_name": "moe_proj",
+                "batch_size": 32,
+                "horizon": h,
+                "rank": r,
+                "d_model": 512,
+                "d_output": 100,
+            }
+            for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+        ]
+        # + [
+        #     {
+        #         "mt_name": "cp",
+        #         "batch_size": 32,
+        #         "horizon": h,
+        #         "rank": r,
+        #         "d_model": 512,
+        #         "d_output": 100,
+        #     }
+        #     for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+        # ]
+    )
 
     log_dicts = []
     for config in configs:

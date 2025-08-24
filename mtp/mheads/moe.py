@@ -77,7 +77,7 @@ class MoE(AbstractDisributionHead):
         )
 
         # === params
-        self.w_alpha = torch.nn.Linear(D, R)
+        self._w_alpha = torch.nn.Linear(D, R)
         self.cp_params = torch.nn.Parameter(torch.randn(R, H, D))
         self.decoder = torch.nn.Parameter(torch.randn(V, D))
 
@@ -118,8 +118,8 @@ class MoE(AbstractDisributionHead):
 
 
 if __name__ == "__main__":
-    H, R, D, V = 3, 2, 4, 30000
+    B, H, R, D, V = 2, 1, 1, 512, 30000
     moe = MoE(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
-    x = torch.randn(2, D)
-    y = torch.randint(0, V, (2, H))
+    x = torch.randn(B, D)
+    y = torch.randint(0, V, (B, H))
     print(f"loss: {moe(x, y).loss}")

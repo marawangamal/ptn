@@ -48,7 +48,7 @@ def log_prob_moe(
     return torch.logsumexp(lsm_alpha + lsm_cp_cores, dim=-1)
 
 
-log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, None, None))
+log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0, None))
 
 
 class MoEProjector(AbstractDisributionHead):
@@ -91,8 +91,14 @@ class MoEProjector(AbstractDisributionHead):
 
         # === params
         self.w_alpha = torch.nn.Linear(D, R)
-        self.cp_params = torch.nn.Parameter(torch.randn(R, H, D))
+        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, D, D))
+        self._b_cp_params = torch.nn.Parameter(torch.randn(R, H, D))
         self.decoder = torch.nn.Parameter(torch.randn(V, D))
+
+    def w_cp_params(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.einsum(
+            "be,rhed->brhd", x, self._w_cp_params
+        ) + self._b_cp_params.unsqueeze(0)
 
     def freeze_decoder(self):
         raise NotImplementedError("freeze_decoder not implemented")
@@ -115,7 +121,7 @@ class MoEProjector(AbstractDisributionHead):
             # filter out entire sample if any of the H y vals are ignore_index
             mask = (y != ignore_index).all(dim=-1)  # (B,)
             alpha_tilde = self.w_alpha(x[mask])  # (B, R)
-            p_dists_tilde = self.cp_params  # (R, H, D)
+            p_dists_tilde = self.w_cp_params(x[mask])
             loss = -log_prob_moe_batched(
                 y[mask],  # (B, H)
                 alpha_tilde,
@@ -131,7 +137,7 @@ class MoEProjector(AbstractDisributionHead):
 
 
 if __name__ == "__main__":
-    H, R, D, V = 3, 2, 4, 30000
+    H, R, D, V = 8, 4, 512, 30000
     moe = MoEProjector(
         AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V)
     )

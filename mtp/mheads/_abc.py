@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 import torch
+import warnings
+
+from mtp.mheads._utils import window_input_ids
 
 
 @dataclass
@@ -10,6 +13,8 @@ class AbstractDisributionHeadConfig:
     d_output: int  # e.g. vocab size
     horizon: int
     rank: int
+    n_feats: int = 1
+    pool_method: str = "mean"  # "mean" or "linear"
 
 
 @dataclass
@@ -24,6 +29,21 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
     def __init__(self, config: AbstractDisributionHeadConfig):
         super().__init__()
         self.config = config
+        self.feat_proj = None
+        if config.n_feats > 1:
+            if config.pool_method == "linear":
+                self.feat_proj = torch.nn.Linear(
+                    config.d_model * config.n_feats, config.d_model
+                )
+            else:
+                # issue a warning
+                warnings.warn(
+                    f"Using pool_method='{config.pool_method}' with n_feats={config.n_feats}. "
+                    "This may not be the intended behavior. Consider using pool_method='linear' "
+                    "for better feature projection control.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     @abstractmethod
     def set_output_embeddings(self, new_embeddings: torch.Tensor):
@@ -52,3 +72,79 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             AbstractDisributionHeadOutput: Output of the head.
         """
         pass
+
+    def _get_loss(
+        self,
+        y,
+        z,
+        use_memory_efficient_loss: bool = True,
+        window_shift: int = 1,
+        ignore_index: int = -100,
+    ):
+        """Compute mhead loss.
+
+        Args:
+            y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
+            z (torch.Tensor): Hidden state tensor. Should be of shape (B, T-H, D).
+            use_memory_efficient_loss (bool, optional): Whether to use memory efficient loss. Defaults to True.
+            window_shift (int, optional): The number of steps to shift the window. Defaults to 1. See example in `window_input_ids` docstring.
+
+        Returns:
+            torch.Tensor: loss
+        """
+
+        B, T = y.shape
+        H_, D = min(self.config.horizon, z.size(1)), z.size(-1)
+
+        # Create targets
+        # Shape: (B, T) -> (B, T, H)
+        yw = window_input_ids(
+            y,
+            horizon=H_,
+            shift=window_shift,
+            ignore_index=-100,  # used to mask positions beyond seq length
+        )
+
+        # Sub-sample for memory efficiency
+        if use_memory_efficient_loss and self.config.horizon > 1:
+            offset = torch.randint(0, H_, (1,)).item()
+            z = z[:, offset::H_]
+            yw = yw[:, offset::H_]
+
+        # Merge batch and sequence dims
+        z = z.reshape(-1, D)  # (BT, D)
+        yw = yw.reshape(-1, H_)  # (BT, H)
+        output = self(z, yw, ignore_index=ignore_index)
+        loss = output.loss.mean()
+        return loss
+
+    def get_loss_from_hidden_states(
+        self,
+        z: torch.Tensor,
+        y: torch.Tensor,
+        use_memory_efficient_loss: bool = True,
+        window_shift: int = 1,
+        ignore_index: int = -100,
+    ):
+        """Get loss from hidden states.
+
+        Args:
+            z (torch.Tensor): Hidden states. Shape: (B, T, L, D). Note: L is the hidden state layer index.
+            y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
+                If you want to use shifted targets, use `window_input_ids` to create the targets.
+            use_memory_efficient_loss (bool, optional): Whether to use memory efficient loss. Defaults to True.
+            window_shift (int, optional): The number of steps to shift the window. Defaults to 1. See example in `window_input_ids` docstring.
+            ignore_index (int, optional): The index to ignore. Defaults to -100.
+        """
+        B, T, L, D = z.shape
+        if self.feat_proj is not None:
+            z_prime = self.feat_proj(z.reshape(B, T, -1))  # (B, T, D)
+        else:
+            z_prime = z.mean(dim=-2)  # (B, T, D)
+        return self._get_loss(
+            y,
+            z_prime,
+            use_memory_efficient_loss=use_memory_efficient_loss,
+            window_shift=window_shift,
+            ignore_index=ignore_index,
+        )
