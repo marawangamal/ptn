@@ -13,7 +13,7 @@ sns.set_theme()
 
 
 def run_train(
-    mt_name, batch_size, horizon, rank, d_model, d_output, add_loss_dict=False
+    mt_name, batch_size, horizon, rank, d_model, d_output, add_loss_dict=False, lr=1e-3
 ):
     """Test if CP distribution can recover a target distribution on small scale."""
     import torch.optim as optim
@@ -33,7 +33,7 @@ def run_train(
 
     log_dict = defaultdict(list)
 
-    optimizer = optim.AdamW(mt_head.parameters(), lr=1e-3)
+    optimizer = optim.AdamW(mt_head.parameters(), lr=lr)
     for i in range(n_iters):
         optimizer.zero_grad()
 
@@ -108,19 +108,20 @@ def plot_training_metrics(
 
 
 if __name__ == "__main__":
+    lr = 1e-4
     configs = (
-        # [
-        #     {
-        #         "mt_name": "moe",
-        #         "batch_size": 32,
-        #         "horizon": h,
-        #         "rank": r,
-        #         "d_model": 512,
-        #         "d_output": 100,
-        #     }
-        #     for r, h in itertools.product([2, 4, 8], [2, 4, 8])
-        # ]
         [
+            {
+                "mt_name": "moe",
+                "batch_size": 32,
+                "horizon": h,
+                "rank": r,
+                "d_model": 512,
+                "d_output": 100,
+            }
+            for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+        ]
+        + [
             {
                 "mt_name": "moe_proj",
                 "batch_size": 32,
@@ -131,23 +132,34 @@ if __name__ == "__main__":
             }
             for r, h in itertools.product([2, 4, 8], [2, 4, 8])
         ]
-        # + [
-        #     {
-        #         "mt_name": "cp",
-        #         "batch_size": 32,
-        #         "horizon": h,
-        #         "rank": r,
-        #         "d_model": 512,
-        #         "d_output": 100,
-        #     }
-        #     for r, h in itertools.product([2, 4, 8], [2, 4, 8])
-        # ]
+        + [
+            {
+                "mt_name": "cp",
+                "batch_size": 32,
+                "horizon": h,
+                "rank": r,
+                "d_model": 512,
+                "d_output": 100,
+            }
+            for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+        ]
+        + [
+            {
+                "mt_name": "multihead",
+                "batch_size": 32,
+                "horizon": h,
+                "rank": 1,
+                "d_model": 512,
+                "d_output": 100,
+            }
+            for h in [2, 4, 8]
+        ]
     )
 
     log_dicts = []
     for config in configs:
-        log_dict = run_train(**config)
+        log_dict = run_train(**config, lr=lr)
         log_dicts.append(log_dict)
 
     # concat all log_dicts into a single dataframe
-    plot_training_metrics(log_dicts)
+    plot_training_metrics(log_dicts, save_path=f"results/plots/train_mhead_lr{lr}.png")

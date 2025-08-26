@@ -77,7 +77,7 @@ class MoE(AbstractDisributionHead):
         )
 
         # === params
-        self._w_alpha = torch.nn.Linear(D, R)
+        self.w_alpha = torch.nn.Linear(D, R)
         self.cp_params = torch.nn.Parameter(torch.randn(R, H, D))
         self.decoder = torch.nn.Parameter(torch.randn(V, D))
 
