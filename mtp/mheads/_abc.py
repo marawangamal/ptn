@@ -35,6 +35,11 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
                 self.feat_proj = torch.nn.Linear(
                     config.d_model * config.n_feats, config.d_model
                 )
+                # init such that first col is ones and rest are zeros
+                self.feat_proj.weight.data[:, config.d_model] = torch.eye(
+                    config.d_model, config.d_model
+                )
+
             else:
                 # issue a warning
                 warnings.warn(
@@ -137,6 +142,10 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             ignore_index (int, optional): The index to ignore. Defaults to -100.
         """
         B, T, L, D = z.shape
+        assert (
+            L == self.config.n_feats
+        ), f"Incorrect number of hidden state layers. Expected {self.config.n_feats} but got {L}."
+
         if self.feat_proj is not None:
             z_prime = self.feat_proj(z.reshape(B, T, -1))  # (B, T, D)
         else:
