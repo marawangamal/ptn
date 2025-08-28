@@ -100,6 +100,7 @@ class MoE(AbstractDisributionHead):
         ignore_index: int = -100,
     ):
 
+        B, H, V = x.shape[0], self.config.horizon, self.config.d_output
         loss = None
         if y is not None:
             B, H = y.shape
