@@ -33,6 +33,9 @@ def log_prob_moe(
     # NOTE: Can trade-off memory/speed here. Instead of loop can do in parallel but
     # would use O(BRDV) memory vs O(BRV)
     # Map: (R, H, D) -> (R, H, V) -> (R, H, 1) -> (R,)
+    # Intermediate shapes:
+    # - (B, R, D), (V, D) -> (B, R, V)
+    # - (B, R, V), (B, H) -> (B, R, H)
     lsm_cp_cores = torch.stack(
         [
             torch.log_softmax(
