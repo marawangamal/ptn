@@ -43,6 +43,7 @@ class STP(AbstractDisributionHead):
             loss = torch.nn.functional.cross_entropy(
                 logits, y.reshape(-1), ignore_index=ignore_index
             )
+            B, H = y.shape
             logits = logits.reshape(B, 1, -1)  # (B, H, V) here h=1
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
 

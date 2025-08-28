@@ -99,9 +99,10 @@ class MoE(AbstractDisributionHead):
         y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
     ):
-        B, H = y.shape
+
         loss = None
         if y is not None:
+            B, H = y.shape
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
             mask = (y != ignore_index).all(dim=-1)  # (B,)
