@@ -56,6 +56,7 @@ class EAGLE(AbstractDisributionHead):
         Returns:
             AbstractDisributionHeadOutput:
         """
+        B = x.shape[0]
         loss = None
         if y is not None:
             z = torch.cat(
