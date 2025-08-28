@@ -93,7 +93,8 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
 
         Returns:
-            torch.Tensor: loss
+            - loss: (1,)
+            - logits: (B, T, H, V)
         """
 
         B, T, D = z.shape
@@ -121,9 +122,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         yw = yw.reshape(-1, H_) if yw is not None else None  # (BT, H)
         output = self(z, yw, ignore_index=ignore_index)
         loss = output.loss.mean()  # (1,)
-        logits = (
-            output.logits
-        )  # should be of shape (B, V) but left for subclasses to implement
+        logits = output.logits.reshape(B, T, H_, -1)
         return AbstractDisributionHeadOutput(loss=loss, logits=logits)
 
     def get_loss_and_logits(

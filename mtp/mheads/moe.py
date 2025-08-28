@@ -99,6 +99,7 @@ class MoE(AbstractDisributionHead):
         y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
     ):
+        B, H = y.shape
         loss = None
         if y is not None:
             # NOTE: this is not optimal, as it will over-filter samples
@@ -111,10 +112,10 @@ class MoE(AbstractDisributionHead):
                 alpha_tilde,
                 p_dists_tilde,
                 self.decoder,
-            ).mean() * (1 / self.config.horizon)
+            ).mean() * (1 / H)
 
         return AbstractDisributionHeadOutput(
-            logits=torch.tensor(-1),
+            logits=torch.randn(B, H, V),
             loss=loss,
             loss_dict={},
         )
