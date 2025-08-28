@@ -22,7 +22,6 @@ class CP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
-        self.a = torch.nn.Parameter(torch.randn(config.rank))
         self.w = torch.nn.Parameter(
             torch.randn(config.rank, config.horizon, config.d_model, config.d_model)
         )
@@ -137,6 +136,17 @@ class CP(AbstractDisributionHead):
             loss=loss,
             loss_dict=loss_dict,
         )
+
+    def generate(self, x: torch.Tensor):
+        """Generate a sequence of length H from the model.
+
+        Args:
+            x (torch.Tensor): Input features. Shape: (B, D)
+
+        Returns:
+            y (torch.Tensor): Generated sequence. Shape: (B, H)
+        """
+        pass
 
 
 def run_test():

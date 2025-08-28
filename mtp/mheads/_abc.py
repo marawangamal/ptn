@@ -78,7 +78,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         """
         pass
 
-    def _get_loss(
+    def get_loss_and_logits(
         self,
         y,
         z,
@@ -90,7 +90,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
 
         Args:
             y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
-            z (torch.Tensor): Hidden state tensor. Should be of shape (B, T-H, D).
+            z (torch.Tensor): Hidden state tensor. Should be of shape (B, T, D).
             use_memory_efficient_loss (bool, optional): Whether to use memory efficient loss. Defaults to True.
             window_shift (int, optional): The number of steps to shift the window. Defaults to 1. See example in `window_input_ids` docstring.
 
@@ -121,9 +121,9 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         yw = yw.reshape(-1, H_)  # (BT, H)
         output = self(z, yw, ignore_index=ignore_index)
         loss = output.loss.mean()
-        return loss
+        return loss, output.logits
 
-    def get_loss_from_hidden_states(
+    def get_loss_and_logits_from_hidden_state(
         self,
         z: torch.Tensor,
         y: torch.Tensor,
@@ -150,7 +150,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             z_prime = self.feat_proj(z.reshape(B, T, -1))  # (B, T, D)
         else:
             z_prime = z.mean(dim=-2)  # (B, T, D)
-        return self._get_loss(
+        return self.get_loss_and_logits(
             y,
             z_prime,
             use_memory_efficient_loss=use_memory_efficient_loss,
