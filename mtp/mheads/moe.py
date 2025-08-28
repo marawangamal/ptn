@@ -121,8 +121,15 @@ class MoE(AbstractDisributionHead):
 
 
 if __name__ == "__main__":
-    B, H, R, D, V = 2, 1, 1, 512, 30000
+    # B, H, R, D, V = 2, 1, 1, 512, 30000
+    # moe = MoE(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
+    # x = torch.randn(B, D)
+    # y = torch.randint(0, V, (B, H))
+    # print(f"loss: {moe(x, y).loss}")
+
+    # Test forward_seq
+    B, T, H, R, D, V = 2, 32, 1, 1, 512, 30000
     moe = MoE(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
-    x = torch.randn(B, D)
-    y = torch.randint(0, V, (B, H))
-    print(f"loss: {moe(x, y).loss}")
+    x = torch.randn(B, T, D)
+    y = torch.randint(0, V, (B, T))
+    print(f"loss: {moe.forward_seq(x, y).loss}")

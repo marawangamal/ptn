@@ -78,6 +78,54 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         """
         pass
 
+    def forward_seq(
+        self,
+        z: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        use_memory_efficient_loss: bool = True,
+        window_shift: int = 1,
+        ignore_index: int = -100,
+    ) -> AbstractDisributionHeadOutput:
+        """Forward pass for sequence data.
+
+        Args:
+            z (torch.Tensor): Input features. Shape: (B, T, D)
+            y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
+
+        Returns:
+            torch.Tensor: loss
+        """
+
+        B, T, D = z.shape
+        H_ = min(self.config.horizon, z.size(1))
+
+        # Create targets
+        # Shape: (B, T) -> (B, T, H)
+        yw = None
+        if y is not None:
+            yw = window_input_ids(
+                y,
+                horizon=H_,
+                shift=window_shift,
+                ignore_index=-100,  # used to mask positions beyond seq length
+            )
+
+            # Sub-sample for memory efficiency
+            if use_memory_efficient_loss and self.config.horizon > 1:
+                offset = torch.randint(0, H_, (1,)).item()
+                z = z[:, offset::H_]
+                yw = yw[:, offset::H_]
+
+        # Merge batch and sequence dims
+        z = z.reshape(-1, D)  # (BT, D)
+        yw = yw.reshape(-1, H_) if yw is not None else None  # (BT, H)
+        output = self(z, yw, ignore_index=ignore_index)
+        loss = output.loss.mean()  # (1,)
+        logits = (
+            output.logits
+        )  # should be of shape (B, V) but left for subclasses to implement
+        return AbstractDisributionHeadOutput(loss=loss, logits=logits)
+
     def get_loss_and_logits(
         self,
         y,
