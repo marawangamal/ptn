@@ -121,7 +121,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         z = z.reshape(-1, D)  # (BT, D)
         yw = yw.reshape(-1, H_) if yw is not None else None  # (BT, H)
         output = self(z, yw, ignore_index=ignore_index)
-        loss = output.loss.mean()  # (1,)
+        loss = output.loss.mean() if output.loss is not None else None
         logits = output.logits.reshape(B, T, H_, -1)
         return AbstractDisributionHeadOutput(loss=loss, logits=logits)
 
