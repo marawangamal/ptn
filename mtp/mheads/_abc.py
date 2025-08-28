@@ -96,8 +96,6 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             - loss: (1,)
             - logits: (B, T, H, V)
         """
-
-        B, T, D = z.shape
         H_ = min(self.config.horizon, z.size(1))
 
         # Create targets
@@ -118,6 +116,8 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
                 yw = yw[:, offset::H_]
 
         # Merge batch and sequence dims
+        B, T, D = z.shape
+
         z = z.reshape(-1, D)  # (BT, D)
         yw = yw.reshape(-1, H_) if yw is not None else None  # (BT, H)
         output = self(z, yw, ignore_index=ignore_index)

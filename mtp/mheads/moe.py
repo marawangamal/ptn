@@ -124,6 +124,7 @@ class MoE(AbstractDisributionHead):
 
 
 if __name__ == "__main__":
+    pass
     # B, H, R, D, V = 2, 1, 1, 512, 30000
     # moe = MoE(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
     # x = torch.randn(B, D)
