@@ -68,7 +68,7 @@ class CP(AbstractDisributionHead):
         H_ = 1 if y is None else self.config.horizon
         B, R, V = x.size(0), self.config.rank, self.config.d_output
         loss = None
-        logits = torch.zeros(B, self.config.d_output, device=x.device)
+        logits = torch.zeros(B, 1, self.config.d_output, device=x.device)
 
         if y is not None:
             params = self.get_cp_params(x)  # (B, R, H, V)

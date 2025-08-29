@@ -109,12 +109,13 @@ class MoE(AbstractDisributionHead):
             mask = (y != ignore_index).all(dim=-1)  # (B,)
             alpha_tilde = self.w_alpha(x[mask])  # (B, R)
             p_dists_tilde = self.cp_params  # (R, H, D)
-            loss = -log_prob_moe_batched(
-                y[mask],  # (B, H)
-                alpha_tilde,
-                p_dists_tilde,
-                self.decoder,
-            ).mean() * (1 / H)
+            if y[mask].shape[0] > 0:
+                loss = -log_prob_moe_batched(
+                    y[mask],  # (B, H)
+                    alpha_tilde,
+                    p_dists_tilde,
+                    self.decoder,
+                ).mean() * (1 / H)
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),

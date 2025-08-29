@@ -82,7 +82,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         self,
         z: torch.Tensor,
         y: Optional[torch.Tensor] = None,
-        use_memory_efficient_loss: bool = True,
+        use_memory_efficient_loss: bool = False,
         window_shift: int = 1,
         ignore_index: int = -100,
     ) -> AbstractDisributionHeadOutput:
@@ -96,7 +96,13 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             - loss: (1,)
             - logits: (B, T, H, V)
         """
+
+        # Input validation
+        assert len(z.shape) == 3, "z should be (B, T, D)"
+        assert y is None or len(y.shape) == 2, "y should be (B, T)"
+
         H_ = min(self.config.horizon, z.size(1))
+        B_, T_, D_ = z.shape
 
         # Create targets
         # Shape: (B, T) -> (B, T, H)

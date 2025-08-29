@@ -115,6 +115,7 @@ class MoEProjector(AbstractDisributionHead):
         y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
     ):
+        B, H, V = x.shape[0], self.config.horizon, self.config.d_output
         loss = None
         if y is not None:
             # NOTE: this is not optimal, as it will over-filter samples
@@ -130,7 +131,7 @@ class MoEProjector(AbstractDisributionHead):
             ).mean() * (1 / self.config.horizon)
 
         return AbstractDisributionHeadOutput(
-            logits=torch.tensor(-1),
+            logits=torch.randn(B, H, V),
             loss=loss,
             loss_dict={},
         )
