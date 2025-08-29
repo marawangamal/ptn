@@ -51,7 +51,7 @@ def log_prob_moe(
     return torch.logsumexp(lsm_alpha + lsm_cp_cores, dim=-1)
 
 
-log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, None, None))
+log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, None, None))  # type: ignore
 
 
 class MoE(AbstractDisributionHead):
@@ -80,9 +80,10 @@ class MoE(AbstractDisributionHead):
         )
 
         # === params
+        std_fan_in = torch.sqrt(torch.tensor(2.0)) / D**0.5
         self.w_alpha = torch.nn.Linear(D, R)
-        self.cp_params = torch.nn.Parameter(torch.randn(R, H, D))
-        self.decoder = torch.nn.Parameter(torch.randn(V, D))
+        self.cp_params = torch.nn.Parameter(torch.randn(R, H, D) * std_fan_in)
+        self.decoder = torch.nn.Parameter(torch.randn(V, D) * std_fan_in)
 
     def freeze_decoder(self):
         raise NotImplementedError("freeze_decoder not implemented")
@@ -99,11 +100,17 @@ class MoE(AbstractDisributionHead):
         y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
     ):
+        # Input validation
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
+        assert (
+            y is None or y.size(1) == self.config.horizon
+        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
 
-        B, H, V = x.shape[0], self.config.horizon, self.config.d_output
+        B, V = x.shape[0], self.config.d_output
+        H = self.config.horizon
         loss = None
         if y is not None:
-            B, H = y.shape
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
             mask = (y != ignore_index).all(dim=-1)  # (B,)
@@ -113,7 +120,7 @@ class MoE(AbstractDisributionHead):
                 loss = -log_prob_moe_batched(
                     y[mask],  # (B, H)
                     alpha_tilde,
-                    p_dists_tilde,
+                    p_dists_tilde[:, :H],
                     self.decoder,
                 ).mean() * (1 / H)
 

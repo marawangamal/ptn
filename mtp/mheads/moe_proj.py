@@ -48,7 +48,7 @@ def log_prob_moe(
     return torch.logsumexp(lsm_alpha + lsm_cp_cores, dim=-1)
 
 
-log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0, None))
+log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0, None))  # type: ignore
 
 
 class MoEProjector(AbstractDisributionHead):
@@ -89,11 +89,14 @@ class MoEProjector(AbstractDisributionHead):
             self.config.d_output,
         )
 
+        # since w_cp: (D) -> (R, H, D) i.e. fan in is D
+        std_fan_in = torch.sqrt(torch.tensor(2.0)) / D**0.5
+
         # === params
         self.w_alpha = torch.nn.Linear(D, R)
-        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, D, D))
+        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, D, D) * std_fan_in)
         self._b_cp_params = torch.nn.Parameter(torch.randn(R, H, D))
-        self.decoder = torch.nn.Parameter(torch.randn(V, D))
+        self.decoder = torch.nn.Parameter(torch.randn(V, D) * std_fan_in)
 
     def w_cp_params(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum(
@@ -115,20 +118,29 @@ class MoEProjector(AbstractDisributionHead):
         y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
     ):
-        B, H, V = x.shape[0], self.config.horizon, self.config.d_output
+        # Input validation
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
+        assert (
+            y is None or y.size(1) == self.config.horizon
+        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
+
+        B, V = x.shape[0], self.config.d_output
+        H = self.config.horizon
         loss = None
         if y is not None:
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
             mask = (y != ignore_index).all(dim=-1)  # (B,)
             alpha_tilde = self.w_alpha(x[mask])  # (B, R)
-            p_dists_tilde = self.w_cp_params(x[mask])
-            loss = -log_prob_moe_batched(
-                y[mask],  # (B, H)
-                alpha_tilde,
-                p_dists_tilde,
-                self.decoder,
-            ).mean() * (1 / self.config.horizon)
+            p_dists_tilde = self.w_cp_params(x[mask])  # (B, R, H, D)
+            if y[mask].shape[0] > 0:
+                loss = -log_prob_moe_batched(
+                    y[mask],  # (B, H)
+                    alpha_tilde,
+                    p_dists_tilde,
+                    self.decoder,
+                ).mean() * (1 / H)
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),

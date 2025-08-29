@@ -109,6 +109,8 @@ def plot_training_metrics(
 
 if __name__ == "__main__":
     lr = 1e-3
+    d_model = 512
+    d_output = 10_1000
     configs = (
         [
             {
@@ -116,10 +118,10 @@ if __name__ == "__main__":
                 "batch_size": 32,
                 "horizon": h,
                 "rank": r,
-                "d_model": 512,
-                "d_output": 100,
+                "d_model": d_model,
+                "d_output": d_output,
             }
-            for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+            for r, h, seed in itertools.product([2, 4, 8], [2, 4, 8], [0])
         ]
         + [
             {
@@ -127,10 +129,10 @@ if __name__ == "__main__":
                 "batch_size": 32,
                 "horizon": h,
                 "rank": r,
-                "d_model": 512,
-                "d_output": 100,
+                "d_model": d_model,
+                "d_output": d_output,
             }
-            for r, h in itertools.product([2, 4, 8], [2, 4, 8])
+            for r, h, seed in itertools.product([2, 4, 8], [2, 4, 8], [0])
         ]
         # + [
         #     {

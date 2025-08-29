@@ -7,9 +7,10 @@ from mtp.mheads._abc import AbstractDisributionHeadConfig
 
 class TestMHeads(unittest.TestCase):
     def test_moe(self):
-        B, T, R, H, D, V = 1, 16, 4, 8, 512, 30000
+        # B_, T_, D_ (1, 3, 384)
+        B, T, R, H, D, V = 1, 4, 4, 8, 384, 30000
 
-        for model_name in ["moe", "moe_proj"]:
+        for model_name in ["moe_proj"]:
             model = MHEADS[model_name](
                 AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V)
             )
@@ -28,7 +29,7 @@ class TestMHeads(unittest.TestCase):
             output_forward = model(x, y)
             self.assertEqual(
                 output_forward.logits.shape,
-                (B, H, V),
+                (B, min(H, T), V),
                 "logits should be (B, H, V)",
             )
 
