@@ -22,8 +22,17 @@ class CP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
+        H, R, D, V = (
+            config.horizon,
+            config.rank,
+            config.d_model,
+            config.d_output,
+        )
+
+        std_fan_in = torch.sqrt(torch.tensor(2.0)) / D**0.5
         self.w = torch.nn.Parameter(
             torch.randn(config.rank, config.horizon, config.d_model, config.d_model)
+            * std_fan_in
         )
         self.decoder = nn.Linear(config.d_model, config.d_output)
 

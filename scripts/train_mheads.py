@@ -13,14 +13,22 @@ sns.set_theme()
 
 
 def run_train(
-    mt_name, batch_size, horizon, rank, d_model, d_output, add_loss_dict=False, lr=1e-3
+    mt_name,
+    batch_size,
+    horizon,
+    rank,
+    d_model,
+    d_output,
+    add_loss_dict=False,
+    lr=1e-3,
+    seed=42,
 ):
     """Test if CP distribution can recover a target distribution on small scale."""
     import torch.optim as optim
 
     # set seed
-    torch.manual_seed(42)
-    random.seed(42)
+    torch.manual_seed(seed)
+    random.seed(seed)
 
     # Training parameters
     n_iters = 100
@@ -109,8 +117,8 @@ def plot_training_metrics(
 
 if __name__ == "__main__":
     lr = 1e-3
-    d_model = 512
-    d_output = 10_1000
+    d_model = 128
+    d_output = 100
     configs = (
         [
             {
@@ -120,7 +128,9 @@ if __name__ == "__main__":
                 "rank": r,
                 "d_model": d_model,
                 "d_output": d_output,
+                "seed": seed,
             }
+            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
             for r, h, seed in itertools.product([2, 4, 8], [2, 4, 8], [0])
         ]
         + [
@@ -131,20 +141,24 @@ if __name__ == "__main__":
                 "rank": r,
                 "d_model": d_model,
                 "d_output": d_output,
+                "seed": seed,
             }
+            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
             for r, h, seed in itertools.product([2, 4, 8], [2, 4, 8], [0])
         ]
-        # + [
-        #     {
-        #         "mt_name": "cp",
-        #         "batch_size": 32,
-        #         "horizon": h,
-        #         "rank": r,
-        #         "d_model": 512,
-        #         "d_output": 100,
-        #     }
-        #     for r, h in itertools.product([2, 4, 8], [2, 4, 8])
-        # ]
+        + [
+            {
+                "mt_name": "cp",
+                "batch_size": 32,
+                "horizon": h,
+                "rank": r,
+                "d_model": 512,
+                "d_output": 100,
+                "seed": seed,
+            }
+            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
+            for r, h, seed in itertools.product([2, 4, 8], [2, 4, 8], [0])
+        ]
         # + [
         #     {
         #         "mt_name": "multihead",
