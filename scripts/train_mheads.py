@@ -1,7 +1,11 @@
+from ast import Str
 from collections import defaultdict
 import itertools
 import random
+import time
+from typing import Callable, Optional
 import torch
+import torch.optim as optim
 import torch.utils.data as data
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -57,9 +61,14 @@ def get_param_norm(params):
     ).item()
 
 
+def evaluate(model, val_dataloader):
+    pass
+
+
 def run_train(
     model,
-    dataloader,
+    train_dataloader,
+    val_dataloader,
     add_loss_dict=False,
     lr=1e-3,
     seed=42,
@@ -68,7 +77,6 @@ def run_train(
     **kwargs,
 ):
     """Test if CP distribution can recover a target distribution on small scale."""
-    import torch.optim as optim
 
     # set seed
     torch.manual_seed(seed)
@@ -83,11 +91,13 @@ def run_train(
     optimizer = optim.AdamW(mt_head.parameters(), lr=lr)
     mt_head.to(device)
 
+    start_time = time.time()
+
     iteration = 0
     for epoch in range(epochs):
         mt_head.train()
 
-        for batch_idx, (x, y) in enumerate(dataloader):
+        for batch_idx, (x, y) in enumerate(train_dataloader):
             optimizer.zero_grad()
 
             x = x.to(device)
@@ -119,15 +129,14 @@ def run_train(
                 break
 
         # Print epoch summary
-        if epoch % 5 == 0:
-            epoch_losses = [
-                log_dict["loss"][i]
-                for i, e in enumerate(log_dict["epoch"])
-                if e == epoch
-            ]
-            avg_epoch_loss = (
-                sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0
-            )
+        if epoch % 1 == 0:
+            # epoch_losses = [
+            #     log_dict["loss"][i]
+            #     for i, e in enumerate(log_dict["epoch"])
+            #     if e == epoch
+            # ]
+            # run_eval
+            evaluate(model, val_dataloader)
 
     # Add mt_name to log_dict for tracking
     log_dict["iteration"] = list(range(iteration))
@@ -138,24 +147,26 @@ def run_train(
 
 def plot_training_metrics(
     log_dicts: list[dict],
-    metric_key="loss",
     save_path: str = "results/plots/train_mhead_moe.png",
-    row="horizon",
-    col="rank",
-    hue="name",
-    x="iteration",
+    is_log_metric_fn: Callable[[str], bool] = lambda x: False,
+    reduce_fn: Optional[Callable[[str], str]] = None,  # e.g. "min", "max", "mean"
+    **kwargs,
 ):
     """Plot training metrics using seaborn."""
     df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
-    sns.relplot(
+    g = sns.relplot(
         data=df,
-        kind="line",
-        x=x,
-        y=metric_key,
-        hue=hue,
-        col=col,
-        row=row,
+        **kwargs,
     )
+
+    if reduce_fn is not None and reduce_fn(kwargs["y"]) is not None:
+        x, y = kwargs["x"], kwargs["y"]
+        gp = [c for c in df.columns if c != x]
+        df = df.groupby(gp, as_index=False)[y].agg(reduce_fn(kwargs["y"]))
+
+    if is_log_metric_fn(kwargs["y"]):
+        g.set(yscale="log")
+
     if save_path is not None:
         plt.savefig(save_path, bbox_inches="tight")
         print(f"Saved plot to {save_path}")
@@ -168,22 +179,36 @@ def get_exps(
     horizons=[2, 8, 16, 32, 64],
     seeds=[0, 42, 84],
 ):
-    def get_dataloader(config, num_samples, batch_size):
-        dataset = SyntheticDataset(
-            num_samples=num_samples,
+    def get_dataloaders(config, batch_size, n_train, n_val=100):
+        train_ds = SyntheticDataset(
+            num_samples=n_train,
             d_model=config["mt_kwargs"]["d_model"],
             horizon=config["mt_kwargs"]["horizon"],
             d_output=config["mt_kwargs"]["d_output"],
             seed=config["seed"],
         )
-        dataloader = data.DataLoader(
-            dataset,
+        test_ds = SyntheticDataset(
+            num_samples=n_val,
+            d_model=config["mt_kwargs"]["d_model"],
+            horizon=config["mt_kwargs"]["horizon"],
+            d_output=config["mt_kwargs"]["d_output"],
+            seed=config["seed"],
+        )
+        train_dl = data.DataLoader(
+            train_ds,
             batch_size=batch_size,
             shuffle=True,
             num_workers=0,
             drop_last=True,
         )
-        return dataloader
+        test_dl = data.DataLoader(
+            test_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            drop_last=True,
+        )
+        return train_dl, test_dl
 
     configs = (
         [
@@ -218,182 +243,120 @@ def get_exps(
                 ranks, horizons, seeds, d_models, d_outputs
             )
         ]
-        + [
-            {
-                "name": "cp",
-                "mt_name": "cp",
-                "mt_kwargs": {
-                    "horizon": h,
-                    "rank": r,
-                    "d_model": dm,
-                    "d_output": do,
-                },
-                "seed": s,
-            }
-            for r, h, s, dm, do in itertools.product(
-                ranks, horizons, seeds, d_models, d_outputs
-            )
-        ]
+        # + [
+        #     {
+        #         "name": "cp",
+        #         "mt_name": "cp",
+        #         "mt_kwargs": {
+        #             "horizon": h,
+        #             "rank": r,
+        #             "d_model": dm,
+        #             "d_output": do,
+        #         },
+        #         "seed": s,
+        #     }
+        #     for r, h, s, dm, do in itertools.product(
+        #         ranks, horizons, seeds, d_models, d_outputs
+        #     )
+        # ]
     )
 
-    return configs, get_dataloader
-
-
-# def get_exps_varying_do_dm():
-#     # lr = 1e-3
-#     # d_model = 1024
-#     # d_output = 2_000
-#     # batch_size = 32
-#     # num_samples = 10000
-
-#     # ---------------
-#     # Debug config
-#     rank = 32
-#     horizon = 8
-#     # ---------------
-
-#     def get_dataloader(config, num_samples, batch_size):
-#         dataset = SyntheticDataset(
-#             num_samples=num_samples,
-#             d_model=config["mt_kwargs"]["d_model"],
-#             horizon=config["mt_kwargs"]["horizon"],
-#             d_output=config["mt_kwargs"]["d_output"],
-#             seed=config["seed"],
-#         )
-#         dataloader = data.DataLoader(
-#             dataset,
-#             batch_size=batch_size,
-#             shuffle=True,
-#             num_workers=0,
-#             drop_last=True,
-#         )
-#         return dataloader
-
-#     configs = (
-#         [
-#             {
-#                 "name": "moe",
-#                 "mt_name": "moe",
-#                 "mt_kwargs": {
-#                     "horizon": horizon,
-#                     "rank": rank,
-#                     "d_model": d_model,
-#                     "d_output": d_output,
-#                 },
-#                 "seed": seed,
-#             }
-#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-#             for d_model, d_output, seed in itertools.product(
-#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
-#             )
-#         ]
-#         + [
-#             {
-#                 "name": "moe_proj",
-#                 "mt_name": "moe_proj",
-#                 "mt_kwargs": {
-#                     "horizon": horizon,
-#                     "rank": rank,
-#                     "d_model": d_model,
-#                     "d_output": d_output,
-#                 },
-#                 "seed": seed,
-#             }
-#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-#             for d_model, d_output, seed in itertools.product(
-#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
-#             )
-#         ]
-#         + [
-#             {
-#                 "name": "cp",
-#                 "mt_name": "cp",
-#                 "mt_kwargs": {
-#                     "horizon": horizon,
-#                     "rank": rank,
-#                     "d_model": d_model,
-#                     "d_output": d_output,
-#                 },
-#                 "seed": seed,
-#             }
-#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-#             for d_model, d_output, seed in itertools.product(
-#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
-#             )
-#         ]
-#     )
-
-#     return configs, get_dataloader
+    return configs, get_dataloaders
 
 
 if __name__ == "__main__":
 
-    num_samples = 100
-    batch_size = 8
-    lr = 1e-3
+    BATCH_SIZE = 8
+    LR = 1e-2
+    EPOCHS = 1
+    N_TRAIN = 100
+    N_VAL = 10
 
-    configs, get_dataloader = get_exps(
+    configs, get_dataloaders = get_exps(
+        # -----------------------------
         # 1. For creating single plot aggregated across rank dimension
         # d_models=[128],
         # d_outputs=[1024],
         # ranks=[2, 8, 16, 32, 64],
         # horizons=[2],
         # seeds=[0],
+        # -----------------------------
         # 2. For creating rh grid
         # d_models=[2],
         # d_outputs=[2],
         # ranks=[2, 8, 16, 32, 64],
         # horizons=[2, 8, 16, 32, 64],
         # seeds=[0, 42, 84],
+        # -----------------------------
         # 3. For creating do, dm grid
+        # d_models=[128, 512, 1024, 2048, 4096],
+        # d_outputs=[5000, 10000, 30000],
+        # ranks=[32],
+        # horizons=[4],
+        # seeds=[0, 42, 84],
+        # -----------------------------
+        # 3b. For creating do, dm grid
         d_models=[2],
-        d_outputs=[2],
-        ranks=[2, 8, 16, 32, 64],
-        horizons=[2, 8, 16, 32, 64],
-        seeds=[0, 42, 84],
+        d_outputs=[30],
+        ranks=[8],
+        horizons=[4],
+        seeds=[0],
     )
+    plot_kwargs = {
+        "row": "d_model",
+        "col": "d_output",
+        "hue": "name",
+        "x": "iteration",
+        "kind": "line",
+        "is_log_metric_fn": lambda x: x != "loss",
+        "reduce_fn": lambda x: "mean" if x == "epoch_time" else None,
+    }
 
     log_dicts = []
     pbar = tqdm(configs)
     for config in configs:
-        pbar.set_description(
-            f"{config['mt_name']} | R: {config['mt_kwargs']['rank']} | H: {config['mt_kwargs']['horizon']}"
-        )
+        dstring = f"Dm: {config['mt_kwargs']['d_model']} | Do: {config['mt_kwargs']['d_output']} | R: {config['mt_kwargs']['rank']} | H: {config['mt_kwargs']['horizon']}"
+        pbar.set_description(f"{config['mt_name']} | {dstring}")
 
-        model = MHEADS[config["mt_name"]](
-            AbstractDisributionHeadConfig(**config["mt_kwargs"])
-        )
+        try:
 
-        log_dict = run_train(
-            model=model,
-            dataloader=get_dataloader(config, num_samples, batch_size),
-            lr=lr,
-            epochs=1,
-            **config,
-        )
+            model = MHEADS[config["mt_name"]](
+                AbstractDisributionHeadConfig(**config["mt_kwargs"])
+            )
 
-        log_dict["name"] = config["name"]
-        log_dict["horizon"] = config["mt_kwargs"]["horizon"]
-        log_dict["rank"] = config["mt_kwargs"]["rank"]
-        log_dict["d_model"] = config["mt_kwargs"]["d_model"]
-        log_dict["d_output"] = config["mt_kwargs"]["d_output"]
+            train_dl, val_dl = get_dataloaders(
+                config, batch_size=BATCH_SIZE, n_train=N_TRAIN, n_val=N_VAL
+            )
 
-        log_dicts.append(log_dict)
+            start_time = time.time()
+
+            log_dict = run_train(
+                model=model,
+                train_dataloader=train_dl,
+                val_dataloader=val_dl,
+                lr=LR,
+                epochs=EPOCHS,
+                **config,
+            )
+
+            log_dict["name"] = config["name"]
+            log_dict["horizon"] = config["mt_kwargs"]["horizon"]
+            log_dict["rank"] = config["mt_kwargs"]["rank"]
+            log_dict["d_model"] = config["mt_kwargs"]["d_model"]
+            log_dict["d_output"] = config["mt_kwargs"]["d_output"]
+            log_dict["epoch_time"] = (time.time() - start_time) / EPOCHS
+            log_dicts.append(log_dict)
+        except Exception as e:
+            print(f"Error training {config['mt_name']} | {dstring}: {e}")
+            continue
+
         pbar.update()
-        # add description to pbar
 
     # Make plots
-    for metric_key in ["loss", "grad_norm", "param_norm", "logits_norm"]:
-        # plot_training_metrics(
-        #     log_dicts,
-        #     metric_key=metric_key,
-        #     save_path=f"results/plots/train_mhead_{metric_key}_lr{lr}_dm{d_model}_do{d_output}.png",
-        # )
-
+    for metric_key in ["loss", "grad_norm", "param_norm", "logits_norm", "epoch_time"]:
         plot_training_metrics(
             log_dicts,
-            metric_key=metric_key,
-            save_path=f"results/plots/train_mhead_vary_do_dm_{metric_key}.png",
-            row="d_model",
-            col="d_output",
+            y=metric_key,
+            save_path=f"results/plots/train_mhead_{metric_key}_lr_{LR}.png",
+            **plot_kwargs,
         )
