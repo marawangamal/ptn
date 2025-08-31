@@ -51,18 +51,21 @@ def get_grad_norm(params):
     ).item()
 
 
+def get_param_norm(params):
+    return torch.norm(
+        torch.cat([p.view(-1) for p in params if p is not None]), p=2
+    ).item()
+
+
 def run_train(
-    mt_name,
+    model,
     dataloader,
-    horizon,
-    rank,
-    d_model,
-    d_output,
     add_loss_dict=False,
     lr=1e-3,
     seed=42,
     device="cuda" if torch.cuda.is_available() else "cpu",
     epochs=10,
+    **kwargs,
 ):
     """Test if CP distribution can recover a target distribution on small scale."""
     import torch.optim as optim
@@ -73,10 +76,7 @@ def run_train(
 
     # Training parameters
 
-    config = AbstractDisributionHeadConfig(
-        d_model=d_model, d_output=d_output, horizon=horizon, rank=rank
-    )
-    mt_head = MHEADS[mt_name](config)
+    mt_head = model
 
     log_dict = defaultdict(list)
 
@@ -91,7 +91,7 @@ def run_train(
             optimizer.zero_grad()
 
             x = x.to(device)
-            y = y[:, :horizon].to(device)
+            y = y[:, : model.config.horizon].to(device)
 
             out = mt_head(x, y)
             out.loss.backward()
@@ -107,6 +107,8 @@ def run_train(
             # also add grad_norm and loss to log_dict
             log_dict["loss"].append(out.loss.item())
             log_dict["grad_norm"].append(get_grad_norm(mt_head.parameters()))
+            log_dict["param_norm"].append(get_param_norm(mt_head.parameters()))
+            log_dict["logits_norm"].append(out.logits.norm().item())
             log_dict["epoch"].append(epoch)
             log_dict["batch"].append(batch_idx)
 
@@ -128,10 +130,7 @@ def run_train(
             )
 
     # Add mt_name to log_dict for tracking
-    log_dict["mt_name"] = mt_name
     log_dict["iteration"] = list(range(iteration))
-    log_dict["horizon"] = horizon
-    log_dict["rank"] = rank
 
     # Plot training metrics using seaborn
     return log_dict
@@ -144,20 +143,12 @@ def plot_training_metrics(
 ):
     """Plot training metrics using seaborn."""
     df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
-
-    # Melt excluding mt_name from value columns
-    # melt_df = df.melt(
-    #     id_vars=["iteration", "mt_name", "horizon"],
-    #     var_name="metric",
-    #     value_name="value",
-    # )
-
     sns.relplot(
         data=df,
         kind="line",
         x="iteration",
         y=metric_key,
-        hue="mt_name",
+        hue="name",
         col="rank",
         row="horizon",
     )
@@ -172,6 +163,14 @@ if __name__ == "__main__":
     d_output = 2_000
     batch_size = 32
     num_samples = 10000
+
+    # ---------------
+    # Debug config
+    d_model = 4
+    d_output = 8
+    num_samples = 100
+    batch_size = 8
+    # ---------------
 
     # Create dataloader once to be reused
     dataset = SyntheticDataset(
@@ -193,11 +192,14 @@ if __name__ == "__main__":
     configs = (
         [
             {
+                "name": "moe",
                 "mt_name": "moe",
-                "horizon": h,
-                "rank": r,
-                "d_model": d_model,
-                "d_output": d_output,
+                "mt_kwargs": {
+                    "horizon": h,
+                    "rank": r,
+                    "d_model": d_model,
+                    "d_output": d_output,
+                },
                 "seed": seed,
             }
             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
@@ -207,11 +209,14 @@ if __name__ == "__main__":
         ]
         + [
             {
+                "name": "moe_proj",
                 "mt_name": "moe_proj",
-                "horizon": h,
-                "rank": r,
-                "d_model": d_model,
-                "d_output": d_output,
+                "mt_kwargs": {
+                    "horizon": h,
+                    "rank": r,
+                    "d_model": d_model,
+                    "d_output": d_output,
+                },
                 "seed": seed,
             }
             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
@@ -221,11 +226,14 @@ if __name__ == "__main__":
         ]
         + [
             {
+                "name": "cp",
                 "mt_name": "cp",
-                "horizon": h,
-                "rank": r,
-                "d_model": 512,
-                "d_output": 100,
+                "mt_kwargs": {
+                    "horizon": h,
+                    "rank": r,
+                    "d_model": d_model,
+                    "d_output": d_output,
+                },
                 "seed": seed,
             }
             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
@@ -233,36 +241,61 @@ if __name__ == "__main__":
                 [2, 8, 16, 32], [2, 8, 16, 32], [0, 42, 84]
             )
         ]
-        # + [
-        #     {
-        #         "mt_name": "multihead",
-        #         "horizon": h,
-        #         "rank": 1,
-        #         "d_model": 512,
-        #         "d_output": 100,
-        #     }
-        #     for h in [2, 4, 8]
-        # ]
     )
 
     log_dicts = []
     pbar = tqdm(configs)
     for config in configs:
         pbar.set_description(
-            f"{config['mt_name']} | R: {config['rank']} | H: {config['horizon']}"
+            f"{config['mt_name']} | R: {config['mt_kwargs']['rank']} | H: {config['mt_kwargs']['horizon']}"
         )
-        log_dict = run_train(**config, lr=lr, dataloader=dataloader, epochs=1)
+
+        model = MHEADS[config["mt_name"]](
+            AbstractDisributionHeadConfig(**config["mt_kwargs"])
+        )
+
+        log_dict = run_train(
+            model=model,
+            dataloader=dataloader,
+            lr=lr,
+            epochs=1,
+            **config,
+        )
+
+        log_dict["name"] = config["name"]
+        log_dict["horizon"] = config["mt_kwargs"]["horizon"]
+        log_dict["rank"] = config["mt_kwargs"]["rank"]
+
         log_dicts.append(log_dict)
         pbar.update()
         # add description to pbar
+
+    # Make plots
+    for metric_key in ["loss", "grad_norm", "param_norm", "logits_norm"]:
+        plot_training_metrics(
+            log_dicts,
+            metric_key=metric_key,
+            save_path=f"results/plots/train_mhead_{metric_key}_lr{lr}_dm{d_model}_do{d_output}.png",
+        )
+
     # concat all log_dicts into a single dataframe
-    plot_training_metrics(
-        log_dicts,
-        metric_key="loss",
-        save_path=f"results/plots/train_mhead_loss_lr{lr}_dm{d_model}_do{d_output}.png",
-    )
-    plot_training_metrics(
-        log_dicts,
-        metric_key="grad_norm",
-        save_path=f"results/plots/train_mhead_grad_norm_lr{lr}_dm{d_model}_do{d_output}.png",
-    )
+    # plot_training_metrics(
+    #     log_dicts,
+    #     metric_key="loss",
+    #     save_path=f"results/plots/train_mhead_loss_lr{lr}_dm{d_model}_do{d_output}.png",
+    # )
+    # plot_training_metrics(
+    #     log_dicts,
+    #     metric_key="grad_norm",
+    #     save_path=f"results/plots/train_mhead_grad_norm_lr{lr}_dm{d_model}_do{d_output}.png",
+    # )
+    # plot_training_metrics(
+    #     log_dicts,
+    #     metric_key="param_norm",
+    #     save_path=f"results/plots/train_mhead_param_norm_lr{lr}_dm{d_model}_do{d_output}.png",
+    # )
+    # plot_training_metrics(
+    #     log_dicts,
+    #     metric_key="logits_norm",
+    #     save_path=f"results/plots/train_mhead_logits_norm_lr{lr}_dm{d_model}_do{d_output}.png",
+    # )
