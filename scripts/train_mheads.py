@@ -140,54 +140,50 @@ def plot_training_metrics(
     log_dicts: list[dict],
     metric_key="loss",
     save_path: str = "results/plots/train_mhead_moe.png",
+    row="horizon",
+    col="rank",
+    hue="name",
+    x="iteration",
 ):
     """Plot training metrics using seaborn."""
     df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
     sns.relplot(
         data=df,
         kind="line",
-        x="iteration",
+        x=x,
         y=metric_key,
-        hue="name",
-        col="rank",
-        row="horizon",
+        hue=hue,
+        col=col,
+        row=row,
     )
     if save_path is not None:
         plt.savefig(save_path, bbox_inches="tight")
         print(f"Saved plot to {save_path}")
 
 
-if __name__ == "__main__":
-    lr = 1e-3
-    d_model = 1024
-    d_output = 2_000
-    batch_size = 32
-    num_samples = 10000
-
-    # ---------------
-    # Debug config
-    d_model = 4
-    d_output = 8
-    num_samples = 100
-    batch_size = 8
-    # ---------------
-
-    # Create dataloader once to be reused
-    dataset = SyntheticDataset(
-        num_samples=num_samples,
-        d_model=d_model,
-        horizon=32,  # Use max horizon for dataset
-        d_output=d_output,
-        seed=42,
-    )
-
-    dataloader = data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
-        drop_last=True,
-    )
+def get_exps(
+    d_models=[2],
+    d_outputs=[2],
+    ranks=[2, 8, 16, 32, 64],
+    horizons=[2, 8, 16, 32, 64],
+    seeds=[0, 42, 84],
+):
+    def get_dataloader(config, num_samples, batch_size):
+        dataset = SyntheticDataset(
+            num_samples=num_samples,
+            d_model=config["mt_kwargs"]["d_model"],
+            horizon=config["mt_kwargs"]["horizon"],
+            d_output=config["mt_kwargs"]["d_output"],
+            seed=config["seed"],
+        )
+        dataloader = data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+            drop_last=True,
+        )
+        return dataloader
 
     configs = (
         [
@@ -197,14 +193,13 @@ if __name__ == "__main__":
                 "mt_kwargs": {
                     "horizon": h,
                     "rank": r,
-                    "d_model": d_model,
-                    "d_output": d_output,
+                    "d_model": dm,
+                    "d_output": do,
                 },
-                "seed": seed,
+                "seed": s,
             }
-            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-            for r, h, seed in itertools.product(
-                [2, 8, 16, 32], [2, 8, 16, 32], [0, 42, 84]
+            for r, h, s, dm, do in itertools.product(
+                ranks, horizons, seeds, d_models, d_outputs
             )
         ]
         + [
@@ -214,14 +209,13 @@ if __name__ == "__main__":
                 "mt_kwargs": {
                     "horizon": h,
                     "rank": r,
-                    "d_model": d_model,
-                    "d_output": d_output,
+                    "d_model": dm,
+                    "d_output": do,
                 },
-                "seed": seed,
+                "seed": s,
             }
-            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-            for r, h, seed in itertools.product(
-                [2, 8, 16, 32], [2, 8, 16, 32], [0, 42, 84]
+            for r, h, s, dm, do in itertools.product(
+                ranks, horizons, seeds, d_models, d_outputs
             )
         ]
         + [
@@ -231,16 +225,132 @@ if __name__ == "__main__":
                 "mt_kwargs": {
                     "horizon": h,
                     "rank": r,
-                    "d_model": d_model,
-                    "d_output": d_output,
+                    "d_model": dm,
+                    "d_output": do,
                 },
-                "seed": seed,
+                "seed": s,
             }
-            # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
-            for r, h, seed in itertools.product(
-                [2, 8, 16, 32], [2, 8, 16, 32], [0, 42, 84]
+            for r, h, s, dm, do in itertools.product(
+                ranks, horizons, seeds, d_models, d_outputs
             )
         ]
+    )
+
+    return configs, get_dataloader
+
+
+# def get_exps_varying_do_dm():
+#     # lr = 1e-3
+#     # d_model = 1024
+#     # d_output = 2_000
+#     # batch_size = 32
+#     # num_samples = 10000
+
+#     # ---------------
+#     # Debug config
+#     rank = 32
+#     horizon = 8
+#     # ---------------
+
+#     def get_dataloader(config, num_samples, batch_size):
+#         dataset = SyntheticDataset(
+#             num_samples=num_samples,
+#             d_model=config["mt_kwargs"]["d_model"],
+#             horizon=config["mt_kwargs"]["horizon"],
+#             d_output=config["mt_kwargs"]["d_output"],
+#             seed=config["seed"],
+#         )
+#         dataloader = data.DataLoader(
+#             dataset,
+#             batch_size=batch_size,
+#             shuffle=True,
+#             num_workers=0,
+#             drop_last=True,
+#         )
+#         return dataloader
+
+#     configs = (
+#         [
+#             {
+#                 "name": "moe",
+#                 "mt_name": "moe",
+#                 "mt_kwargs": {
+#                     "horizon": horizon,
+#                     "rank": rank,
+#                     "d_model": d_model,
+#                     "d_output": d_output,
+#                 },
+#                 "seed": seed,
+#             }
+#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
+#             for d_model, d_output, seed in itertools.product(
+#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
+#             )
+#         ]
+#         + [
+#             {
+#                 "name": "moe_proj",
+#                 "mt_name": "moe_proj",
+#                 "mt_kwargs": {
+#                     "horizon": horizon,
+#                     "rank": rank,
+#                     "d_model": d_model,
+#                     "d_output": d_output,
+#                 },
+#                 "seed": seed,
+#             }
+#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
+#             for d_model, d_output, seed in itertools.product(
+#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
+#             )
+#         ]
+#         + [
+#             {
+#                 "name": "cp",
+#                 "mt_name": "cp",
+#                 "mt_kwargs": {
+#                     "horizon": horizon,
+#                     "rank": rank,
+#                     "d_model": d_model,
+#                     "d_output": d_output,
+#                 },
+#                 "seed": seed,
+#             }
+#             # for r, h, seed in itertools.product([8], [8], [0, 42, 84])
+#             for d_model, d_output, seed in itertools.product(
+#                 [2, 8, 16, 32, 64], [2, 8, 16, 32, 64], [0, 42, 84]
+#             )
+#         ]
+#     )
+
+#     return configs, get_dataloader
+
+
+if __name__ == "__main__":
+
+    num_samples = 100
+    batch_size = 8
+    lr = 1e-3
+
+    configs, get_dataloader = get_exps(
+        # 1. For creating single plot aggregated across rank dimension
+        # d_models=[128],
+        # d_outputs=[1024],
+        # ranks=[2, 8, 16, 32, 64],
+        # horizons=[2],
+        # seeds=[0],
+        # 2. For creating rh grid
+        # d_models=[2],
+        # d_outputs=[2],
+        # ranks=[2, 8, 16, 32, 64],
+        # horizons=[2, 8, 16, 32, 64],
+        # seeds=[0, 42, 84],
+        # 3. For creating do, dm grid
+        d_models=[2],
+        d_outputs=[2],
+        ranks=[2, 8, 16, 32, 64],
+        horizons=[2, 8, 16, 32, 64],
+        seeds=[0, 42, 84],
     )
 
     log_dicts = []
@@ -256,7 +366,7 @@ if __name__ == "__main__":
 
         log_dict = run_train(
             model=model,
-            dataloader=dataloader,
+            dataloader=get_dataloader(config, num_samples, batch_size),
             lr=lr,
             epochs=1,
             **config,
@@ -265,6 +375,8 @@ if __name__ == "__main__":
         log_dict["name"] = config["name"]
         log_dict["horizon"] = config["mt_kwargs"]["horizon"]
         log_dict["rank"] = config["mt_kwargs"]["rank"]
+        log_dict["d_model"] = config["mt_kwargs"]["d_model"]
+        log_dict["d_output"] = config["mt_kwargs"]["d_output"]
 
         log_dicts.append(log_dict)
         pbar.update()
@@ -272,30 +384,16 @@ if __name__ == "__main__":
 
     # Make plots
     for metric_key in ["loss", "grad_norm", "param_norm", "logits_norm"]:
+        # plot_training_metrics(
+        #     log_dicts,
+        #     metric_key=metric_key,
+        #     save_path=f"results/plots/train_mhead_{metric_key}_lr{lr}_dm{d_model}_do{d_output}.png",
+        # )
+
         plot_training_metrics(
             log_dicts,
             metric_key=metric_key,
-            save_path=f"results/plots/train_mhead_{metric_key}_lr{lr}_dm{d_model}_do{d_output}.png",
+            save_path=f"results/plots/train_mhead_vary_do_dm_{metric_key}.png",
+            row="d_model",
+            col="d_output",
         )
-
-    # concat all log_dicts into a single dataframe
-    # plot_training_metrics(
-    #     log_dicts,
-    #     metric_key="loss",
-    #     save_path=f"results/plots/train_mhead_loss_lr{lr}_dm{d_model}_do{d_output}.png",
-    # )
-    # plot_training_metrics(
-    #     log_dicts,
-    #     metric_key="grad_norm",
-    #     save_path=f"results/plots/train_mhead_grad_norm_lr{lr}_dm{d_model}_do{d_output}.png",
-    # )
-    # plot_training_metrics(
-    #     log_dicts,
-    #     metric_key="param_norm",
-    #     save_path=f"results/plots/train_mhead_param_norm_lr{lr}_dm{d_model}_do{d_output}.png",
-    # )
-    # plot_training_metrics(
-    #     log_dicts,
-    #     metric_key="logits_norm",
-    #     save_path=f"results/plots/train_mhead_logits_norm_lr{lr}_dm{d_model}_do{d_output}.png",
-    # )
