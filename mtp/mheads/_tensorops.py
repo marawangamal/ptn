@@ -202,7 +202,7 @@ def cp_reduce(
             scale_factors.append(torch.max(res))
             res = res / scale_factors[-1]
     res = res.sum()
-    scale_factors = torch.stack(scale_factors)
+    scale_factors = torch.stack(scale_factors) if scale_factors else torch.empty(0)
 
     # Compute CP tensor value: product over modes, sum over components
     return res, scale_factors
@@ -210,8 +210,8 @@ def cp_reduce(
 
 def cp_reduce_decoder(
     cp_params: torch.Tensor,
-    decoder: torch.Tensor,
     ops: torch.Tensor,
+    decoder: torch.Tensor,
     use_scale_factors=True,
     margin_index=-1,
 ):
@@ -231,7 +231,7 @@ def cp_reduce_decoder(
     # For each mode: marginalize (sum) if ops[h] == -1, else select ops[h]
     marginalize_mask = ops == margin_index  # (H,)
     marginalized = torch.einsum(
-        "rhd,d->rh", cp_params, decoder
+        "rhd,d->rh", cp_params, decoder.sum(dim=-1)
     )  # (R, H) - sum over V dimension
 
     # Gather selected indices (clamp to handle -1 values safely)
@@ -260,7 +260,7 @@ def cp_reduce_decoder(
             scale_factors.append(torch.max(res))
             res = res / scale_factors[-1]
     res = res.sum()
-    scale_factors = torch.stack(scale_factors)
+    scale_factors = torch.stack(scale_factors) if scale_factors else torch.empty(0)
 
     # Compute CP tensor value: product over modes, sum over components
     return res, scale_factors
@@ -270,14 +270,31 @@ def cp_reduce_decoder(
 
 
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
+batch_cp_reduce_decoder = torch.vmap(cp_reduce_decoder, in_dims=(0, 0, None))
 
-if __name__ == "__main__":
-    # batch version
-    B, R, H, V = 2, 3, 4, 5
-    cp_params = torch.randn(B, R, H, V)
+
+def test_batch_cp_reduce_decoder():
+    B, R, H, D, V = 8, 2, 4, 20, 100
+    cp_params_tilde = torch.randn(B, R, H, D)
+    decoder = torch.randn(D, V)
+    cp_params = torch.einsum("brhd,dv->brhv", cp_params_tilde, decoder)
     ops = torch.randint(0, V, (B, H))
-    res_v1, _ = select_margin_cp_tensor_batched(cp_params, ops, use_scale_factors=False)
-    res_v2, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
-
+    res_v1, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
+    res_v2, _ = batch_cp_reduce_decoder(
+        cp_params_tilde, ops, decoder, use_scale_factors=False
+    )
     assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
     print("All tests passed")
+
+
+if __name__ == "__main__":
+    # # batch version
+    # B, R, H, V = 2, 3, 4, 5
+    # cp_params = torch.randn(B, R, H, V)
+    # ops = torch.randint(0, V, (B, H))
+    # res_v1, _ = select_margin_cp_tensor_batched(cp_params, ops, use_scale_factors=False)
+    # res_v2, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
+
+    # assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
+    # print("All tests passed")
+    test_batch_cp_reduce_decoder()
