@@ -8,7 +8,11 @@ from mtp.mheads._abc import (
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads._tensorops import batch_cp_reduce, batch_cp_reduce_decoder
+from mtp.mheads._tensorops import (
+    batch_cp_reduce,
+    batch_cp_reduce_decoder,
+    batch_cp_reduce_decoder_einlse,
+)
 
 
 def print_tens_stats(t: torch.Tensor, name: str):
@@ -42,15 +46,6 @@ class CPProjector(AbstractDisributionHead):
         self.w_cp = torch.nn.Parameter(torch.randn(R, H, Di, Do) * std_fan_in)
         self.b_cp = torch.nn.Parameter(torch.zeros(R, H, Do) * std_fan_in)
         self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
-
-    # def get_cp_params(self, x: torch.Tensor, **kwargs):
-    #     # Mapping: (B, Di) -> (B, R, H, V)
-    #     cp_params = POS_FUNC_MAP[self.config.pos_func](
-    #         torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
-    #     )
-    #     cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
-    #     theta = torch.einsum("brho,vo->brhv", cp_params, cp_decoder)
-    #     return theta
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
         assert (
@@ -91,19 +86,54 @@ class CPProjector(AbstractDisributionHead):
             # params = self.get_cp_params(x)  # (B, R, H, V)
 
             # Mapping: (B, Di) -> (B, R, H, V)
+
+            # If not usin einlogsumexp:
             cp_params = POS_FUNC_MAP[self.config.pos_func](
                 torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
             )
             cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
 
-            p_tilde, gammas_p = batch_cp_reduce_decoder(
+            # If using einlogsumexp:
+            # cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+            # cp_decoder = self.decoder
+
+            # p_tilde, gammas_p = batch_cp_reduce_decoder(
+            #     cp_params,
+            #     y.reshape(B, H),
+            #     cp_decoder.T,
+            #     margin_index=ignore_index,
+            #     # use_scale_factors=True,
+            #     # einlse=True,
+            # )  # (B,), (B, H)
+            # z_tilde, gammas_z = batch_cp_reduce_decoder(
+            #     cp_params,
+            #     torch.full(
+            #         (B, H),
+            #         -1,
+            #         dtype=torch.long,
+            #         device=x.device,
+            #     ),
+            #     cp_decoder.T,
+            #     margin_index=-1,
+            #     # use_scale_factors=True,
+            #     # einlse=True,
+            # )
+
+            # loss = (1 / H) * (  # avg across seq dimension
+            #     -torch.log(p_tilde)  # (B,)
+            #     + torch.log(z_tilde)  # (B,)
+            #     # Contraction Stability Scale Factors
+            #     - (gammas_p.log().sum(dim=-1))  # (B, H)
+            #     + (gammas_z.log().sum(dim=-1))  # (B, H)
+            # ).mean()  # avg across batch dimension
+
+            log_p_tilde = batch_cp_reduce_decoder_einlse(
                 cp_params,
                 y.reshape(B, H),
                 cp_decoder.T,
                 margin_index=ignore_index,
-                use_scale_factors=True,
-            )  # (B,), (B, H)
-            z_tilde, gammas_z = batch_cp_reduce_decoder(
+            )  # (B,)
+            log_z = batch_cp_reduce_decoder_einlse(
                 cp_params,
                 torch.full(
                     (B, H),
@@ -113,16 +143,9 @@ class CPProjector(AbstractDisributionHead):
                 ),
                 cp_decoder.T,
                 margin_index=-1,
-                use_scale_factors=True,
-            )
+            )  # (B,)
 
-            loss = (1 / H) * (  # avg across seq dimension
-                -torch.log(p_tilde)  # (B,)
-                + torch.log(z_tilde)  # (B,)
-                # Contraction Stability Scale Factors
-                - (gammas_p.log().sum(dim=-1))  # (B, H)
-                + (gammas_z.log().sum(dim=-1))  # (B, H)
-            ).mean()  # avg across batch dimension
+            loss = (1 / H) * (log_z - log_p_tilde).mean()
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
