@@ -1,0 +1,158 @@
+import itertools
+import random
+import torch
+import torch.nn as nn
+
+from mtp.mheads._abc import (
+    AbstractDisributionHead,
+    AbstractDisributionHeadConfig,
+    AbstractDisributionHeadOutput,
+)
+from mtp.mheads._tensorops import batch_cp_reduce
+
+
+def print_tens_stats(t: torch.Tensor, name: str):
+    """Prints one line of stats for a tensor."""
+    print(
+        f"{name}: mean: {t.mean():.2f} ± {t.std():.2f}, min: {t.min():.2f}, max: {t.max():.2f}"
+    )
+
+
+POS_FUNC_MAP = {
+    "sigmoid": torch.nn.functional.sigmoid,
+    "relu": torch.nn.functional.relu,
+    "exp": torch.exp,
+    "square": torch.square,
+}
+
+
+class CPProjector(AbstractDisributionHead):
+    def __init__(self, config: AbstractDisributionHeadConfig):
+        """Simple multi-head distribution with independent linear heads for each position."""
+        super().__init__(config)
+        H, R, Di, Do, V = (
+            config.horizon,
+            config.rank,
+            config.d_model,
+            config.d_hidden or config.d_model,
+            config.d_output,
+        )
+
+        std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
+        self.w_cp = torch.nn.Parameter(torch.randn(R, H, Di, Do) * std_fan_in)
+        self.b_cp = torch.nn.Parameter(torch.zeros(R, H, Do) * std_fan_in)
+        self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
+
+    def get_cp_params(self, x: torch.Tensor, **kwargs):
+        # Mapping: (B, Di) -> (B, R, H, V)
+        cp_params = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("be,rhde->brhd", x, self.w_cp) + self.b_cp
+        )
+        cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
+        theta = torch.einsum("brhd,vd->brhv", cp_params, cp_decoder)
+        return theta
+
+    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
+        assert (
+            embeddings.shape == self.decoder.shape
+        ), f"embeddings must be of shape {self.decoder.shape} but got {embeddings.shape}"
+        self.decoder = embeddings
+
+    def get_output_embeddings(self):
+        return self.decoder
+
+    def freeze_decoder(self):
+        self.decoder.requires_grad = False
+
+    def forward(
+        self,
+        x,
+        y=None,
+        ignore_index: int = -100,
+        return_logits: bool = False,
+    ):
+        # Input validation
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
+        assert (
+            y is None or y.size(1) == self.config.horizon
+        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
+
+        B, R, H, V = (
+            x.size(0),
+            self.config.rank,
+            self.config.horizon,
+            self.config.d_output,
+        )
+        loss = None
+        loss_dict = {}
+
+        if y is not None:
+            params = self.get_cp_params(x)  # (B, R, H, V)
+            p_tilde, gammas_p = batch_cp_reduce(
+                params.reshape(B, R, H, V),
+                y.reshape(B, H),
+                margin_index=ignore_index,
+                use_scale_factors=True,
+            )  # (B,), (B, H)
+            z_tilde, gammas_z = batch_cp_reduce(
+                params.reshape(B, R, H, V),
+                torch.full(
+                    (B, H),
+                    -1,
+                    dtype=torch.long,
+                    device=x.device,
+                ),
+                margin_index=-1,
+                use_scale_factors=True,
+            )
+
+            loss = (1 / H) * (  # avg across seq dimension
+                -torch.log(p_tilde)  # (B,)
+                + torch.log(z_tilde)  # (B,)
+                # Contraction Stability Scale Factors
+                - (gammas_p.log().sum(dim=-1))  # (B, H)
+                + (gammas_z.log().sum(dim=-1))  # (B, H)
+            ).mean()  # avg across batch dimension
+
+        return AbstractDisributionHeadOutput(
+            logits=torch.randn(B, H, V),
+            loss=loss,
+            loss_dict=loss_dict,
+        )
+
+    def generate(self, x: torch.Tensor):
+        """Generate a sequence of length H from the model.
+
+        Args:
+            x (torch.Tensor): Input features. Shape: (B, D)
+
+        Returns:
+            y (torch.Tensor): Generated sequence. Shape: (B, H)
+        """
+        pass
+
+
+def run_test():
+    B, H, D, V = 8, 4, 4096, 32000
+    mt_head = CPProjector(
+        AbstractDisributionHeadConfig(
+            d_model=D,
+            d_output=V,
+            horizon=H,
+            rank=8,
+        ),
+    )
+    x = torch.randn(B, D)
+    y = torch.randint(0, V, (B, H))
+    # set some 50% of y to ignore_index
+    for i, j in itertools.product(range(B), range(H)):
+        if random.random() < 0.5:
+            y[i, j] = -100
+
+    out = mt_head(x, y)
+    print(f"loss: {out.loss}")
+
+
+if __name__ == "__main__":
+    run_test()

@@ -82,21 +82,22 @@ class MoEProjector(AbstractDisributionHead):
 
         # === dims
         self.config = config
-        H, R, D, V = (
+        H, R, Di, Do, V = (
             self.config.horizon,
             self.config.rank,
             self.config.d_model,
+            self.config.d_hidden or self.config.d_model,
             self.config.d_output,
         )
 
         # since w_cp: (D) -> (R, H, D) i.e. fan in is D
-        std_fan_in = torch.sqrt(torch.tensor(2.0)) / D**0.5
+        std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
 
         # === params
-        self.w_alpha = torch.nn.Linear(D, R)
-        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, D, D) * std_fan_in)
-        self._b_cp_params = torch.nn.Parameter(torch.randn(R, H, D))
-        self.decoder = torch.nn.Parameter(torch.randn(V, D) * std_fan_in)
+        self.w_alpha = torch.nn.Linear(Di, R)
+        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, Di, Do) * std_fan_in)
+        self._b_cp_params = torch.nn.Parameter(torch.randn(R, H, Do))
+        self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
 
     def w_cp_params(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum(

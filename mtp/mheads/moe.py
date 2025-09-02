@@ -107,8 +107,7 @@ class MoE(AbstractDisributionHead):
             y is None or y.size(1) == self.config.horizon
         ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
 
-        B, V = x.shape[0], self.config.d_output
-        H = self.config.horizon
+        B, H, V = x.shape[0], self.config.horizon, self.config.d_output
         loss = None
         if y is not None:
             # NOTE: this is not optimal, as it will over-filter samples

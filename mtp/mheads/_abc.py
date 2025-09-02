@@ -14,7 +14,9 @@ class AbstractDisributionHeadConfig:
     horizon: int
     rank: int
     n_feats: int = 1
+    d_hidden: Optional[int] = None
     pool_method: str = "mean"  # "mean" or "linear"
+    pos_func: str = "sigmoid"
 
 
 @dataclass
@@ -80,16 +82,16 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
 
     def forward_seq(
         self,
-        z: torch.Tensor,
+        x: torch.Tensor,
         y: Optional[torch.Tensor] = None,
-        use_memory_efficient_loss: bool = False,
+        use_memory_efficient_loss: bool = True,
         window_shift: int = 1,
         ignore_index: int = -100,
     ) -> AbstractDisributionHeadOutput:
         """Forward pass for sequence data.
 
         Args:
-            z (torch.Tensor): Input features. Shape: (B, T, D)
+            x (torch.Tensor): Input features. Shape: (B, T, D)
             y (torch.Tensor): Target tensor of shape (B, T). Note: this should be the unshifted target.
 
         Returns:
@@ -98,11 +100,11 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         """
 
         # Input validation
-        assert len(z.shape) == 3, "z should be (B, T, D)"
+        assert len(x.shape) == 3, "z should be (B, T, D)"
         assert y is None or len(y.shape) == 2, "y should be (B, T)"
 
-        H_ = min(self.config.horizon, z.size(1))
-        B_, T_, D_ = z.shape
+        H_ = min(self.config.horizon, x.size(1))
+        B_, T_, D_ = x.shape
 
         # Create targets
         # Shape: (B, T) -> (B, T, H)
@@ -118,15 +120,15 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             # Sub-sample for memory efficiency
             if use_memory_efficient_loss and self.config.horizon > 1:
                 offset = torch.randint(0, H_, (1,)).item()
-                z = z[:, offset::H_]
+                x = x[:, offset::H_]
                 yw = yw[:, offset::H_]
 
         # Merge batch and sequence dims
-        B, T, D = z.shape
+        B, T, D = x.shape
 
-        z = z.reshape(-1, D)  # (BT, D)
+        x = x.reshape(-1, D)  # (BT, D)
         yw = yw.reshape(-1, H_) if yw is not None else None  # (BT, H)
-        output = self(z, yw, ignore_index=ignore_index)
+        output = self(x, yw, ignore_index=ignore_index)
         loss = output.loss.mean() if output.loss is not None else None
         logits = output.logits.reshape(B, T, H_, -1)
         return AbstractDisributionHeadOutput(loss=loss, logits=logits)
