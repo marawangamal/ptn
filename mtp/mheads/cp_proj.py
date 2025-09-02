@@ -46,10 +46,10 @@ class CPProjector(AbstractDisributionHead):
     def get_cp_params(self, x: torch.Tensor, **kwargs):
         # Mapping: (B, Di) -> (B, R, H, V)
         cp_params = POS_FUNC_MAP[self.config.pos_func](
-            torch.einsum("be,rhde->brhd", x, self.w_cp) + self.b_cp
+            torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
         )
         cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
-        theta = torch.einsum("brhd,vd->brhv", cp_params, cp_decoder)
+        theta = torch.einsum("brho,vo->brhv", cp_params, cp_decoder)
         return theta
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):

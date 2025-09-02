@@ -208,6 +208,64 @@ def cp_reduce(
     return res, scale_factors
 
 
+def cp_reduce_decoder(
+    cp_params: torch.Tensor,
+    decoder: torch.Tensor,
+    ops: torch.Tensor,
+    use_scale_factors=True,
+    margin_index=-1,
+):
+    """Reduce a CP tensor via select/marginalize operations.
+    Args:
+        cp_params (torch.Tensor): CP params. Shape: (R, H, D)
+        decoder (torch.Tensor): Decoder. Shape: (D, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    assert margin_index < 0, "margin_index must be negative"
+    R, H, D = cp_params.shape
+
+    # For each mode: marginalize (sum) if ops[h] == -1, else select ops[h]
+    marginalize_mask = ops == margin_index  # (H,)
+    marginalized = torch.einsum(
+        "rhd,d->rh", cp_params, decoder
+    )  # (R, H) - sum over V dimension
+
+    # Gather selected indices (clamp to handle -1 values safely)
+    selected_indices = ops.clamp(min=0).unsqueeze(0)  # (1, H)
+    # (D, V) -> (D,H) then,  (D,H), (R, H, D) -> (R, H)
+    selected = torch.einsum(
+        "dh, rhd->rh", decoder.gather(-1, selected_indices.expand(D, -1)), cp_params
+    )
+
+    # Choose marginalized or selected values based on ops
+    factors = torch.where(marginalize_mask, marginalized, selected)  # (R, H)
+
+    scale_factors = []
+    res = torch.ones(R, device=cp_params.device, dtype=cp_params.dtype)
+
+    # BUG: do scale factors online
+    # if use_scale_factors:
+    #     # norm of each factor
+    #     # scale_factors = torch.max(factors, dim=0)[0]
+    #     # factors = factors / scale_factors
+
+    # Do it during contraction
+    for i in range(H):
+        res = res * factors[:, i]  # (R,)
+        if use_scale_factors:
+            scale_factors.append(torch.max(res))
+            res = res / scale_factors[-1]
+    res = res.sum()
+    scale_factors = torch.stack(scale_factors)
+
+    # Compute CP tensor value: product over modes, sum over components
+    return res, scale_factors
+
+
 # Make another vec that will return a 1D dist
 
 
