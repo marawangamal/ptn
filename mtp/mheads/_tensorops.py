@@ -427,4 +427,4 @@ if __name__ == "__main__":
 
     # assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
     # print("All tests passed")
-    test_cp_reduce_decoder_einlse_mag_2()
+    test_cp_reduce_decoder_einlse()

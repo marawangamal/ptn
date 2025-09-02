@@ -12,6 +12,7 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce,
     batch_cp_reduce_decoder,
     batch_cp_reduce_decoder_einlse,
+    select_margin_cp_tensor_batched,
 )
 
 
@@ -83,27 +84,58 @@ class CPProjector(AbstractDisributionHead):
         loss_dict = {}
 
         if y is not None:
-            # params = self.get_cp_params(x)  # (B, R, H, V)
 
-            # Mapping: (B, Di) -> (B, R, H, V)
+            # *****************************************************************************************
+            #  ORIGINAL VERSION
+            # *****************************************************************************************
 
-            # If not usin einlogsumexp:
-            cp_params = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
-            )
-            cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
+            # cp_params = POS_FUNC_MAP[self.config.pos_func](
+            #     torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+            # )
+            # cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
 
-            # If using einlogsumexp:
-            # cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
-            # cp_decoder = self.decoder
+            # p_tilde, gammas_p = select_margin_cp_tensor_batched(
+            #     torch.einsum("brho,vo->brhv", cp_params, cp_decoder),
+            #     y.reshape(B, H),
+            #     use_scale_factors=True,
+            # )  # (B,), (B, H)
+            # z_tilde, gammas_z = select_margin_cp_tensor_batched(
+            #     torch.einsum("brho,vo->brhv", cp_params, cp_decoder),
+            #     torch.full(
+            #         (B, H),
+            #         -2,  # marginalize
+            #         dtype=torch.long,
+            #         device=x.device,
+            #     ),
+            #     use_scale_factors=True,
+            # )
+
+            # gammas_p = torch.stack(gammas_p, dim=-1)
+            # gammas_z = torch.stack(gammas_z, dim=-1)  # (B, H)
+
+            # loss = (1 / H) * (  # avg across seq dimension
+            #     -torch.log(p_tilde)  # (B,)
+            #     + torch.log(z_tilde)  # (B,)
+            #     # Contraction Stability Scale Factors
+            #     - (gammas_p.log().sum(dim=-1))  # (B, H)
+            #     + (gammas_z.log().sum(dim=-1))  # (B, H)
+            # ).mean()  # avg across batch dimension
+
+            # *****************************************************************************************
+            #  VMAP VERSION
+            # *****************************************************************************************
+
+            # cp_params = POS_FUNC_MAP[self.config.pos_func](
+            #     torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+            # )
+            # cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
 
             # p_tilde, gammas_p = batch_cp_reduce_decoder(
             #     cp_params,
             #     y.reshape(B, H),
             #     cp_decoder.T,
             #     margin_index=ignore_index,
-            #     # use_scale_factors=True,
-            #     # einlse=True,
+            #     use_scale_factors=True,
             # )  # (B,), (B, H)
             # z_tilde, gammas_z = batch_cp_reduce_decoder(
             #     cp_params,
@@ -115,8 +147,7 @@ class CPProjector(AbstractDisributionHead):
             #     ),
             #     cp_decoder.T,
             #     margin_index=-1,
-            #     # use_scale_factors=True,
-            #     # einlse=True,
+            #     use_scale_factors=True,
             # )
 
             # loss = (1 / H) * (  # avg across seq dimension
@@ -126,6 +157,13 @@ class CPProjector(AbstractDisributionHead):
             #     - (gammas_p.log().sum(dim=-1))  # (B, H)
             #     + (gammas_z.log().sum(dim=-1))  # (B, H)
             # ).mean()  # avg across batch dimension
+
+            # *****************************************************************************************
+            #  LOGSUMEXP VERSION
+            # *****************************************************************************************
+
+            cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+            cp_decoder = self.decoder
 
             log_p_tilde = batch_cp_reduce_decoder_einlse(
                 cp_params,
