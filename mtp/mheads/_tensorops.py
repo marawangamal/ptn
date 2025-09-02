@@ -233,12 +233,12 @@ def cp_reduce_decoder_einlse(
     assert margin_index < 0, "margin_index must be negative"
     R, H, D = cp_params_tilde.shape
     esum_recipe = []
-    marginalize_mask = ops == margin_index  # (H,)
-    selected_indices = ops.clamp(min=0).unsqueeze(0)  # (1, H)
-    decoder_mrgn = decoder_tilde.sum(dim=-1).unsqueeze(-1)  # (D, 1)
+    marginalize_mask = (ops == margin_index).unsqueeze(0).repeat(D, 1)  # (D, H)
+    selected_indices = ops.clamp(min=0).unsqueeze(0).repeat(D, 1)  # (D, H)
+    decoder_mrgn = decoder_tilde.sum(dim=-1).unsqueeze(-1).repeat(1, H)  # (D, H)
     decoder_slct = decoder_tilde.gather(-1, selected_indices)  # (D, H)
     decoder_reduced = torch.where(
-        marginalize_mask.unsqueeze(0), decoder_mrgn, decoder_slct
+        marginalize_mask, decoder_mrgn, decoder_slct
     )  # (D, H)
 
     consts = []
@@ -325,9 +325,6 @@ def cp_reduce_decoder(
 
     # Compute CP tensor value: product over modes, sum over components
     return res, scale_factors
-
-
-# Make another vec that will return a 1D dist
 
 
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))

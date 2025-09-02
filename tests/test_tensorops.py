@@ -1,0 +1,75 @@
+# test_einlogsumexp_unittest.py
+import unittest
+import math
+import torch
+
+from mtp.mheads._tensorops import cp_reduce_decoder, cp_reduce_decoder_einlse, cp_reduce
+
+# If einlogsumexp is in another module, import it:
+# from your_module import einlogsumexp
+
+
+class TestEinLogSumExp(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+
+    def test_reduce_equals_reduce_decoder(self):
+        R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+
+        cp_params_tilde = torch.randn(R, H, Di)
+        decoder = torch.randn(Di, V)
+        ops = torch.randint(0, V, (H,))
+        res_v1, _ = cp_reduce(
+            torch.einsum("rhd,dv->rhv", cp_params_tilde, decoder),
+            ops,
+            use_scale_factors=False,
+        )
+        res_v2, _ = cp_reduce_decoder(
+            cp_params_tilde,
+            ops,
+            decoder,
+            use_scale_factors=False,
+        )
+        self.assertTrue(torch.allclose(res_v1, res_v2, atol=1))
+
+    def test_reduce_equals_reduce_decoder_einlse(self):
+        R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+
+        cp_params_tilde = torch.randn(R, H, Di)
+        decoder = torch.randn(Di, V)
+        ops = torch.randint(0, V, (H,))
+        res_v1, _ = cp_reduce(
+            torch.einsum("rhd,dv->rhv", cp_params_tilde, decoder),
+            ops,
+            use_scale_factors=False,
+        )
+        res_v2 = cp_reduce_decoder_einlse(
+            cp_params_tilde,
+            ops,
+            decoder,
+            apply_logsumexp=False,
+        )
+        self.assertTrue(torch.allclose(res_v1, res_v2, atol=1))
+
+    def test_reduce_equals_value(self):
+        R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+
+        cp_params_tilde = torch.eye(R, R).unsqueeze(1).repeat(1, H, 1)
+        decoder = torch.eye(R, R)
+        ops = torch.zeros((H,), dtype=torch.long)
+        res_v1, _ = cp_reduce(
+            torch.einsum("rhd,dv->rhv", cp_params_tilde, decoder),
+            ops,
+            use_scale_factors=False,
+        )
+        res_v2 = cp_reduce_decoder_einlse(
+            cp_params_tilde,
+            ops,
+            decoder,
+            apply_logsumexp=False,
+        )
+        self.assertTrue(torch.allclose(res_v1, res_v2, atol=1))
+
+
+if __name__ == "__main__":
+    unittest.main()
