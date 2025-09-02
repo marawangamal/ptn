@@ -9,6 +9,7 @@ from mtp.mheads._abc import (
     AbstractDisributionHeadOutput,
 )
 from mtp.mheads._tensorops import (
+    batch_cp_normalize_decoder_einlse,
     batch_cp_reduce,
     batch_cp_reduce_decoder,
     batch_cp_reduce_decoder_einlse,
@@ -171,16 +172,9 @@ class CPProjector(AbstractDisributionHead):
                 cp_decoder.T,
                 margin_index=ignore_index,
             )  # (B,)
-            log_z = batch_cp_reduce_decoder_einlse(
+            log_z = batch_cp_normalize_decoder_einlse(
                 cp_params,
-                torch.full(
-                    (B, H),
-                    -1,
-                    dtype=torch.long,
-                    device=x.device,
-                ),
                 cp_decoder.T,
-                margin_index=-1,
             )  # (B,)
 
             loss = (1 / H) * (log_z - log_p_tilde).mean()

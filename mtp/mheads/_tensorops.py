@@ -210,6 +210,7 @@ def cp_reduce(
     return res, scale_factors
 
 
+# BUG: this version cannot do marginals properly, for marginalization see ``cp_normalize_decoder_einlse``
 def cp_reduce_decoder_einlse(
     cp_params_tilde: torch.Tensor,
     ops: torch.Tensor,
@@ -245,19 +246,77 @@ def cp_reduce_decoder_einlse(
     for h in range(H):
         a_h = cp_params_tilde[:, h, :]
         d_h = decoder_reduced[:, h]
+        s = h * 3  # num indexes used in each iteration
         if apply_logsumexp:
             m_a = a_h.max()
             m_d = d_h.max()
             esum_recipe.append((a_h - m_a).exp())  # (R, D)
-            esum_recipe.append([0, h + 1])
+            esum_recipe.append([0, s + 1])
             esum_recipe.append((d_h - m_d).exp())  # (D,)
-            esum_recipe.append([h + 1])
+            esum_recipe.append([s + 1])
             consts.extend([m_a, m_d])
         else:
             esum_recipe.append(a_h)  # (R, D)
-            esum_recipe.append([0, h + 1])
+            esum_recipe.append([0, s + 1])
             esum_recipe.append(d_h)  # (D,)
-            esum_recipe.append([h + 1])
+            esum_recipe.append([s + 1])
+
+    esum_recipe.append([])  # output is scalar
+    if apply_logsumexp:
+        return torch.log(torch.einsum(*esum_recipe)) + torch.stack(consts).sum()
+    else:
+        return torch.einsum(*esum_recipe)
+
+
+def cp_normalize_decoder_einlse(
+    cp_params_tilde: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_logsumexp=True,
+):
+    """Reduce a CP tensor via select/marginalize operations.
+    Args:
+        cp_params_tilde (torch.Tensor): CP params logits. Shape: (R, H, D)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Note:
+        Computes logP(y1, ..., yH | x) = log \\sum exp(a_h)exp(d_h(ops)) ... exp(a_H) exp(d_H(ops))
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    H, V = cp_params_tilde.size(1), decoder_tilde.size(1)
+    esum_recipe = []
+    dvc = cp_params_tilde.device
+    dtype = cp_params_tilde.dtype
+
+    # BUG: not sure if it is okay to use the same ones tensor for all modes
+    ones = torch.ones(V, device=dvc, dtype=dtype)
+
+    consts = []
+    for h in range(H):
+        a_h = cp_params_tilde[:, h, :]  # (R, D)
+        d_h = decoder_tilde  # (D, V)
+        s = h * 3  # num indexes used in each iteration
+        if apply_logsumexp:
+            m_a = a_h.max()
+            m_d = d_h.max()
+            esum_recipe.append((a_h - m_a).exp())  # (R, D)
+            esum_recipe.append([0, s + 1])
+            esum_recipe.append((d_h - m_d).exp())  # (D, V)
+            esum_recipe.append([s + 1, s + 2])
+            esum_recipe.append(ones)  # (V,)
+            esum_recipe.append([s + 2])
+            consts.extend([m_a, m_d])
+        else:
+
+            esum_recipe.append(a_h)  # (R, D)
+            esum_recipe.append([0, s + 1])
+            esum_recipe.append(d_h)  # (D,)
+            esum_recipe.append([s + 1, s + 2])
+            esum_recipe.append(ones)  # (V,)
+            esum_recipe.append([s + 2])
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
@@ -327,101 +386,15 @@ def cp_reduce_decoder(
     return res, scale_factors
 
 
+# *************************************************************************************************************************
+#  VECTORIZED VERSIONS
+# *************************************************************************************************************************
+
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
 batch_cp_reduce_decoder = torch.vmap(cp_reduce_decoder, in_dims=(0, 0, None))
 batch_cp_reduce_decoder_einlse = torch.vmap(
     cp_reduce_decoder_einlse, in_dims=(0, 0, None)
 )
-
-
-def test_cp_reduce_decoder_einlse():
-    B, R, H, Di, Do, V = 8, 8, 4, 386, 128, 30_000
-    cp_params = torch.randn(B, R, H, Di)
-    decoder = torch.randn(Di, V)
-    ops = torch.randint(0, V, (B, H))
-    res_1 = batch_cp_reduce_decoder_einlse(
-        cp_params, ops, decoder, apply_logsumexp=True
-    )
-    res_2 = torch.log(
-        batch_cp_reduce_decoder_einlse(
-            cp_params.exp(), ops, decoder.exp(), apply_logsumexp=False
-        )
-    )
-    assert torch.allclose(res_1, res_2), "res_1 is not equal to res_2"
-    print(f"Loss: {res_1.mean().item():.4f}")
-    print("All tests passed")
-
-
-def test_cp_reduce_decoder_einlse_mag():
-    B, R, H, Di, Do, V = 8, 8, 1, 386, 128, 30_000
-    std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-    cp_params = torch.randn(B, R, H, Di) * std_fan_in
-    decoder = torch.randn(Di, V) * std_fan_in
-    ops = torch.randint(0, V, (B, H))
-    log_p_tilde = batch_cp_reduce_decoder_einlse(
-        cp_params, ops, decoder, apply_logsumexp=True
-    )
-    log_z = batch_cp_reduce_decoder_einlse(
-        cp_params,
-        torch.full(
-            (B, H),
-            -1,
-            dtype=torch.long,
-        ),
-        decoder,
-        apply_logsumexp=True,
-    )
-
-    loss = (log_z - log_p_tilde).mean() * (1 / H)
-    print(f"Loss: {loss.item():.4f}")
-    print("All tests passed")
-
-
-def test_cp_reduce_decoder_einlse_mag_2():
-    B, R, H, Di, Do, V = 8, 8, 4, 386, 128, 30_000
-    cp_params = torch.randn(B, R, H, Di)
-    decoder = torch.randn(Di, V)
-    ops = torch.randint(0, V, (B, H))
-    p_tilde = batch_cp_reduce_decoder_einlse(cp_params, ops, decoder)
-    z = batch_cp_reduce_decoder_einlse(
-        cp_params,
-        torch.full(
-            (B, H),
-            -1,
-            dtype=torch.long,
-        ),
-        decoder,
-    )
-    log_z = torch.log(z)
-    log_p_tilde = torch.log(p_tilde)
-
-    loss = (log_z - log_p_tilde).mean()
-    print(f"Loss: {loss.item():.4f}")
-    print("All tests passed")
-
-
-def test_batch_cp_reduce_decoder():
-    B, R, H, D, V = 8, 2, 4, 20, 100
-    cp_params_tilde = torch.randn(B, R, H, D)
-    decoder = torch.randn(D, V)
-    cp_params = torch.einsum("brhd,dv->brhv", cp_params_tilde, decoder)
-    ops = torch.randint(0, V, (B, H))
-    res_v1, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
-    res_v2, _ = batch_cp_reduce_decoder(
-        cp_params_tilde, ops, decoder, use_scale_factors=False
-    )
-    assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
-    print("All tests passed")
-
-
-if __name__ == "__main__":
-    # # batch version
-    # B, R, H, V = 2, 3, 4, 5
-    # cp_params = torch.randn(B, R, H, V)
-    # ops = torch.randint(0, V, (B, H))
-    # res_v1, _ = select_margin_cp_tensor_batched(cp_params, ops, use_scale_factors=False)
-    # res_v2, _ = batch_cp_reduce(cp_params, ops, use_scale_factors=False)
-
-    # assert torch.allclose(res_v1, res_v2), "v2 is not equal to v1"
-    # print("All tests passed")
-    test_cp_reduce_decoder_einlse()
+batch_cp_normalize_decoder_einlse = torch.vmap(
+    cp_normalize_decoder_einlse, in_dims=(0, None)
+)
