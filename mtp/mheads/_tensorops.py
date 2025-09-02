@@ -231,37 +231,50 @@ def cp_reduce_decoder_einlse(
     Returns:
         torch.Tensor: Reduced tensor result (scalar)
     """
-    assert margin_index < 0, "margin_index must be negative"
-    R, H, D = cp_params_tilde.shape
+    H, V = cp_params_tilde.size(1), decoder_tilde.size(1)
     esum_recipe = []
-    # marginalize_mask = (ops == margin_index).unsqueeze(0).repeat(D, 1)  # (D, H)
-    # selected_indices = ops.clamp(min=0).unsqueeze(0).repeat(D, 1)  # (D, H)
-    # decoder_mrgn = decoder_tilde.sum(dim=-1).unsqueeze(-1).repeat(1, H)  # (D, H)
-    # decoder_slct = decoder_tilde.gather(-1, selected_indices)  # (D, H)
-    # decoder_reduced = torch.where(
-    #     marginalize_mask, decoder_mrgn, decoder_slct
-    # )  # (D, H)
+    dvc = cp_params_tilde.device
+    dtype = cp_params_tilde.dtype
+    # BUG: not sure if it is okay to use the same ones tensor for all modes
+    # ones = torch.ones(V, device=dvc, dtype=dtype)
 
-    # NOTE: .expand() is more memory efficient than .repeat()
-    decoder_reduced = decoder_tilde.gather(-1, ops.unsqueeze(0).repeat(D, 1))  # (D, H)
+    # ops: (H,)
+    margin_mask = ops == margin_index  # (H,) bool
+    one_hots = torch.nn.functional.one_hot(ops.clamp(min=0), num_classes=V).to(
+        device=dvc, dtype=dtype
+    )  # (H, V)
+    ones = torch.ones((H, V), device=dvc, dtype=dtype)
+    # For margin positions, replace one-hot with all-ones
+    c = torch.where(
+        margin_mask.unsqueeze(-1),  # (H, 1) -> broadcast
+        # torch.ones((H, V), device=dvc, dtype=dtype),
+        ones,  # (H, V)
+        one_hots,  # (H, V)
+    )  # (H, V)
+
     consts = []
     for h in range(H):
-        a_h = cp_params_tilde[:, h, :]
-        d_h = decoder_reduced[:, h]
+        a_h = cp_params_tilde[:, h, :]  # (R, D)
+        d_h = decoder_tilde  # (D, V)
+        c_h = c[h]  # (V,)
         s = h * 3  # num indexes used in each iteration
         if apply_logsumexp:
             m_a = a_h.max()
             m_d = d_h.max()
             esum_recipe.append((a_h - m_a).exp())  # (R, D)
             esum_recipe.append([0, s + 1])
-            esum_recipe.append((d_h - m_d).exp())  # (D,)
-            esum_recipe.append([s + 1])
+            esum_recipe.append((d_h - m_d).exp())  # (D, V)
+            esum_recipe.append([s + 1, s + 2])
+            esum_recipe.append(c_h)  # (V,)
+            esum_recipe.append([s + 2])
             consts.extend([m_a, m_d])
         else:
             esum_recipe.append(a_h)  # (R, D)
             esum_recipe.append([0, s + 1])
             esum_recipe.append(d_h)  # (D,)
-            esum_recipe.append([s + 1])
+            esum_recipe.append([s + 1, s + 2])
+            esum_recipe.append(c_h)  # (V,)
+            esum_recipe.append([s + 2])
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:

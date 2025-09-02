@@ -172,9 +172,16 @@ class CPProjector(AbstractDisributionHead):
                 cp_decoder.T,
                 margin_index=ignore_index,
             )  # (B,)
-            log_z = batch_cp_normalize_decoder_einlse(
+            log_z = batch_cp_reduce_decoder_einlse(
                 cp_params,
+                torch.full(
+                    (B, H),
+                    ignore_index,
+                    dtype=torch.long,
+                    device=x.device,
+                ),
                 cp_decoder.T,
+                margin_index=ignore_index,
             )  # (B,)
 
             loss = (1 / H) * (log_z - log_p_tilde).mean()
