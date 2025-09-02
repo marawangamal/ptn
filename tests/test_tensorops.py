@@ -116,6 +116,54 @@ class TestEinLogSumExp(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(torch.log(res_v1), res_v2, atol=1))
 
+    def test_cp_marginalization(self):
+        for _ in range(10):
+            R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+            cp_params_tilde = torch.randn(R, H, Di)
+            decoder = torch.randn(Di, V)
+            res_1 = cp_normalize_decoder_einlse(
+                cp_params_tilde.exp(),
+                decoder.exp(),
+                apply_logsumexp=False,
+            )
+            res_2 = cp_normalize_decoder_einlse(
+                cp_params_tilde,
+                decoder,
+                apply_logsumexp=True,
+            )
+            self.assertTrue(torch.allclose(torch.log(res_1), res_2, atol=1))
+
+    def test_cp_validity(self):
+        for _ in range(50):
+            R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+            cp_params_tilde = torch.randn(R, H, Di)
+            decoder = torch.randn(Di, V)
+            ops = torch.randint(0, V, (H,))
+            log_p_tilde = cp_reduce_decoder_einlse(cp_params_tilde, ops, decoder)
+            log_z = cp_normalize_decoder_einlse(
+                cp_params_tilde,
+                decoder,
+                apply_logsumexp=True,
+            )
+            loss = (log_z - log_p_tilde).mean()
+
+            # loss is non-negative
+            self.assertTrue(loss >= 0)
+
+    def test_cp_reduce_decoder_marginal(self):
+        for _ in range(50):
+            R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+            cp_params_tilde = torch.randn(R, H, Di)
+            decoder = torch.randn(Di, V)
+            ops = torch.full((H,), -1, dtype=torch.long)
+            res_1 = cp_reduce_decoder_einlse(cp_params_tilde, ops, decoder)
+            res_2 = cp_normalize_decoder_einlse(
+                cp_params_tilde,
+                decoder,
+                apply_logsumexp=True,
+            )
+            self.assertTrue(torch.allclose(res_1, res_2, atol=1))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -234,14 +234,16 @@ def cp_reduce_decoder_einlse(
     assert margin_index < 0, "margin_index must be negative"
     R, H, D = cp_params_tilde.shape
     esum_recipe = []
-    marginalize_mask = (ops == margin_index).unsqueeze(0).repeat(D, 1)  # (D, H)
-    selected_indices = ops.clamp(min=0).unsqueeze(0).repeat(D, 1)  # (D, H)
-    decoder_mrgn = decoder_tilde.sum(dim=-1).unsqueeze(-1).repeat(1, H)  # (D, H)
-    decoder_slct = decoder_tilde.gather(-1, selected_indices)  # (D, H)
-    decoder_reduced = torch.where(
-        marginalize_mask, decoder_mrgn, decoder_slct
-    )  # (D, H)
+    # marginalize_mask = (ops == margin_index).unsqueeze(0).repeat(D, 1)  # (D, H)
+    # selected_indices = ops.clamp(min=0).unsqueeze(0).repeat(D, 1)  # (D, H)
+    # decoder_mrgn = decoder_tilde.sum(dim=-1).unsqueeze(-1).repeat(1, H)  # (D, H)
+    # decoder_slct = decoder_tilde.gather(-1, selected_indices)  # (D, H)
+    # decoder_reduced = torch.where(
+    #     marginalize_mask, decoder_mrgn, decoder_slct
+    # )  # (D, H)
 
+    # NOTE: .expand() is more memory efficient than .repeat()
+    decoder_reduced = decoder_tilde.gather(-1, ops.unsqueeze(0).repeat(D, 1))  # (D, H)
     consts = []
     for h in range(H):
         a_h = cp_params_tilde[:, h, :]
@@ -292,13 +294,14 @@ def cp_normalize_decoder_einlse(
     dtype = cp_params_tilde.dtype
 
     # BUG: not sure if it is okay to use the same ones tensor for all modes
-    ones = torch.ones(V, device=dvc, dtype=dtype)
+    # ones = torch.ones(V, device=dvc, dtype=dtype)
 
     consts = []
     for h in range(H):
         a_h = cp_params_tilde[:, h, :]  # (R, D)
         d_h = decoder_tilde  # (D, V)
         s = h * 3  # num indexes used in each iteration
+        ones = torch.ones(V, device=dvc, dtype=dtype)
         if apply_logsumexp:
             m_a = a_h.max()
             m_d = d_h.max()
@@ -310,7 +313,6 @@ def cp_normalize_decoder_einlse(
             esum_recipe.append([s + 2])
             consts.extend([m_a, m_d])
         else:
-
             esum_recipe.append(a_h)  # (R, D)
             esum_recipe.append([0, s + 1])
             esum_recipe.append(d_h)  # (D,)
