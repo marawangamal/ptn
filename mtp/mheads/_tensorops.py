@@ -475,6 +475,126 @@ def cp_reduce_decoder(
     return res, scale_factors
 
 
+def mps_reduce_decoder_einlse_select_only(
+    mps_params_tilde: torch.Tensor,
+    ops: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_logsumexp=True,
+):
+    """Reduce an MPS tensor via a select operations.
+    Args:
+        mps_params_tilde (torch.Tensor): CP params logits. Shape: (H, R, D, R)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    H, R, D = (
+        mps_params_tilde.size(0),
+        mps_params_tilde.size(1),
+        mps_params_tilde.size(2),
+    )
+    esum_recipe = []
+    selected_indices = ops.unsqueeze(0).expand(D, -1)  # (1, H)
+
+    consts = []
+    eH = 2 * H
+    for h in range(H):
+        a_h = mps_params_tilde[h]  # (R, D, R)
+        d_h = decoder_tilde.gather(-1, selected_indices[:, h : h + 1])  # (D, 1)
+        s = 2 * h
+        if apply_logsumexp:
+            m_a = a_h.max()
+            m_d = d_h.max()
+            esum_recipe.append((a_h - m_a).exp())  # (R, D, R)
+            esum_recipe.append([s, s + 1, s + 2])  # i.e., [0, 1, 2], [2, 3, 4], ...
+            esum_recipe.append((d_h - m_d).exp())  # (D, 1)
+            esum_recipe.append([s + 1, eH + h + 1])
+            consts.extend([m_a, m_d])
+        else:
+            esum_recipe.append(a_h)  # (R, D)
+            esum_recipe.append([s, s + 1, s + 2])
+            esum_recipe.append(d_h)  # (D, 1)
+            esum_recipe.append([s + 1, eH + h + 1])
+
+    # add first and last
+    alpha = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    beta = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    esum_recipe.append(alpha)  # (R,)
+    esum_recipe.append([0])
+    esum_recipe.append(beta)  # (R,)
+    esum_recipe.append([eH])
+
+    # print esum_recipe ids
+    # print(f"einsum recipe ids: {esum_recipe[1::2]}")
+
+    esum_recipe.append([])  # output is scalar
+    if apply_logsumexp:
+        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
+    else:
+        return contract_func(*esum_recipe)
+
+
+def mps_reduce_decoder_einlse_margin_only(
+    mps_params_tilde: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_logsumexp=True,
+):
+    """Reduce an MPS tensor via a select operations.
+    Args:
+        mps_params_tilde (torch.Tensor): CP params logits. Shape: (H, R, D, R)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    H, R = mps_params_tilde.size(0), mps_params_tilde.size(1)
+    esum_recipe = []
+
+    consts = []
+    eH = 2 * H
+    for h in range(H):
+        a_h = mps_params_tilde[h]  # (R, D, R)
+        d_h = decoder_tilde  # (D, H)
+        s = 2 * h
+        if apply_logsumexp:
+            m_a = a_h.max()
+            m_d = d_h.max()
+            esum_recipe.append((a_h - m_a).exp())  # (R, D, R)
+            esum_recipe.append([s, s + 1, s + 2])  # i.e., [0, 1, 2], [2, 3, 4], ...
+            esum_recipe.append((d_h - m_d).exp())  # (D, V)
+            esum_recipe.append([s + 1, eH + h + 1])
+            consts.extend([m_a, m_d])
+        else:
+            esum_recipe.append(a_h)  # (R, D)
+            esum_recipe.append([s, s + 1, s + 2])
+            esum_recipe.append(d_h)  # (D, 1)
+            esum_recipe.append([s + 1, eH + h + 1])
+
+    # add first and last
+    alpha = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    beta = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    esum_recipe.append(alpha)  # (R,)
+    esum_recipe.append([0])
+    esum_recipe.append(beta)  # (R,)
+    esum_recipe.append([eH])
+
+    esum_recipe.append([])  # output is scalar
+    if apply_logsumexp:
+        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
+    else:
+        return contract_func(*esum_recipe)
+
+
 # *************************************************************************************************************************
 #  VECTORIZED VERSIONS
 # *************************************************************************************************************************
@@ -489,4 +609,12 @@ batch_cp_reduce_decoder_einlse_select_only = torch.vmap(
 )
 batch_cp_reduce_decoder_einlse_margin_only = torch.vmap(
     cp_reduce_decoder_einlse_margin_only, in_dims=(0, None)
+)
+
+
+batch_mps_reduce_decoder_einlse_select_only = torch.vmap(
+    mps_reduce_decoder_einlse_select_only, in_dims=(0, 0, None)
+)
+batch_mps_reduce_decoder_einlse_margin_only = torch.vmap(
+    mps_reduce_decoder_einlse_margin_only, in_dims=(0, None)
 )

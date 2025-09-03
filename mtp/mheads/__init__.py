@@ -3,7 +3,6 @@ from mtp.mheads.moe import MoE
 from mtp.mheads.moe_proj import MoEProjector
 from mtp.mheads.multihead import Multihead
 from mtp.mheads.stp import STP
-from mtp.mheads.cp import CP
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 # !! IMPORTANT !! ::  Keep in sync with mtp.mheads.types
@@ -12,6 +11,5 @@ MHEADS = {
     "multihead": Multihead,
     "moe": MoE,
     "moe_proj": MoEProjector,
-    "cp": CP,
     "cp_proj": CPProjector,
 }
