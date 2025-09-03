@@ -1,7 +1,4 @@
-from mtp.mheads.cp_cond import CPCond
-from mtp.mheads.cp_condl import CPCondl
 from mtp.mheads.cp_proj import CPProjector
-from mtp.mheads.eagle import EAGLE
 from mtp.mheads.moe import MoE
 from mtp.mheads.moe_proj import MoEProjector
 from mtp.mheads.multihead import Multihead
@@ -17,7 +14,4 @@ MHEADS = {
     "moe_proj": MoEProjector,
     "cp": CP,
     "cp_proj": CPProjector,
-    "cp_cond": CPCond,
-    "cp_condl": CPCondl,
-    "eagle": EAGLE,
 }

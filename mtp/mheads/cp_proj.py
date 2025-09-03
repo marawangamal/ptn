@@ -13,6 +13,8 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce,
     batch_cp_reduce_decoder,
     batch_cp_reduce_decoder_einlse,
+    batch_cp_reduce_decoder_einlse_select_only,
+    batch_cp_reduce_decoder_einlse_margin_only,
     select_margin_cp_tensor_batched,
 )
 
@@ -128,25 +130,26 @@ class CPProjector(AbstractDisributionHead):
                 #  LOGSUMEXP VERSION
                 # *****************************************************************************************
 
-                cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+                # NOTE: this is not optimal, as it will over-filter samples
+                # filter out entire sample if any of the H y vals are ignore_index
+                # maybe we can absorb this functionality in the reducers
+                mask = (y != ignore_index).all(dim=-1)  # (B,)
+
+                cp_params = (
+                    torch.einsum("bi,rhio->brho", x[mask], self.w_cp) + self.b_cp
+                )  # (B', R, H, V)
                 cp_decoder = self.decoder
 
-                log_p_tilde = batch_cp_reduce_decoder_einlse(
+                log_p_tilde = batch_cp_reduce_decoder_einlse_select_only(
                     cp_params,
-                    y.reshape(B, H),
+                    y.reshape(B, H)[mask],
                     cp_decoder.T,
-                    margin_index=ignore_index,
+                    # margin_index=ignore_index, not accepted arg for select_only
                 )  # (B,)
-                log_z = batch_cp_reduce_decoder_einlse(
+                log_z = batch_cp_reduce_decoder_einlse_margin_only(
                     cp_params,
-                    torch.full(
-                        (B, H),
-                        ignore_index,
-                        dtype=torch.long,
-                        device=x.device,
-                    ),
                     cp_decoder.T,
-                    margin_index=ignore_index,
+                    # margin_index=ignore_index, not accepted arg for margin_only
                 )  # (B,)
 
                 loss = (1 / H) * (log_z - log_p_tilde).mean()
