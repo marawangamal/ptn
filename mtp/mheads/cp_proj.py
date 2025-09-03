@@ -122,69 +122,72 @@ class CPProjector(AbstractDisributionHead):
             #     + (gammas_z.log().sum(dim=-1))  # (B, H)
             # ).mean()  # avg across batch dimension
 
-            # *****************************************************************************************
-            #  VMAP VERSION
-            # *****************************************************************************************
+            if self.config.pos_func == "exp":
 
-            # cp_params = POS_FUNC_MAP[self.config.pos_func](
-            #     torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
-            # )
-            # cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
+                # *****************************************************************************************
+                #  LOGSUMEXP VERSION
+                # *****************************************************************************************
 
-            # p_tilde, gammas_p = batch_cp_reduce_decoder(
-            #     cp_params,
-            #     y.reshape(B, H),
-            #     cp_decoder.T,
-            #     margin_index=ignore_index,
-            #     use_scale_factors=True,
-            # )  # (B,), (B, H)
-            # z_tilde, gammas_z = batch_cp_reduce_decoder(
-            #     cp_params,
-            #     torch.full(
-            #         (B, H),
-            #         -1,
-            #         dtype=torch.long,
-            #         device=x.device,
-            #     ),
-            #     cp_decoder.T,
-            #     margin_index=-1,
-            #     use_scale_factors=True,
-            # )
+                cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+                cp_decoder = self.decoder
 
-            # loss = (1 / H) * (  # avg across seq dimension
-            #     -torch.log(p_tilde)  # (B,)
-            #     + torch.log(z_tilde)  # (B,)
-            #     # Contraction Stability Scale Factors
-            #     - (gammas_p.log().sum(dim=-1))  # (B, H)
-            #     + (gammas_z.log().sum(dim=-1))  # (B, H)
-            # ).mean()  # avg across batch dimension
+                log_p_tilde = batch_cp_reduce_decoder_einlse(
+                    cp_params,
+                    y.reshape(B, H),
+                    cp_decoder.T,
+                    margin_index=ignore_index,
+                )  # (B,)
+                log_z = batch_cp_reduce_decoder_einlse(
+                    cp_params,
+                    torch.full(
+                        (B, H),
+                        ignore_index,
+                        dtype=torch.long,
+                        device=x.device,
+                    ),
+                    cp_decoder.T,
+                    margin_index=ignore_index,
+                )  # (B,)
 
-            # *****************************************************************************************
-            #  LOGSUMEXP VERSION
-            # *****************************************************************************************
+                loss = (1 / H) * (log_z - log_p_tilde).mean()
+            else:
 
-            cp_params = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
-            cp_decoder = self.decoder
+                # *****************************************************************************************
+                #  VMAP VERSION
+                # *****************************************************************************************
 
-            log_p_tilde = batch_cp_reduce_decoder_einlse(
-                cp_params,
-                y.reshape(B, H),
-                cp_decoder.T,
-                margin_index=ignore_index,
-            )  # (B,)
-            log_z = batch_cp_reduce_decoder_einlse(
-                cp_params,
-                torch.full(
-                    (B, H),
-                    ignore_index,
-                    dtype=torch.long,
-                    device=x.device,
-                ),
-                cp_decoder.T,
-                margin_index=ignore_index,
-            )  # (B,)
+                cp_params = POS_FUNC_MAP[self.config.pos_func](
+                    torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+                )
+                cp_decoder = POS_FUNC_MAP[self.config.pos_func](self.decoder)
 
-            loss = (1 / H) * (log_z - log_p_tilde).mean()
+                p_tilde, gammas_p = batch_cp_reduce_decoder(
+                    cp_params,
+                    y.reshape(B, H),
+                    cp_decoder.T,
+                    margin_index=ignore_index,
+                    use_scale_factors=True,
+                )  # (B,), (B, H)
+                z_tilde, gammas_z = batch_cp_reduce_decoder(
+                    cp_params,
+                    torch.full(
+                        (B, H),
+                        -1,
+                        dtype=torch.long,
+                        device=x.device,
+                    ),
+                    cp_decoder.T,
+                    margin_index=-1,
+                    use_scale_factors=True,
+                )
+
+                loss = (1 / H) * (  # avg across seq dimension
+                    -torch.log(p_tilde)  # (B,)
+                    + torch.log(z_tilde)  # (B,)
+                    # Contraction Stability Scale Factors
+                    - (gammas_p.log().sum(dim=-1))  # (B, H)
+                    + (gammas_z.log().sum(dim=-1))  # (B, H)
+                ).mean()  # avg across batch dimension
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
