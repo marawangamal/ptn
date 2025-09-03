@@ -1,6 +1,18 @@
 import torch
 
-from mtp.mheads.einlse import einlogsumexp
+# import opt_einsum as oe
+# import cotengra as ctg
+
+# 1. torch.einsum
+contract_func = torch.einsum
+
+# 2. opt_einsum
+# contract_func = lambda *args, **kwargs: oe.contract(*args, optimize="greedy", **kwargs)
+# contract_func = oe.contract
+
+# 3. cotengra
+# opt = ctg.HyperOptimizer(minimize="size")
+# contract_func = lambda *args, **kwargs: ctg.contract(*args, optimize=opt, **kwargs)
 
 
 def select_margin_cp_tensor_batched(
@@ -277,9 +289,9 @@ def cp_reduce_decoder_einlse(
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
-        return torch.log(torch.einsum(*esum_recipe)) + torch.stack(consts).sum()
+        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return torch.einsum(*esum_recipe)
+        return contract_func(*esum_recipe)
 
 
 def cp_reduce_decoder_einlse_select_only(
@@ -330,9 +342,9 @@ def cp_reduce_decoder_einlse_select_only(
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
-        return torch.log(torch.einsum(*esum_recipe)) + torch.stack(consts).sum()
+        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return torch.einsum(*esum_recipe)
+        return contract_func(*esum_recipe)
 
 
 def cp_reduce_decoder_einlse_margin_only(
@@ -397,9 +409,9 @@ def cp_reduce_decoder_einlse_margin_only(
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
-        return torch.log(torch.einsum(*esum_recipe)) + torch.stack(consts).sum()
+        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return torch.einsum(*esum_recipe)
+        return contract_func(*esum_recipe)
 
 
 def cp_reduce_decoder(
@@ -423,7 +435,7 @@ def cp_reduce_decoder(
     assert margin_index < 0, "margin_index must be negative"
     R, H, D = cp_params.shape
 
-    esum_fn = einlogsumexp if einlse else torch.einsum
+    esum_fn = contract_func
 
     # For each mode: marginalize (sum) if ops[h] == -1, else select ops[h]
     marginalize_mask = ops == margin_index  # (H,)

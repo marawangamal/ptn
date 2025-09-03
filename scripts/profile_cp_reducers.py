@@ -83,11 +83,11 @@ def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results = {}
-    B, T, Do, R, H, V = 32, 512, 4096, 32, 4, 50_000
+    B, T, Do, R, H, V = 32, 512, 1024, 32, 4, 30_000
 
-    cp_params_tilde = torch.randn(B, R, H, Do, device=device)
     decoder = torch.randn(Do, V, device=device)
-    cp_params = torch.einsum("brhd,dv->brhv", cp_params_tilde, decoder)
+    cp_params_tilde = torch.randn(B, R, 1, Do, device=device).expand(-1, -1, H, -1)
+    cp_params = torch.randn(B, R, 1, V, device=device).expand(-1, -1, H, -1)
     alpha_tilde = torch.randn(B, R, device=device)
     ops = torch.randint(0, V, (B, H), device=device)
     fw_args = {
@@ -107,18 +107,18 @@ if __name__ == "__main__":
                 select_margin_cp_tensor_batched,
             ),
             ("batch_cp_reduce_decoder", "decoder", batch_cp_reduce_decoder),
-            (
-                "batch_cp_reduce_decoder_einlse",
-                "decoder",
-                batch_cp_reduce_decoder_einlse,
-            ),
+            # (
+            #     "batch_cp_reduce_decoder_einlse",
+            #     "decoder",
+            #     batch_cp_reduce_decoder_einlse,
+            # ),
             (
                 "batch_cp_reduce_decoder_einlse_select_only",
                 "decoder",
                 batch_cp_reduce_decoder_einlse_select_only,
             ),
             (
-                "batch_cp_normalize_decoder_einlse",
+                "batch_cp_reduce_decoder_einlse_margin_only",
                 "normalize",
                 batch_cp_reduce_decoder_einlse_margin_only,
             ),
