@@ -4,10 +4,11 @@ import math
 import torch
 
 from mtp.mheads._tensorops import (
-    cp_normalize_decoder_einlse,
+    cp_reduce_decoder_einlse_margin_only,
     cp_reduce_decoder,
     cp_reduce_decoder_einlse,
     cp_reduce,
+    cp_reduce_decoder_einlse_select_only,
 )
 
 # If einlogsumexp is in another module, import it:
@@ -109,7 +110,7 @@ class TestEinLogSumExp(unittest.TestCase):
             decoder.exp(),
             use_scale_factors=False,
         )
-        res_v2 = cp_normalize_decoder_einlse(
+        res_v2 = cp_reduce_decoder_einlse_margin_only(
             cp_params_tilde,
             decoder,
             apply_logsumexp=True,
@@ -121,12 +122,12 @@ class TestEinLogSumExp(unittest.TestCase):
             R, H, Di, Do, V = 8, 4, 386, 128, 30_000
             cp_params_tilde = torch.randn(R, H, Di)
             decoder = torch.randn(Di, V)
-            res_1 = cp_normalize_decoder_einlse(
+            res_1 = cp_reduce_decoder_einlse_margin_only(
                 cp_params_tilde.exp(),
                 decoder.exp(),
                 apply_logsumexp=False,
             )
-            res_2 = cp_normalize_decoder_einlse(
+            res_2 = cp_reduce_decoder_einlse_margin_only(
                 cp_params_tilde,
                 decoder,
                 apply_logsumexp=True,
@@ -140,7 +141,7 @@ class TestEinLogSumExp(unittest.TestCase):
             decoder = torch.randn(Di, V)
             ops = torch.randint(0, V, (H,))
             log_p_tilde = cp_reduce_decoder_einlse(cp_params_tilde, ops, decoder)
-            log_z = cp_normalize_decoder_einlse(
+            log_z = cp_reduce_decoder_einlse_margin_only(
                 cp_params_tilde,
                 decoder,
                 apply_logsumexp=True,
@@ -157,11 +158,21 @@ class TestEinLogSumExp(unittest.TestCase):
             decoder = torch.randn(Di, V)
             ops = torch.full((H,), -1, dtype=torch.long)
             res_1 = cp_reduce_decoder_einlse(cp_params_tilde, ops, decoder)
-            res_2 = cp_normalize_decoder_einlse(
+            res_2 = cp_reduce_decoder_einlse_margin_only(
                 cp_params_tilde,
                 decoder,
                 apply_logsumexp=True,
             )
+            self.assertTrue(torch.allclose(res_1, res_2, atol=1))
+
+    def test_cp_reduce_decoder_select_only(self):
+        for _ in range(50):
+            R, H, Di, Do, V = 8, 4, 386, 128, 30_000
+            cp_params_tilde = torch.randn(R, H, Di)
+            decoder = torch.randn(Di, V)
+            ops = torch.randint(0, V, (H,))
+            res_1 = cp_reduce_decoder_einlse_select_only(cp_params_tilde, ops, decoder)
+            res_2 = cp_reduce_decoder_einlse(cp_params_tilde, ops, decoder)
             self.assertTrue(torch.allclose(res_1, res_2, atol=1))
 
 

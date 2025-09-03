@@ -210,7 +210,6 @@ def cp_reduce(
     return res, scale_factors
 
 
-# BUG: this version cannot do marginals properly, for marginalization see ``cp_normalize_decoder_einlse``
 def cp_reduce_decoder_einlse(
     cp_params_tilde: torch.Tensor,
     ops: torch.Tensor,
@@ -283,7 +282,60 @@ def cp_reduce_decoder_einlse(
         return torch.einsum(*esum_recipe)
 
 
-def cp_normalize_decoder_einlse(
+def cp_reduce_decoder_einlse_select_only(
+    cp_params_tilde: torch.Tensor,
+    ops: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_logsumexp=True,
+):
+    """Faster variant of ``cp_reduce_decoder_einlse`` that only performs select operations.
+    Args:
+        cp_params_tilde (torch.Tensor): CP params logits. Shape: (R, H, D)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Note:
+        Computes logP(y1, ..., yH | x) = log \\sum exp(a_h)exp(d_h(ops)) ... exp(a_H) exp(d_H(ops))
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+    H, D = cp_params_tilde.size(1), cp_params_tilde.size(-1)
+    esum_recipe = []
+    selected_indices = ops.unsqueeze(0).expand(D, -1)  # (1, H)
+
+    consts = []
+    for h in range(H):
+        a_h = cp_params_tilde[:, h, :]  # (R, D)
+        d_h = decoder_tilde.gather(-1, selected_indices[:, h : h + 1])  # (D, 1)
+        s = h * 3  # num indexes used in each iteration
+        if apply_logsumexp:
+            m_a = a_h.max()
+            m_d = d_h.max()
+            esum_recipe.append((a_h - m_a).exp())  # (R, D)
+            esum_recipe.append([0, s + 1])
+            esum_recipe.append((d_h - m_d).exp())  # (D, V)
+            esum_recipe.append([s + 1, s + 2])
+            # esum_recipe.append(c_h)  # (V,)
+            # esum_recipe.append([s + 2])
+            consts.extend([m_a, m_d])
+        else:
+            esum_recipe.append(a_h)  # (R, D)
+            esum_recipe.append([0, s + 1])
+            esum_recipe.append(d_h)  # (D,)
+            esum_recipe.append([s + 1, s + 2])
+            # esum_recipe.append(c_h)  # (V,)
+            # esum_recipe.append([s + 2])
+
+    esum_recipe.append([])  # output is scalar
+    if apply_logsumexp:
+        return torch.log(torch.einsum(*esum_recipe)) + torch.stack(consts).sum()
+    else:
+        return torch.einsum(*esum_recipe)
+
+
+def cp_reduce_decoder_einlse_margin_only(
     cp_params_tilde: torch.Tensor,
     decoder_tilde: torch.Tensor,
     apply_logsumexp=True,
@@ -309,29 +361,39 @@ def cp_normalize_decoder_einlse(
     # BUG: not sure if it is okay to use the same ones tensor for all modes
     # ones = torch.ones(V, device=dvc, dtype=dtype)
 
+    d = decoder_tilde  # (D, V)
+    m_d = d.max()
+    d_exp = (d - m_d).exp()
+    # d_h_exp = d_h
+    # m_d = torch.tensor(0.0, device=dvc, dtype=dtype)
+
+    a = cp_params_tilde
+    m_a = a.max()  # change to give an H-dimensional vector
+    a_exp = (a - m_a).exp()
+
     consts = []
     for h in range(H):
-        a_h = cp_params_tilde[:, h, :]  # (R, D)
-        d_h = decoder_tilde  # (D, V)
+        # a_h = cp_params_tilde[:, h, :]  # (R, D)
+        a_h_exp = a_exp[:, h, :]
+
         s = h * 3  # num indexes used in each iteration
-        ones = torch.ones(V, device=dvc, dtype=dtype)
+        # ones = torch.ones(V, device=dvc, dtype=dtype)
         if apply_logsumexp:
-            m_a = a_h.max()
-            m_d = d_h.max()
-            esum_recipe.append((a_h - m_a).exp())  # (R, D)
+            # m_a = a_h.max()
+            esum_recipe.append(a_h_exp)  # (R, D)
             esum_recipe.append([0, s + 1])
-            esum_recipe.append((d_h - m_d).exp())  # (D, V)
+            esum_recipe.append(d_exp)  # (D, V)
             esum_recipe.append([s + 1, s + 2])
-            esum_recipe.append(ones)  # (V,)
-            esum_recipe.append([s + 2])
+            # esum_recipe.append(ones)  # (V,)
+            # esum_recipe.append([s + 2])
             consts.extend([m_a, m_d])
         else:
-            esum_recipe.append(a_h)  # (R, D)
+            esum_recipe.append(a[:, h, :])  # (R, D)
             esum_recipe.append([0, s + 1])
-            esum_recipe.append(d_h)  # (D,)
+            esum_recipe.append(d)  # (D, V)
             esum_recipe.append([s + 1, s + 2])
-            esum_recipe.append(ones)  # (V,)
-            esum_recipe.append([s + 2])
+            # esum_recipe.append(ones)  # (V,)
+            # esum_recipe.append([s + 2])
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
@@ -410,6 +472,9 @@ batch_cp_reduce_decoder = torch.vmap(cp_reduce_decoder, in_dims=(0, 0, None))
 batch_cp_reduce_decoder_einlse = torch.vmap(
     cp_reduce_decoder_einlse, in_dims=(0, 0, None)
 )
-batch_cp_normalize_decoder_einlse = torch.vmap(
-    cp_normalize_decoder_einlse, in_dims=(0, None)
+batch_cp_reduce_decoder_einlse_select_only = torch.vmap(
+    cp_reduce_decoder_einlse_select_only, in_dims=(0, 0, None)
+)
+batch_cp_reduce_decoder_einlse_margin_only = torch.vmap(
+    cp_reduce_decoder_einlse_margin_only, in_dims=(0, None)
 )

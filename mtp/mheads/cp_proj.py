@@ -9,7 +9,7 @@ from mtp.mheads._abc import (
     AbstractDisributionHeadOutput,
 )
 from mtp.mheads._tensorops import (
-    batch_cp_normalize_decoder_einlse,
+    batch_cp_reduce_decoder_einlse_margin_only,
     batch_cp_reduce,
     batch_cp_reduce_decoder,
     batch_cp_reduce_decoder_einlse,
