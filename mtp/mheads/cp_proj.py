@@ -192,6 +192,16 @@ class CPProjector(AbstractDisributionHead):
                     + (gammas_z.log().sum(dim=-1))  # (B, H)
                 ).mean()  # avg across batch dimension
 
+                # TODO: plot as histogram
+                # DEBUGGING / ANALYSIS
+                # logging the following list: softmax(--r,h--|p_dists_tilde|--|decoder|--)  (R,H,V)
+                if self.debug:
+                    alphas = torch.softmax(
+                        torch.einsum("brhd,vd->brhv", cp_params, cp_decoder),
+                        dim=-1,
+                    )
+                    loss_dict["alphas"] = alphas.reshape(-1).detach().cpu()
+
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
             loss=loss,

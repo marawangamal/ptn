@@ -17,6 +17,7 @@ class AbstractDisributionHeadConfig:
     d_hidden: Optional[int] = None
     pool_method: str = "mean"  # "mean" or "linear"
     pos_func: str = "sigmoid"
+    debug: bool = False
 
 
 @dataclass
@@ -32,6 +33,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         super().__init__()
         self.config = config
         self.feat_proj = None
+        self.debug = config.debug
         if config.n_feats > 1:
             if config.pool_method == "linear":
                 self.feat_proj = torch.nn.Linear(
@@ -131,7 +133,11 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
         output = self(x, yw, ignore_index=ignore_index)
         loss = output.loss.mean() if output.loss is not None else None
         logits = output.logits.reshape(B, T, H_, -1)
-        return AbstractDisributionHeadOutput(loss=loss, logits=logits)
+        return AbstractDisributionHeadOutput(
+            loss=loss,
+            logits=logits,
+            loss_dict=output.loss_dict,
+        )
 
     def get_loss_and_logits(
         self,

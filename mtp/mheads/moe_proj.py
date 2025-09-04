@@ -129,6 +129,7 @@ class MoEProjector(AbstractDisributionHead):
         B, V = x.shape[0], self.config.d_output
         H = self.config.horizon
         loss = None
+        loss_dict = {}
         if y is not None:
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
@@ -143,10 +144,18 @@ class MoEProjector(AbstractDisributionHead):
                     self.decoder,
                 ).mean() * (1 / H)
 
+            # DEBUGGING / ANALYSIS
+            # logging the following list: softmax(--r,h--|p_dists_tilde|--|decoder|--)  (R,H,V)
+            if self.debug:
+                alphas = torch.softmax(
+                    torch.einsum("brhd,vd->brhv", p_dists_tilde, self.decoder), dim=-1
+                )
+                loss_dict["alphas"] = alphas.reshape(-1).detach().cpu()
+
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
             loss=loss,
-            loss_dict={},
+            loss_dict=loss_dict,
         )
 
 
