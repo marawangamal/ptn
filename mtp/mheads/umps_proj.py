@@ -31,8 +31,8 @@ def print_tens_stats(t: torch.Tensor, name: str):
 POS_FUNC_MAP = {
     "sigmoid": torch.nn.functional.sigmoid,
     "relu": torch.nn.functional.relu,
-    "exp": torch.exp,
     "square": torch.square,
+    "abs": torch.abs,
 }
 
 
@@ -90,38 +90,39 @@ class UMPSProj(AbstractDisributionHead):
 
         if y is not None:
 
-            if self.config.pos_func == "exp":
+            # *****************************************************************************************
+            #  LOGSUMEXP VERSION
+            # *****************************************************************************************
 
-                # *****************************************************************************************
-                #  LOGSUMEXP VERSION
-                # *****************************************************************************************
+            # NOTE: this is not optimal, as it will over-filter samples
+            # filter out entire sample if any of the H y vals are ignore_index
+            # maybe we can absorb this functionality in the reducers
+            mask = (y != ignore_index).all(dim=-1)  # (B,)
 
-                # NOTE: this is not optimal, as it will over-filter samples
-                # filter out entire sample if any of the H y vals are ignore_index
-                # maybe we can absorb this functionality in the reducers
-                mask = (y != ignore_index).all(dim=-1)  # (B,)
+            mps_params = (
+                (torch.einsum("bi,roqi->broq", x[mask], self.w_mps) + self.b_mps)
+                .unsqueeze(1)
+                .expand(-1, H, -1, -1, -1)
+            )  # (B', R, H, Do, R)
+            mps_decoder = self.decoder
 
-                mps_params = (
-                    (torch.einsum("bi,roqi->broq", x[mask], self.w_mps) + self.b_mps)
-                    .unsqueeze(1)
-                    .expand(-1, H, -1, -1, -1)
-                )  # (B', R, H, Do, R)
+            if self.config.pos_func in POS_FUNC_MAP.keys():
+                mps_params = POS_FUNC_MAP[self.config.pos_func](mps_params)
+                mps_decoder = POS_FUNC_MAP[self.config.pos_func](mps_decoder)
 
-                log_p_tilde = batch_mps_reduce_decoder_einlse_select_only(
-                    mps_params,
-                    y.reshape(B, H)[mask],
-                    self.decoder.T,
-                    # margin_index=ignore_index, not accepted arg for select_only
-                )  # (B,)
-                log_z = batch_mps_reduce_decoder_einlse_margin_only(
-                    mps_params,
-                    self.decoder.T,
-                    # margin_index=ignore_index, not accepted arg for margin_only
-                )  # (B,)
+            log_p_tilde = batch_mps_reduce_decoder_einlse_select_only(
+                mps_params,
+                y.reshape(B, H)[mask],
+                mps_decoder.T,
+                apply_logsumexp=self.config.pos_func == "exp",
+            )  # (B,)
+            log_z = batch_mps_reduce_decoder_einlse_margin_only(
+                mps_params,
+                mps_decoder.T,
+                apply_logsumexp=self.config.pos_func == "exp",
+            )  # (B,)
 
-                loss = (1 / H) * (log_z - log_p_tilde).mean()
-            else:
-                raise NotImplementedError("Not implemented")
+            loss = (1 / H) * (log_z - log_p_tilde).mean()
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
@@ -149,7 +150,7 @@ def run_test():
             d_output=V,
             horizon=H,
             rank=R,
-            pos_func="exp",
+            pos_func="abs",
         ),
     )
     x = torch.randn(B, D)

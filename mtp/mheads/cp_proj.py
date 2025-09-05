@@ -31,6 +31,7 @@ POS_FUNC_MAP = {
     "relu": torch.nn.functional.relu,
     "exp": torch.exp,
     "square": torch.square,
+    "abs": torch.abs,
 }
 
 
