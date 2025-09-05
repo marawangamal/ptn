@@ -475,11 +475,18 @@ def cp_reduce_decoder(
     return res, scale_factors
 
 
+# *************************************************************************************************************************
+#  MPS REDUCERS
+# *************************************************************************************************************************
+
+
+# TODO: use scale factors for non logsumexp case
 def mps_reduce_decoder_einlse_select_only(
     mps_params_tilde: torch.Tensor,
     ops: torch.Tensor,
     decoder_tilde: torch.Tensor,
     apply_logsumexp=True,
+    apply_log=False,
 ):
     """Reduce an MPS tensor via a select operations.
     Args:
@@ -537,7 +544,7 @@ def mps_reduce_decoder_einlse_select_only(
     if apply_logsumexp:
         return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return contract_func(*esum_recipe)
+        return torch.log(contract_func(*esum_recipe))
 
 
 def mps_reduce_decoder_einlse_margin_only(
@@ -592,7 +599,115 @@ def mps_reduce_decoder_einlse_margin_only(
     if apply_logsumexp:
         return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return contract_func(*esum_recipe)
+        return torch.log(contract_func(*esum_recipe))
+
+
+def mps_reduce_decoder_select_only(
+    mps_params_tilde: torch.Tensor,
+    ops: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_scale_factors=True,
+):
+    """Reduce an MPS tensor via a select operations.
+    Args:
+        mps_params_tilde (torch.Tensor): CP params logits. Shape: (H, R, D, R)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+        norm_type (str): Norm type. "l2" or "max"
+
+    Returns:
+        - Reduced tensor result (scalar)
+        - Scale factors (H, R)
+    """
+    H, R, D = (
+        mps_params_tilde.size(0),
+        mps_params_tilde.size(1),
+        mps_params_tilde.size(2),
+    )
+
+    # add first and last
+    alpha = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    beta = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+
+    decoder_slct = decoder_tilde.gather(-1, ops.unsqueeze(0).expand(D, -1))  # (D, H)
+    mps_cores_reduced = torch.stack(
+        [
+            torch.einsum("idj,d->ij", mps_params_tilde[h], decoder_slct[:, h])
+            for h in range(H)
+        ]
+    )  # (H, R, R)
+
+    res = alpha
+    scale_factors = []
+    for h in range(H):
+        res = torch.einsum("i, ij->j", res, mps_cores_reduced[h])
+        if apply_scale_factors:
+            sf = res.max()  # (R,)
+            res = res / sf
+            scale_factors.append(sf)
+
+    res = torch.einsum("i, i->", res, beta)
+
+    # Return log result
+    res = torch.log(res)
+    if len(scale_factors) > 0:
+        gamma = torch.stack(scale_factors).log().sum()  # (H,)
+        res = res + gamma
+
+    return res
+
+
+# TODO: pass marginalize_only flag and have single func
+def mps_reduce_decoder_margin_only(
+    mps_params_tilde: torch.Tensor,
+    decoder_tilde: torch.Tensor,
+    apply_scale_factors=True,
+):
+    """Reduce an MPS tensor via a marginalization.
+    Args:
+        mps_params_tilde (torch.Tensor): CP params logits. Shape: (H, R, D, R)
+        decoder_tilde (torch.Tensor): Decoder logits. Shape: (D, V)
+
+    Returns:
+        - Reduced tensor result (scalar)
+        - Scale factors (H, R)
+    """
+    H, R = mps_params_tilde.size(0), mps_params_tilde.size(1)
+
+    # add first and last
+    alpha = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+    beta = torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(
+        mps_params_tilde.device, mps_params_tilde.dtype
+    )  # (R,)
+
+    decoder_mrgn = decoder_tilde.sum(dim=-1)  # (D,)
+    mps_cores_reduced = torch.stack(
+        [torch.einsum("idj,d->ij", mps_params_tilde[h], decoder_mrgn) for h in range(H)]
+    )  # (H, R, R)
+
+    res = alpha
+    scale_factors = []
+    for h in range(H):
+        res = torch.einsum("i, ij->j", res, mps_cores_reduced[h])
+        if apply_scale_factors:
+            sf = res.max()  # (R,)
+            res = res / sf
+            scale_factors.append(sf)
+
+    res = torch.einsum("i, i->", res, beta)
+
+    # Return log result
+    res = torch.log(res)
+    if len(scale_factors) > 0:
+        gamma = torch.stack(scale_factors).log().sum()  # (H,)
+        res = res + gamma
+    return res
 
 
 # *************************************************************************************************************************
@@ -617,4 +732,11 @@ batch_mps_reduce_decoder_einlse_select_only = torch.vmap(
 )
 batch_mps_reduce_decoder_einlse_margin_only = torch.vmap(
     mps_reduce_decoder_einlse_margin_only, in_dims=(0, None)
+)
+
+batch_mps_reduce_decoder_select_only = torch.vmap(
+    mps_reduce_decoder_select_only, in_dims=(0, 0, None)
+)
+batch_mps_reduce_decoder_margin_only = torch.vmap(
+    mps_reduce_decoder_margin_only, in_dims=(0, None)
 )

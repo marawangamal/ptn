@@ -17,6 +17,8 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_margin_only,
     batch_mps_reduce_decoder_einlse_margin_only,
     batch_mps_reduce_decoder_einlse_select_only,
+    batch_mps_reduce_decoder_margin_only,
+    batch_mps_reduce_decoder_select_only,
     select_margin_cp_tensor_batched,
 )
 
@@ -89,6 +91,8 @@ class MPSProj(AbstractDisributionHead):
         loss = None
         loss_dict = {}
 
+        # methods: exp, abs, square, relu, softmax*, exp_lse*
+
         if y is not None:
 
             # NOTE: this is not optimal, as it will over-filter samples
@@ -99,23 +103,32 @@ class MPSProj(AbstractDisributionHead):
             mps_params = (
                 torch.einsum("bi,hroqi->bhroq", x[mask], self.w_mps) + self.b_mps
             )  # (B', R, H, V)
-
             mps_decoder = self.decoder
 
-            if self.config.pos_func != "exp":
+            if self.config.pos_func in POS_FUNC_MAP:
                 mps_params = POS_FUNC_MAP[self.config.pos_func](mps_params)
                 mps_decoder = POS_FUNC_MAP[self.config.pos_func](mps_decoder)
+                slct_func = batch_mps_reduce_decoder_select_only
+                mrgn_func = batch_mps_reduce_decoder_margin_only
 
-            log_p_tilde = batch_mps_reduce_decoder_einlse_select_only(
+            elif self.config.pos_func == "exp_lse":
+                mps_params = torch.log_softmax(mps_params, dim=-1)
+                mps_decoder = torch.log_softmax(mps_decoder, dim=-1)
+
+                slct_func = batch_mps_reduce_decoder_einlse_select_only
+                mrgn_func = batch_mps_reduce_decoder_einlse_margin_only
+
+            else:
+                raise ValueError(f"Invalid position function: {self.config.pos_func}")
+
+            log_p_tilde = slct_func(
                 mps_params,
                 y.reshape(B, H)[mask],
                 mps_decoder.T,
-                apply_logsumexp=self.config.pos_func == "exp",
             )  # (B,)
-            log_z = batch_mps_reduce_decoder_einlse_margin_only(
+            log_z = mrgn_func(
                 mps_params,
                 mps_decoder.T,
-                apply_logsumexp=self.config.pos_func == "exp",
             )  # (B,)
 
             loss = (1 / H) * (log_z - log_p_tilde).mean()
@@ -146,7 +159,7 @@ def run_test():
             d_output=V,
             horizon=H,
             rank=R,
-            pos_func="exp",
+            pos_func="square",
         ),
     )
     x = torch.randn(B, D)
