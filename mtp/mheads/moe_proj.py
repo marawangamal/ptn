@@ -144,13 +144,18 @@ class MoEProjector(AbstractDisributionHead):
             lsm_free = lsm_cp[:, :, h]  # (B, R, V)
             log_p = torch.logsumexp(lsm_a + lsm_select + lsm_free, dim=1)  # (B, V)
 
+            dist = torch.distributions.Categorical(logits=log_p)
+            yi = dist.sample()  # (B,)
+            y_out[:, h] = yi
+
             # exponentiate and sample
-            prob_y_bar_xy = torch.exp(log_p)  # (B, V)
-            prob_y_bar_xy = prob_y_bar_xy / prob_y_bar_xy.sum(-1, keepdim=True)
-            if do_sample:
-                y_out[:, h] = torch.multinomial(prob_y_bar_xy, 1).squeeze(-1)
-            else:
-                y_out[:, h] = torch.argmax(prob_y_bar_xy, dim=-1)
+            # prob_y_bar_xy = torch.exp(log_p)  # (B, V)
+            # prob_y_bar_xy = prob_y_bar_xy / prob_y_bar_xy.sum(-1, keepdim=True)
+            # if do_sample:
+            #     dist =
+            #     y_out[:, h] = torch.multinomial(prob_y_bar_xy, 1).squeeze(-1)
+            # else:
+            #     y_out[:, h] = torch.argmax(prob_y_bar_xy, dim=-1)
 
         return y_out
 
@@ -201,10 +206,28 @@ class MoEProjector(AbstractDisributionHead):
 
 
 if __name__ == "__main__":
-    H, R, D, V = 8, 4, 512, 30000
+    H, R, D, V = 28 * 28, 1, 10, 2
     moe = MoEProjector(
         AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V)
     )
+
+    # # Sample
+    # model = MHEADS["moe_proj"](
+    #     AbstractDisributionHeadConfig(
+    #         horizon=28*28,
+    #         d_model=10,  # 9 digits
+    #         d_output=2,  # 2 classes
+    #         rank=1,
+    #     )
+    # )
+    # z = torch.nn.functional.one_hot(torch.tensor([0]), num_classes=10).to(torch.float32).to(device)
+    # y = model.generate(z)
+
+    # horizon=300,
+    # d_model=10,  # 9 digits
+    # d_output=2,  # 2 classes
+    # rank=1,
+
     x = torch.randn(2, D)
     y = torch.randint(0, V, (2, H))
     # print(f"loss: {moe(x, y).loss}")
