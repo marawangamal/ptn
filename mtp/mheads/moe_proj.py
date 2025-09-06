@@ -113,6 +113,47 @@ class MoEProjector(AbstractDisributionHead):
     def set_output_embeddings(self, new_embeddings):
         self.decoder = new_embeddings
 
+    def generate(self, x: torch.Tensor, do_sample: bool = True):
+        """Generate a sequence of length H from the model.
+
+        Args:
+            x (torch.Tensor): Input features. Shape: (B, D)
+
+        Returns:
+            y (torch.Tensor): Generated sequence. Shape: (B, H)
+        """
+        cp_params_tilde = torch.einsum(
+            "brhd,vd->brhv", self.w_cp_params(x), self.decoder
+        )  # (B, R, H, D)
+        alphas_tilde = self.w_alpha(x)  # (B, R)
+
+        B, R, H, D = cp_params_tilde.shape
+
+        y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+
+        for h in range(H):
+            # Compute log P(y_h | x, y_1, ..., y_h-1)
+            lsm_a = torch.log_softmax(alphas_tilde, dim=-1).unsqueeze(-1)  # (B, R, 1)
+            lsm_cp = cp_params_tilde.log_softmax(dim=-1)  # (B, R, H, V)
+            lsm_select = lsm_cp.gather(  # (B, R, H, V) before gather
+                dim=-1,
+                index=y_out[:, :h].unsqueeze(1).unsqueeze(-1).expand(-1, R, -1, -1),
+            ).sum(
+                dim=-2
+            )  # (B, R, 1)
+            lsm_free = lsm_cp[:, :, h]  # (B, R, V)
+            log_p = torch.logsumexp(lsm_a + lsm_select + lsm_free, dim=1)  # (B, V)
+
+            # exponentiate and sample
+            prob_y_bar_xy = torch.exp(log_p)  # (B, V)
+            prob_y_bar_xy = prob_y_bar_xy / prob_y_bar_xy.sum(-1, keepdim=True)
+            if do_sample:
+                y_out[:, h] = torch.multinomial(prob_y_bar_xy, 1).squeeze(-1)
+            else:
+                y_out[:, h] = torch.argmax(prob_y_bar_xy, dim=-1)
+
+        return y_out
+
     def forward(
         self,
         x: torch.Tensor,
@@ -166,4 +207,5 @@ if __name__ == "__main__":
     )
     x = torch.randn(2, D)
     y = torch.randint(0, V, (2, H))
-    print(f"loss: {moe(x, y).loss}")
+    # print(f"loss: {moe(x, y).loss}")
+    print(f"generated: {moe.generate(x)}")
