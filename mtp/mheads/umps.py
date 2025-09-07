@@ -17,8 +17,6 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_margin_only,
     batch_mps_reduce_decoder_einlse_margin_only,
     batch_mps_reduce_decoder_einlse_select_only,
-    batch_mps_reduce_decoder_margin_only,
-    batch_mps_reduce_decoder_select_only,
     select_margin_cp_tensor_batched,
 )
 
@@ -33,13 +31,12 @@ def print_tens_stats(t: torch.Tensor, name: str):
 POS_FUNC_MAP = {
     "sigmoid": torch.nn.functional.sigmoid,
     "relu": torch.nn.functional.relu,
-    "exp": torch.exp,
     "square": torch.square,
     "abs": torch.abs,
 }
 
 
-class MPSProj(AbstractDisributionHead):
+class UMPS(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -52,8 +49,8 @@ class MPSProj(AbstractDisributionHead):
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
-        self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R))
+        self.w_mps = torch.nn.Parameter(torch.randn(R, Do, R, Di) * std_fan_in)
+        self.b_mps = torch.nn.Parameter(torch.zeros(R, Do, R))
         self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
@@ -91,9 +88,11 @@ class MPSProj(AbstractDisributionHead):
         loss = None
         loss_dict = {}
 
-        # methods: exp, abs, square, relu, softmax*, exp_lse*
-
         if y is not None:
+
+            # *****************************************************************************************
+            #  LOGSUMEXP VERSION
+            # *****************************************************************************************
 
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
@@ -101,34 +100,26 @@ class MPSProj(AbstractDisributionHead):
             mask = (y != ignore_index).all(dim=-1)  # (B,)
 
             mps_params = (
-                torch.einsum("bi,hroqi->bhroq", x[mask], self.w_mps) + self.b_mps
-            )  # (B', R, H, V)
+                (torch.einsum("bi,roqi->broq", x[mask], self.w_mps) + self.b_mps)
+                .unsqueeze(1)
+                .expand(-1, H, -1, -1, -1)
+            )  # (B', R, H, Do, R)
             mps_decoder = self.decoder
 
-            if self.config.pos_func in POS_FUNC_MAP:
+            if self.config.pos_func in POS_FUNC_MAP.keys():
                 mps_params = POS_FUNC_MAP[self.config.pos_func](mps_params)
                 mps_decoder = POS_FUNC_MAP[self.config.pos_func](mps_decoder)
-                slct_func = batch_mps_reduce_decoder_select_only
-                mrgn_func = batch_mps_reduce_decoder_margin_only
 
-            elif self.config.pos_func == "exp_lse":
-                mps_params = torch.log_softmax(mps_params, dim=-1)
-                mps_decoder = torch.log_softmax(mps_decoder, dim=-1)
-
-                slct_func = batch_mps_reduce_decoder_einlse_select_only
-                mrgn_func = batch_mps_reduce_decoder_einlse_margin_only
-
-            else:
-                raise ValueError(f"Invalid position function: {self.config.pos_func}")
-
-            log_p_tilde = slct_func(
+            log_p_tilde = batch_mps_reduce_decoder_einlse_select_only(
                 mps_params,
                 y.reshape(B, H)[mask],
                 mps_decoder.T,
+                apply_logsumexp=self.config.pos_func == "exp",
             )  # (B,)
-            log_z = mrgn_func(
+            log_z = batch_mps_reduce_decoder_einlse_margin_only(
                 mps_params,
                 mps_decoder.T,
+                apply_logsumexp=self.config.pos_func == "exp",
             )  # (B,)
 
             loss = (1 / H) * (log_z - log_p_tilde).mean()
@@ -153,13 +144,13 @@ class MPSProj(AbstractDisributionHead):
 
 def run_test():
     B, H, R, D, V = 32, 2, 4, 1024, 30_000
-    mt_head = MPSProj(
+    mt_head = UMPS(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
             rank=R,
-            pos_func="square",
+            pos_func="abs",
         ),
     )
     x = torch.randn(B, D)

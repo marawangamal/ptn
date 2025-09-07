@@ -51,7 +51,7 @@ def log_prob_moe(
 log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0, None))  # type: ignore
 
 
-class MoEProjector(AbstractDisributionHead):
+class MoED(AbstractDisributionHead):
     """Variant of MoE that projects input onto CP parameters.
 
     This is a MoE that projects the input onto the CP parameters, rather than
@@ -207,9 +207,7 @@ class MoEProjector(AbstractDisributionHead):
 
 if __name__ == "__main__":
     H, R, D, V = 28 * 28, 1, 10, 2
-    moe = MoEProjector(
-        AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V)
-    )
+    moe = MoED(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
 
     # # Sample
     # model = MHEADS["moe_proj"](

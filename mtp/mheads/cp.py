@@ -1,7 +1,4 @@
-import itertools
-import random
 import torch
-import torch.nn as nn
 
 from mtp.mheads._abc import (
     AbstractDisributionHead,
@@ -27,9 +24,6 @@ POS_FUNC_MAP = {
 }
 
 
-# ********************************************************
-#  NO DECODER VERSION
-# ********************************************************
 class CP(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
@@ -78,10 +72,6 @@ class CP(AbstractDisributionHead):
         loss_dict = {}
 
         if y is not None:
-
-            # *****************************************************************************************
-            #  ORIGINAL VERSION
-            # *****************************************************************************************
 
             theta_cp = POS_FUNC_MAP[self.config.pos_func](
                 torch.einsum("bi,rhiv->brhv", x, self.w_cp) + self.b_cp
@@ -176,14 +166,6 @@ def run_test():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    # # set some 50% of y to ignore_index
-    # for i, j in itertools.product(range(B), range(H)):
-    #     if random.random() < 0.5:
-    #         y[i, j] = -100
-
-    # out = mt_head(x, y)
-    # print(f"loss: {out.loss}")
-
     loss = mt_head(x, y).loss
     print(f"loss: {loss}")
     out = mt_head.generate(x)

@@ -35,7 +35,7 @@ POS_FUNC_MAP = {
 }
 
 
-class CPProjector(AbstractDisributionHead):
+class CPD(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -253,7 +253,7 @@ class CPProjector(AbstractDisributionHead):
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
-    mt_head = CPProjector(
+    mt_head = CPD(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,

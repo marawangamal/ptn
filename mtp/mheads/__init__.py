@@ -1,21 +1,19 @@
 from mtp.mheads.cp import CP
-from mtp.mheads.cp_proj import CPProjector
-from mtp.mheads.moe import MoE
-from mtp.mheads.moe_proj import MoEProjector
-from mtp.mheads.mps_proj import MPSProj
+from mtp.mheads.cp_decoder import CPD
+from mtp.mheads.moe_decoder import MoED
+from mtp.mheads.mps_decoder import MPSD
 from mtp.mheads.multihead import Multihead
 from mtp.mheads.stp import STP
-from mtp.mheads.umps_proj import UMPSProj
+from mtp.mheads.umps import UMPS
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 # !! IMPORTANT !! ::  Keep in sync with mtp.mheads.types
 MHEADS = {
     "stp": STP,
     "multihead": Multihead,
-    "moe": MoE,
-    "moe_proj": MoEProjector,
     "cp": CP,
-    "cp_proj": CPProjector,
-    "mps_proj": MPSProj,
-    "umps_proj": UMPSProj,
+    "cp_decoder": CPD,
+    "moe_decoder": MoED,
+    "mps_decoder": MPSD,
+    "umps": UMPS,
 }
