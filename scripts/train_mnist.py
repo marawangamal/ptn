@@ -1,136 +1,212 @@
+import argparse
+import os
+import re
+import certifi
 import torch
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-
-import matplotlib.pyplot as plt
-import seaborn as sns
 from tqdm import tqdm
+import wandb
+import numpy as np
 
-import os, certifi
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads import MHEADS
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
-import torch, torch.nn.functional as F, matplotlib.pyplot as plt
-from IPython.display import display, update_display, HTML
 
+def get_data_loaders(batch_size=32, data_dir="./data"):
+    """Create MNIST data loaders with binary thresholding."""
+    transform = transforms.Compose([transforms.ToTensor(), lambda x: (x > 0.5).long()])
 
-def qual_eval(model, handle=None, digit=0, shape=(28, 28), clear=False, px=120):
-    if not hasattr(qual_eval, "_store"):
-        qual_eval._store = {}
-    if clear and handle is not None:
-        update_display(HTML(""), display_id=handle.display_id)
-        qual_eval._store.pop(handle.display_id, None)
-        return handle
-
-    dev = next(model.parameters()).device
-    with torch.no_grad():
-        z = F.one_hot(torch.tensor([digit], device=dev), num_classes=10).float()
-        img = model.generate(z)[0].detach().cpu().view(*shape).numpy()
-
-    new = handle is None or getattr(handle, "display_id", None) not in qual_eval._store
-    if new:
-        dpi = 100
-        fig, ax = plt.subplots(figsize=(px / dpi, px / dpi), dpi=dpi)
-        im = ax.imshow(img, cmap="gray", interpolation="nearest")
-        ax.axis("off")
-        fig.subplots_adjust(0, 0, 1, 1)
-        handle = display(fig, display_id=True)
-        plt.close(fig)
-        qual_eval._store[handle.display_id] = (im, fig)
-    else:
-        im, fig = qual_eval._store[handle.display_id]
-        im.set_data(img)
-        # resize if px changed
-        fig.set_size_inches(px / fig.dpi, px / fig.dpi)
-        update_display(fig, display_id=handle.display_id)
-    return handle
-
-
-# Make the image binary: threshold at 0.5 after ToTensor, then convert to long (int)
-transform = transforms.Compose([transforms.ToTensor(), lambda x: (x > 0.5).long()])
-
-# Create datasets for training & validation, download if necessary
-training_set = torchvision.datasets.MNIST(
-    "./data", train=True, transform=transform, download=True
-)
-validation_set = torchvision.datasets.MNIST(
-    "./data", train=False, transform=transform, download=True
-)
-
-# Create data loaders for our datasets; shuffle for training, not for validation
-training_loader = torch.utils.data.DataLoader(training_set, batch_size=4, shuffle=True)
-validation_loader = torch.utils.data.DataLoader(
-    validation_set, batch_size=4, shuffle=False
-)
-
-# Report split sizes
-print("Training set has {} instances".format(len(training_set)))
-print("Validation set has {} instances".format(len(validation_set)))
-
-
-# Get the first batch from the training loader
-dataiter = iter(training_loader)
-images, labels = next(dataiter)
-
-# Show up to the first 10 images in the batch using seaborn
-num_images = min(10, images.shape[0])
-plt.figure(figsize=(num_images * 1.2, 1.5))  # Make images smaller
-
-for i in range(num_images):
-    plt.subplot(1, num_images, i + 1)
-    img = images[i].squeeze().numpy()
-    sns.heatmap(
-        img, cmap="gray", cbar=False, xticklabels=False, yticklabels=False, square=True
+    train_set = torchvision.datasets.MNIST(
+        data_dir, train=True, transform=transform, download=True
     )
-    plt.title(f"{labels[i].item()}", fontsize=8)
-    plt.axis("off")
-
-plt.suptitle("First Batch Images (Labels shown above)", y=1.05)
-plt.tight_layout()
-plt.show()
-
-
-# HPs
-num_epochs = 5
-lr = 0.001
-
-model = MHEADS["moe_proj"](
-    AbstractDisributionHeadConfig(
-        horizon=784,
-        d_model=10,  # 9 digits
-        d_output=2,  # 2 classes
-        rank=32,
-        pos_func="abs",
+    val_set = torchvision.datasets.MNIST(
+        data_dir, train=False, transform=transform, download=True
     )
-)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-h = None
-for epoch in range(num_epochs):
-    pbar = tqdm(training_loader)
+    train_loader = torch.utils.data.DataLoader(
+        train_set, batch_size=batch_size, shuffle=True
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_set, batch_size=batch_size, shuffle=False
+    )
+
+    return train_loader, val_loader
+
+
+def train_epoch(model, train_loader, optimizer, device, wandb_logger):
+    """Train for one epoch and return average loss."""
     model.train()
-    for batch in pbar:
-        y, x = batch  # for gen modelling reverse x, y
+    total_loss = 0
+    num_batches = 0
+
+    for batch in tqdm(train_loader, desc="Training"):
+        y, x = batch  # for generative modeling, reverse x, y
         B = x.shape[0]
-        z = (
-            torch.nn.functional.one_hot(
-                x,
-                num_classes=10,
-            )
-            .reshape(B, -1)
-            .to(torch.float32)
-        )  # (B, 10)
+
+        # Convert to one-hot encoding
+        z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
         z, y = z.to(device), y.to(device)
+
+        # Forward pass
         output = model(z, y.reshape(B, -1))
         loss = output.loss
+
+        # Backward pass
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer.zero_grad()
-        pbar.set_postfix(loss=loss.item())
-        # Sample
-        h = qual_eval(model, h, digit=0)  # reuse same output cell
-    print(f"Epoch {epoch+1} | Loss: {loss.item()}")
+
+        wandb_logger.log({"train/batch_loss": loss.item()})
+
+        total_loss += loss.item()
+        num_batches += 1
+
+    return total_loss / num_batches
+
+
+def evaluate(model, val_loader, device):
+    """Evaluate model on validation set."""
+    model.eval()
+    total_loss = 0
+    num_batches = 0
+
+    with torch.no_grad():
+        for y, x in val_loader:
+            B = x.shape[0]
+            z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
+            z, y = z.to(device), y.to(device)
+
+            output = model(z, y.reshape(B, -1))
+            total_loss += output.loss.item()
+            num_batches += 1
+
+    return total_loss / num_batches
+
+
+def generate_images(model, device, num_images=10, image_size=(28, 28)):
+    """Generate images from the model and return as wandb-compatible format."""
+    model.eval()
+    generated_images = []
+
+    with torch.no_grad():
+        for digit in range(min(num_images, 10)):
+            # Create one-hot encoding for the digit
+            z = F.one_hot(torch.tensor([digit], device=device), num_classes=10).float()
+
+            # Generate image
+            generated = model.generate(z)[0].detach().cpu().view(*image_size).numpy()
+
+            # Convert to 0-255 range for better visualization
+            generated = (generated * 255).astype(np.uint8)
+            generated_images.append(generated)
+
+    return generated_images
+
+
+def build_exp_name(args: argparse.Namespace):
+    ignore_keys = ["seed", "sample", "debug"]
+    abbrev_map = {}
+    parts = []
+    for k, v in args.__dict__.items():
+        if k not in ignore_keys:
+            # Use abbreviation if it exists, otherwise use first letter
+            abbrev = abbrev_map.get(k, k[:1])
+            parts.append(f"{abbrev}{v}")
+
+    parts = [re.sub(r"[^a-zA-Z0-9]", "", p) for p in parts]
+    return "_".join(parts)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
+    parser.add_argument("--model", default="moe_proj")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--rank", type=int, default=10)
+    parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument(
+        "--num_gen_images",
+        type=int,
+        default=10,
+        help="Number of images to generate per epoch",
+    )
+    parser.add_argument(
+        "--max_samples",
+        type=int,
+        default=None,
+        help="Limit number of training samples for quick testing",
+    )
+
+    args = parser.parse_args()
+
+    # Initialize wandb
+    wandb.init(project="mnist-mtp", name=build_exp_name(args), config=vars(args))
+
+    # Setup
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Data
+    train_loader, val_loader = get_data_loaders(args.batch_size, "./data")
+
+    # Limit training data for quick testing
+    if args.max_samples is not None:
+        train_dataset = train_loader.dataset
+        train_dataset.data = train_dataset.data[: args.max_samples]
+        train_dataset.targets = train_dataset.targets[: args.max_samples]
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=args.batch_size, shuffle=True
+        )
+
+    print(f"Training samples: {len(train_loader.dataset)}")
+    print(f"Validation samples: {len(val_loader.dataset)}")
+
+    # Model
+    model = MHEADS[args.model](
+        AbstractDisributionHeadConfig(
+            horizon=(28 * 28),  # 28x28 for MNIST
+            d_model=10,
+            d_output=2,
+            rank=args.rank,
+            pos_func=args.pos_func,
+        )
+    )
+    model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
+    # Training loop
+    for epoch in range(args.epochs):
+        train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
+        val_loss = evaluate(model, val_loader, device)
+
+        print(
+            f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
+        )
+
+        # Generate and log images
+        generated_images = generate_images(model, device, args.num_gen_images)
+
+        # Log to wandb
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "train/loss": train_loss,
+                "val/loss": val_loss,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "generated_images": [
+                    wandb.Image(img, caption=f"Digit {i} - Epoch {epoch+1}")
+                    for i, img in enumerate(generated_images)
+                ],
+            }
+        )
+
+    wandb.finish()
+
+
+if __name__ == "__main__":
+    main()

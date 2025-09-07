@@ -1,3 +1,4 @@
+from mtp.mheads.cp import CP
 from mtp.mheads.cp_proj import CPProjector
 from mtp.mheads.moe import MoE
 from mtp.mheads.moe_proj import MoEProjector
@@ -13,6 +14,7 @@ MHEADS = {
     "multihead": Multihead,
     "moe": MoE,
     "moe_proj": MoEProjector,
+    "cp": CP,
     "cp_proj": CPProjector,
     "mps_proj": MPSProj,
     "umps_proj": UMPSProj,

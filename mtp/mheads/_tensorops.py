@@ -1,7 +1,5 @@
 import torch
-
-# import opt_einsum as oe
-# import cotengra as ctg
+import opt_einsum as oe
 
 # 1. torch.einsum
 contract_func = torch.einsum
@@ -228,6 +226,8 @@ def cp_reduce_decoder_einlse(
     decoder_tilde: torch.Tensor,
     margin_index=-1,
     apply_logsumexp=True,
+    except_index=None,
+    backend="torch",  # "torch", "opt_einsum", "cotengra"
 ):
     """Reduce a CP tensor via select/marginalize operations.
     Args:
@@ -249,6 +249,11 @@ def cp_reduce_decoder_einlse(
     # BUG: not sure if it is okay to use the same ones tensor for all modes
     # ones = torch.ones(V, device=dvc, dtype=dtype)
 
+    einsum_fn = {
+        "torch": torch.einsum,
+        "opt_einsum": oe.contract,
+    }[backend]
+
     # ops: (H,)
     margin_mask = ops == margin_index  # (H,) bool
     one_hots = torch.nn.functional.one_hot(ops.clamp(min=0), num_classes=V).to(
@@ -264,6 +269,7 @@ def cp_reduce_decoder_einlse(
     )  # (H, V)
 
     consts = []
+    esum_output = []
     for h in range(H):
         a_h = cp_params_tilde[:, h, :]  # (R, D)
         d_h = decoder_tilde  # (D, V)
@@ -276,8 +282,11 @@ def cp_reduce_decoder_einlse(
             esum_recipe.append([0, s + 1])
             esum_recipe.append((d_h - m_d).exp())  # (D, V)
             esum_recipe.append([s + 1, s + 2])
-            esum_recipe.append(c_h)  # (V,)
-            esum_recipe.append([s + 2])
+            if except_index is not None and except_index == h:
+                esum_output.extend([s + 2])
+            else:
+                esum_recipe.append(c_h)  # (V,)
+                esum_recipe.append([s + 2])
             consts.extend([m_a, m_d])
         else:
             esum_recipe.append(a_h)  # (R, D)
@@ -287,11 +296,11 @@ def cp_reduce_decoder_einlse(
             esum_recipe.append(c_h)  # (V,)
             esum_recipe.append([s + 2])
 
-    esum_recipe.append([])  # output is scalar
+    esum_recipe.append(esum_output)  # output is scalar or vector
     if apply_logsumexp:
-        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
+        return torch.log(einsum_fn(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return contract_func(*esum_recipe)
+        return einsum_fn(*esum_recipe)
 
 
 def cp_reduce_decoder_einlse_select_only(

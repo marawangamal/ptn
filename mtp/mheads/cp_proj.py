@@ -125,36 +125,7 @@ class CPProjector(AbstractDisributionHead):
             #     + (gammas_z.log().sum(dim=-1))  # (B, H)
             # ).mean()  # avg across batch dimension
 
-            if self.config.pos_func == "exp":
-
-                # *****************************************************************************************
-                #  LOGSUMEXP VERSION
-                # *****************************************************************************************
-
-                # NOTE: this is not optimal, as it will over-filter samples
-                # filter out entire sample if any of the H y vals are ignore_index
-                # maybe we can absorb this functionality in the reducers
-                mask = (y != ignore_index).all(dim=-1)  # (B,)
-
-                cp_params = (
-                    torch.einsum("bi,rhio->brho", x[mask], self.w_cp) + self.b_cp
-                )  # (B', R, H, V)
-                cp_decoder = self.decoder
-
-                log_p_tilde = batch_cp_reduce_decoder_einlse_select_only(
-                    cp_params,
-                    y.reshape(B, H)[mask],
-                    cp_decoder.T,
-                    # margin_index=ignore_index, not accepted arg for select_only
-                )  # (B,)
-                log_z = batch_cp_reduce_decoder_einlse_margin_only(
-                    cp_params,
-                    cp_decoder.T,
-                    # margin_index=ignore_index, not accepted arg for margin_only
-                )  # (B,)
-
-                loss = (1 / H) * (log_z - log_p_tilde).mean()
-            else:
+            if self.config.pos_func in POS_FUNC_MAP:
 
                 # *****************************************************************************************
                 #  VMAP VERSION
@@ -203,6 +174,39 @@ class CPProjector(AbstractDisributionHead):
                     )
                     loss_dict["alphas"] = alphas.reshape(-1).detach().cpu()
 
+            elif self.config.pos_func == "exp_lse":
+
+                # *****************************************************************************************
+                #  LOGSUMEXP VERSION
+                # *****************************************************************************************
+
+                # NOTE: this is not optimal, as it will over-filter samples
+                # filter out entire sample if any of the H y vals are ignore_index
+                # maybe we can absorb this functionality in the reducers
+                mask = (y != ignore_index).all(dim=-1)  # (B,)
+
+                cp_params = (
+                    torch.einsum("bi,rhio->brho", x[mask], self.w_cp) + self.b_cp
+                )  # (B', R, H, V)
+                cp_decoder = self.decoder
+
+                log_p_tilde = batch_cp_reduce_decoder_einlse_select_only(
+                    cp_params,
+                    y.reshape(B, H)[mask],
+                    cp_decoder.T,
+                    # margin_index=ignore_index, not accepted arg for select_only
+                )  # (B,)
+                log_z = batch_cp_reduce_decoder_einlse_margin_only(
+                    cp_params,
+                    cp_decoder.T,
+                    # margin_index=ignore_index, not accepted arg for margin_only
+                )  # (B,)
+
+                loss = (1 / H) * (log_z - log_p_tilde).mean()
+
+            else:
+                raise ValueError(f"Invalid pos_func: {self.config.pos_func}")
+
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
             loss=loss,
@@ -218,28 +222,58 @@ class CPProjector(AbstractDisributionHead):
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
-        pass
+        B, D, H = x.shape[0], x.shape[1], self.config.horizon
+        y_out = torch.empty(B, 0, dtype=torch.long, device=x.device)
+        if self.config.pos_func in POS_FUNC_MAP:
+            pass
+
+        elif self.config.pos_func == "exp_lse":
+            cp_params_tilde = torch.einsum("bi,rhio->brho", x, self.w_cp) + self.b_cp
+            for h in range(H):
+                y_mrgn = torch.full(
+                    (B, H - h),
+                    -1,
+                    dtype=torch.long,
+                    device=x.device,
+                )
+                log_p = batch_cp_reduce_decoder_einlse(
+                    cp_params_tilde,
+                    torch.cat([y_out, y_mrgn], dim=-1),
+                    self.decoder.T,
+                    except_index=h,
+                    backend="opt_einsum",
+                )
+                dist = torch.distributions.Categorical(logits=log_p)
+                yi = dist.sample()  # (B,)
+                y_out[:, h] = yi
+
+        else:
+            raise ValueError(f"Invalid pos_func: {self.config.pos_func}")
 
 
 def run_test():
-    B, H, D, V = 8, 4, 4096, 32000
+    B, H, D, V = 4, 28 * 28, 9, 2
     mt_head = CPProjector(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
             rank=8,
+            pos_func="exp_lse",
         ),
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    # set some 50% of y to ignore_index
-    for i, j in itertools.product(range(B), range(H)):
-        if random.random() < 0.5:
-            y[i, j] = -100
+    # # set some 50% of y to ignore_index
+    # for i, j in itertools.product(range(B), range(H)):
+    #     if random.random() < 0.5:
+    #         y[i, j] = -100
 
-    out = mt_head(x, y)
-    print(f"loss: {out.loss}")
+    # out = mt_head(x, y)
+    # print(f"loss: {out.loss}")
+
+    out = mt_head.generate(x)
+    print(f"generated: {out}")
 
 
 if __name__ == "__main__":
