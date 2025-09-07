@@ -1,6 +1,7 @@
 from mtp.mheads.cp import CP
 from mtp.mheads.cp_decoder import CPD
 from mtp.mheads.moe_decoder import MoED
+from mtp.mheads.mps import MPS
 from mtp.mheads.mps_decoder import MPSD
 from mtp.mheads.multihead import Multihead
 from mtp.mheads.stp import STP
@@ -14,6 +15,7 @@ MHEADS = {
     "cp": CP,
     "cp_decoder": CPD,
     "moe_decoder": MoED,
+    "mps": MPS,
     "mps_decoder": MPSD,
     "umps": UMPS,
 }

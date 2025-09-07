@@ -301,3 +301,6 @@ if __name__ == "__main__":
             save_path=os.path.join(save_path, f"{metric_key}.png"),
             **plot_kwargs,
         )
+
+    # # Plot box plot of training grads
+    # df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
