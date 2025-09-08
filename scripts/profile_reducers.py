@@ -43,7 +43,7 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_select_only,
     select_margin_cp_tensor_batched,
 )
-from mtp.mheads.moe_proj import log_prob_moe_batched
+from mtp.mheads.moe import log_prob_moe_batched
 
 
 def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
@@ -83,30 +83,34 @@ def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results = {}
-    B, T, Do, R, H, V = 32, 512, 1024, 32, 4, 30_000
+    B, T, Do, R, H, V = 2, 8, 9, 2, 128, 2
 
     decoder = torch.randn(Do, V, device=device)
     cp_params_tilde = torch.randn(B, R, 1, Do, device=device).expand(-1, -1, H, -1)
     cp_params = torch.randn(B, R, 1, V, device=device).expand(-1, -1, H, -1)
     alpha_tilde = torch.randn(B, R, device=device)
     ops = torch.randint(0, V, (B, H), device=device)
-    fw_args = {
-        "base": [cp_params, ops],
-        "decoder": [cp_params_tilde, ops, decoder],
-        "moe": [ops, alpha_tilde, cp_params_tilde, decoder.T],
-        "normalize": [cp_params_tilde, decoder],
-    }
-
     results = []
-    for fn_name, fw_args_name, fn in tqdm(
+    for fn_name, fn, fn_args, fn_kwargs in tqdm(
         [
-            ("batch_cp_reduce", "base", batch_cp_reduce),
+            (
+                "batch_cp_reduce",
+                batch_cp_reduce,
+                [cp_params, ops],
+                {},
+            ),
             (
                 "select_margin_cp_tensor_batched",
-                "base",
                 select_margin_cp_tensor_batched,
+                [cp_params, ops],
+                {},
             ),
-            ("batch_cp_reduce_decoder", "decoder", batch_cp_reduce_decoder),
+            (
+                "batch_cp_reduce_decoder",
+                batch_cp_reduce_decoder,
+                [cp_params_tilde, ops, decoder],
+                {},
+            ),
             # (
             #     "batch_cp_reduce_decoder_einlse",
             #     "decoder",
@@ -114,19 +118,20 @@ if __name__ == "__main__":
             # ),
             (
                 "batch_cp_reduce_decoder_einlse_select_only",
-                "decoder",
                 batch_cp_reduce_decoder_einlse_select_only,
+                [cp_params_tilde, ops, decoder],
+                {"backend": "opt_einsum"},
             ),
-            (
-                "batch_cp_reduce_decoder_einlse_margin_only",
-                "normalize",
-                batch_cp_reduce_decoder_einlse_margin_only,
-            ),
-            ("log_prob_moe_batched", "moe", log_prob_moe_batched),
+            # (
+            #     "batch_cp_reduce_decoder_einlse_margin_only",
+            #     "normalize",
+            #     batch_cp_reduce_decoder_einlse_margin_only,
+            # ),
+            # ("log_prob_moe_batched", "moe", log_prob_moe_batched),
         ]
     ):
 
-        r = test_latency(fn, 10, 100, *fw_args[fw_args_name])
+        r = test_latency(fn, 10, 100, *fn_args, **fn_kwargs)
         r["name"] = fn_name
         results.append(r)
 

@@ -90,9 +90,6 @@ def select_margin_cp_tensor_batched(
             # Post-contraction scaling
             res_left[mask_select] = res_left[mask_select] * update
             if use_scale_factors:
-                # sf[mask_select] = torch.linalg.norm(
-                #     res_left[mask_select], dim=-1
-                # )  # (B',)
                 sf[mask_select] = torch.max(res_left[mask_select], dim=-1)[0]  # (B',)
                 res_left[mask_select] = res_left[mask_select] / sf[
                     mask_select
@@ -109,9 +106,6 @@ def select_margin_cp_tensor_batched(
             # Post-contraction scaling
             res_right[mask_margin] = res_right[mask_margin] * update
             if use_scale_factors:
-                # sf[mask_margin] = torch.linalg.norm(
-                #     res_right[mask_margin], dim=-1
-                # )  # (B',)
                 sf[mask_margin] = torch.max(res_right[mask_margin], dim=-1)[0]  # (B',)
                 res_right[mask_margin] = res_right[mask_margin] / sf[
                     mask_margin
@@ -170,8 +164,13 @@ def get_breakpoints(ops: torch.Tensor):
     return h_free.long(), h_mrgn.long()
 
 
-def cp_reduce(
-    cp_params: torch.Tensor, ops: torch.Tensor, use_scale_factors=True, margin_index=-1
+def cp_reduce_pll(
+    cp_params: torch.Tensor,
+    ops: torch.Tensor,
+    use_scale_factors=True,
+    margin_index=-1,
+    except_index=None,
+    backend="opt_einsum",  # "torch", "opt_einsum", "cotengra"  or "none" meaning no einsum
 ):
     """Reduce a CP tensor via select/marginalize operations.
     Args:
@@ -182,6 +181,113 @@ def cp_reduce(
     Returns:
         torch.Tensor: Reduced tensor result (scalar)
     """
+
+    einsum_fn = {
+        "torch": torch.einsum,
+        "opt_einsum": oe.contract,
+        "none": None,
+    }[backend]
+
+    # Gather selected indices (clamp to handle -1 values safely)
+    assert margin_index < 0, "margin_index must be negative"
+    R, H, V = cp_params.shape
+
+    # For each mode: marginalize (sum) if ops[h] == -1, else select ops[h]
+    marginalize_mask = ops == margin_index  # (H,)
+    marginalized = cp_params.sum(dim=-1)  # (R, H) - sum over V dimension
+
+    # Gather selected indices (clamp to handle -1 values safely)
+    selected_indices = ops.clamp(min=0).unsqueeze(0).unsqueeze(-1)  # (1, H, 1)
+    selected = cp_params.gather(-1, selected_indices.expand(R, -1, -1)).squeeze(
+        -1
+    )  # (R, H)
+
+    # Choose marginalized or selected values based on ops
+    factors = torch.where(marginalize_mask, marginalized, selected)  # (R, H)
+
+    # Contraction
+    esum_recipe = []
+    scale_factors = []
+    output_recipe = []
+    for h in range(H):
+        if except_index is not None and except_index == h:
+            a_h = cp_params[:, h]  # (R, V)
+        else:
+            a_h = factors[:, h]  # (R,)
+
+        if use_scale_factors:
+            gamma_h = torch.max(a_h)
+            scale_factors.append(gamma_h)
+            a_h = a_h / gamma_h
+
+        if except_index is not None and except_index == h:
+            esum_recipe.append(a_h)  # (R, V)
+            esum_recipe.append([0, h + 1])
+            output_recipe.extend([h + 1])
+        else:
+            esum_recipe.append(a_h)  # (R,)
+            esum_recipe.append([0])
+
+    esum_recipe.append(output_recipe)  # output is scalar or vector
+    return einsum_fn(*esum_recipe), scale_factors
+
+
+def cp_reduce_ar(
+    cp_params_reduced: torch.Tensor,
+    cp_free: torch.Tensor,
+    use_scale_factors=True,
+):
+    """Reduce a CP tensor via select/marginalize operations.
+    Args:
+        cp_params_reduced (torch.Tensor): CP params. Shape: (R, H)
+        cp_free (torch.Tensor): CP free. Shape: (R, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+
+    R, H = cp_params_reduced.size(0), cp_params_reduced.size(1)
+    scale_factors = []
+    res = torch.ones(R, device=cp_params_reduced.device, dtype=cp_params_reduced.dtype)
+    for h in range(H):
+        res = res * cp_params_reduced[:, h]  # (R,)
+        if use_scale_factors:
+            scale_factors.append(torch.max(res))
+            res = res / scale_factors[-1]
+    res = res.unsqueeze(-1) * cp_free
+    res = res.sum(dim=0)
+    scale_factors = torch.stack(scale_factors) if scale_factors else torch.empty(0)
+    return res, scale_factors
+
+
+def cp_reduce(
+    cp_params: torch.Tensor,
+    ops: torch.Tensor,
+    use_scale_factors=True,
+    margin_index=-1,
+    except_index=None,
+    backend="none",  # "torch", "opt_einsum", "cotengra"  or "none" meaning no einsum
+):
+    """Reduce a CP tensor via select/marginalize operations.
+    Args:
+        cp_params (torch.Tensor): CP params. Shape: (R, H, V)
+        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
+        use_scale_factors (bool): Whether to apply scale factors during reduction
+
+    Returns:
+        torch.Tensor: Reduced tensor result (scalar)
+    """
+
+    cp_free = None
+    if except_index is not None:
+        ops = torch.cat([ops[:except_index], ops[except_index + 1 :]])  # (H-1,)
+        cp_free = cp_params[:, except_index, :]  # (R, V)
+        cp_params = torch.cat(
+            [cp_params[:, :except_index, :], cp_params[:, except_index + 1 :, :]], dim=1
+        )  # (R, H-1, V)
+
     assert margin_index < 0, "margin_index must be negative"
     R, H, V = cp_params.shape
 
@@ -201,19 +307,18 @@ def cp_reduce(
     scale_factors = []
     res = torch.ones(R, device=cp_params.device, dtype=cp_params.dtype)
 
-    # BUG: do scale factors online
-    # if use_scale_factors:
-    #     # norm of each factor
-    #     # scale_factors = torch.max(factors, dim=0)[0]
-    #     # factors = factors / scale_factors
-
-    # Do it during contraction
-    for i in range(H):
-        res = res * factors[:, i]  # (R,)
+    # Contraction
+    for h in range(H):
+        res = res * factors[:, h]  # (R,)
         if use_scale_factors:
             scale_factors.append(torch.max(res))
             res = res / scale_factors[-1]
-    res = res.sum()
+
+    if except_index is not None:
+        res = res.unsqueeze(-1) * cp_free
+        res = res.sum(dim=0)
+    else:
+        res = res.sum()
     scale_factors = torch.stack(scale_factors) if scale_factors else torch.empty(0)
 
     # Compute CP tensor value: product over modes, sum over components
@@ -308,6 +413,7 @@ def cp_reduce_decoder_einlse_select_only(
     ops: torch.Tensor,
     decoder_tilde: torch.Tensor,
     apply_logsumexp=True,
+    backend="torch",  # "torch", "opt_einsum", "cotengra"
 ):
     """Faster variant of ``cp_reduce_decoder_einlse`` that only performs select operations.
     Args:
@@ -325,6 +431,11 @@ def cp_reduce_decoder_einlse_select_only(
     H, D = cp_params_tilde.size(1), cp_params_tilde.size(-1)
     esum_recipe = []
     selected_indices = ops.unsqueeze(0).expand(D, -1)  # (1, H)
+
+    contract_fn = {
+        "torch": torch.einsum,
+        "opt_einsum": oe.contract,
+    }[backend]
 
     consts = []
     for h in range(H):
@@ -351,9 +462,9 @@ def cp_reduce_decoder_einlse_select_only(
 
     esum_recipe.append([])  # output is scalar
     if apply_logsumexp:
-        return torch.log(contract_func(*esum_recipe)) + torch.stack(consts).sum()
+        return torch.log(contract_fn(*esum_recipe)) + torch.stack(consts).sum()
     else:
-        return contract_func(*esum_recipe)
+        return contract_fn(*esum_recipe)
 
 
 def cp_reduce_decoder_einlse_margin_only(
@@ -804,6 +915,8 @@ def mps_reduce_decoder_margin_only(
 
 # CP REDUCERS
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
+batch_cp_reduce_pll = torch.vmap(cp_reduce_pll, in_dims=(0, 0))
+batch_cp_reduce_ar = torch.vmap(cp_reduce_ar, in_dims=(0, 0))
 batch_cp_reduce_decoder = torch.vmap(cp_reduce_decoder, in_dims=(0, 0, None))
 batch_cp_reduce_decoder_einlse = torch.vmap(
     cp_reduce_decoder_einlse, in_dims=(0, 0, None)
