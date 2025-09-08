@@ -47,6 +47,12 @@ class STP(AbstractDisributionHead):
             logits = logits.reshape(B, 1, -1)  # (B, H, V) here h=1
         return AbstractDisributionHeadOutput(logits=logits, loss=loss)
 
+    def generate(self, x: torch.Tensor, do_sample: bool = True, **kwargs):
+        """Generate a sequence of length H from the model."""
+        logits = self.decoder(x)  # (B, V)
+        dist = torch.distributions.Categorical(logits=logits)
+        return dist.sample().unsqueeze(-1)  # (B, 1)
+
 
 if __name__ == "__main__":
     # B, H, D, V = 1, 1, 10, 32
@@ -65,3 +71,4 @@ if __name__ == "__main__":
     x = torch.randn(B, T, D)
     y = torch.randint(0, V, (B, T))
     print(f"loss: {moe.forward_seq(x, y).loss}")
+    print(f"generate: {moe.generate(x[:,0]).shape}")

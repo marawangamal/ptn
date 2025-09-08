@@ -91,6 +91,7 @@ class CP(AbstractDisributionHead):
                     device=x.device,
                 ),
                 use_scale_factors=True,
+                # margin_index=-2,
             )
 
             gammas_p = torch.stack(gammas_p, dim=-1)

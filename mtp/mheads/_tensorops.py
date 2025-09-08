@@ -232,36 +232,6 @@ def cp_reduce_pll(
     return einsum_fn(*esum_recipe), scale_factors
 
 
-def cp_reduce_ar(
-    cp_params_reduced: torch.Tensor,
-    cp_free: torch.Tensor,
-    use_scale_factors=True,
-):
-    """Reduce a CP tensor via select/marginalize operations.
-    Args:
-        cp_params_reduced (torch.Tensor): CP params. Shape: (R, H)
-        cp_free (torch.Tensor): CP free. Shape: (R, V)
-        ops (torch.Tensor): Ops \\in [0, V) + [margin_index]. Shape: (H,)
-        use_scale_factors (bool): Whether to apply scale factors during reduction
-
-    Returns:
-        torch.Tensor: Reduced tensor result (scalar)
-    """
-
-    R, H = cp_params_reduced.size(0), cp_params_reduced.size(1)
-    scale_factors = []
-    res = torch.ones(R, device=cp_params_reduced.device, dtype=cp_params_reduced.dtype)
-    for h in range(H):
-        res = res * cp_params_reduced[:, h]  # (R,)
-        if use_scale_factors:
-            scale_factors.append(torch.max(res))
-            res = res / scale_factors[-1]
-    res = res.unsqueeze(-1) * cp_free
-    res = res.sum(dim=0)
-    scale_factors = torch.stack(scale_factors) if scale_factors else torch.empty(0)
-    return res, scale_factors
-
-
 def cp_reduce(
     cp_params: torch.Tensor,
     ops: torch.Tensor,
@@ -916,7 +886,6 @@ def mps_reduce_decoder_margin_only(
 # CP REDUCERS
 batch_cp_reduce = torch.vmap(cp_reduce, in_dims=(0, 0))
 batch_cp_reduce_pll = torch.vmap(cp_reduce_pll, in_dims=(0, 0))
-batch_cp_reduce_ar = torch.vmap(cp_reduce_ar, in_dims=(0, 0))
 batch_cp_reduce_decoder = torch.vmap(cp_reduce_decoder, in_dims=(0, 0, None))
 batch_cp_reduce_decoder_einlse = torch.vmap(
     cp_reduce_decoder_einlse, in_dims=(0, 0, None)
