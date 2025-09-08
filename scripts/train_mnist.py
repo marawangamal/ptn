@@ -58,9 +58,10 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
+        g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        wandb_logger.log({"train/batch_loss": loss.item()})
+        wandb_logger.log({"train/batch_loss": loss.item(), "train/grad_norm": g})
 
         total_loss += loss.item()
         num_batches += 1

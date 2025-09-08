@@ -144,9 +144,10 @@ class CP(AbstractDisributionHead):
                 theta_cp,  # (B, R, H, V)
                 ops,
                 use_scale_factors=True,
-            )  # (B,V), (B, H)
+            )  # (B, V), (B, H)
 
-            dist = torch.distributions.Categorical(logits=p_tilde)
+            probs = p_tilde / p_tilde.sum(-1, keepdim=True)
+            dist = torch.distributions.Categorical(probs=probs)
             yi = dist.sample()  # (B,1)
             y_out[:, h] = yi
 

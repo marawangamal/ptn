@@ -30,7 +30,7 @@ if __name__ == "__main__":
         "x": torch.randn(B, T, D, device=device),
         "y": torch.randint(0, V, (B, T), device=device),
     }
-    for key in ["moe", "moe_proj", "cp_proj"]:
+    for key in ["moe", "cp"]:
         model = MHEADS[key](AbstractDisributionHeadConfig(**model_kwargs))
         model.to(device)
         results[key] = test_latency(model.forward_seq, 10, 100, **fw_kwargs)
