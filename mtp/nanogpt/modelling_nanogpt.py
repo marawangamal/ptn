@@ -184,26 +184,27 @@ class GPT(nn.Module):
                 ln_f=LayerNorm(config.d_model, bias=config.bias),
             )
         )
-        self.lm_head = nn.Linear(config.d_model, config.d_vocab, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = (
-            self.lm_head.weight
-        )  # https://paperswithcode.com/method/weight-tying
+        # self.lm_head = nn.Linear(config.d_model, config.d_vocab, bias=False)
+        # # with weight tying when using torch.compile() some warnings get generated:
+        # # "UserWarning: functional_call was passed multiple values for tied weights.
+        # # This behavior is deprecated and will be an error in future versions"
+        # # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        # self.transformer.wte.weight = (
+        #     self.lm_head.weight
+        # )  # https://paperswithcode.com/method/weight-tying
 
-        # self.lm_head = MHEADS[config.lm_head](
-        #     AbstractDisributionHeadConfig(
-        #         d_model=config.d_model,
-        #         d_output=config.d_vocab,
-        #         horizon=config.lm_head_horizon,
-        #         rank=config.lm_head_rank,
-        #         d_hidden=config.lm_head_d_hidden,
-        #         pos_func=config.lm_head_pos_func,
-        #         debug=config.debug,
-        #     )
-        # )
+        self.lm_head = MHEADS[config.lm_head](
+            AbstractDisributionHeadConfig(
+                d_model=config.d_model,
+                d_output=config.d_vocab,
+                horizon=config.lm_head_horizon,
+                rank=config.lm_head_rank,
+                d_hidden=config.lm_head_d_hidden,
+                pos_func=config.lm_head_pos_func,
+                debug=config.debug,
+            )
+        )
+        self.transformer.wte.weight = self.lm_head.get_output_embeddings()
 
         # self.lm_head.set_output_embeddings(self.transformer.wte.weight)
 
@@ -258,34 +259,34 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None):
         x = self.backbone(idx)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
-            loss = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                targets.reshape(-1),
-                ignore_index=-1,
-            )
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(
-                x[:, [-1], :]
-            )  # note: using list [-1] to preserve the time dim
-            loss = None
-
         # if targets is not None:
-        #     output = self.lm_head.forward_seq(x, y=targets, window_shift=0)
-        #     logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
-        #     loss = output.loss
+        #     # if we are given some desired targets also calculate the loss
+        #     logits = self.lm_head(x)
+        #     loss = F.cross_entropy(
+        #         logits.reshape(-1, logits.size(-1)),
+        #         targets.reshape(-1),
+        #         ignore_index=-1,
+        #     )
         # else:
-        #     # output = self.lm_head(x[:, -1:, :])
-        #     # logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
-        #     # loss = None
         #     # inference-time mini-optimization: only forward the lm_head on the very last position
-        #     logits = self.lm_head.decoder(
+        #     logits = self.lm_head(
         #         x[:, [-1], :]
         #     )  # note: using list [-1] to preserve the time dim
         #     loss = None
+
+        if targets is not None:
+            output = self.lm_head.forward_seq(x, y=targets, window_shift=0)
+            logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
+            loss = output.loss
+        else:
+            # output = self.lm_head(x[:, -1:, :])
+            # logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
+            # loss = None
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.lm_head.decoder(
+                x[:, [-1], :]
+            )  # note: using list [-1] to preserve the time dim
+            loss = None
 
         return ModelOutput(logits=logits, loss=loss)
 
@@ -304,33 +305,7 @@ class GPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_output_tokens):
-            # if the sequence context is growing too long we must crop it at d_block
-            idx_cond = (
-                idx
-                if idx.size(1) <= self.config.d_block
-                else idx[:, -self.config.d_block :]
-            )
-            # forward the model to get the logits for the index in the sequence
-            # logits, _ = self(idx_cond)
-            output = self(idx_cond)
-            logits = output.logits
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float("Inf")
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
-
-        # for _ in range(0, max_output_tokens, self.config.lm_head_horizon):
+        # for _ in range(max_output_tokens):
         #     # if the sequence context is growing too long we must crop it at d_block
         #     idx_cond = (
         #         idx
@@ -338,8 +313,34 @@ class GPT(nn.Module):
         #         else idx[:, -self.config.d_block :]
         #     )
         #     # forward the model to get the logits for the index in the sequence
-        #     z = self.backbone(idx_cond)
-        #     idx_next = self.lm_head.generate(z[:, -1])
+        #     # logits, _ = self(idx_cond)
+        #     output = self(idx_cond)
+        #     logits = output.logits
+        #     # pluck the logits at the final step and scale by desired temperature
+        #     logits = logits[:, -1, :] / temperature
+        #     # optionally crop the logits to only the top k options
+        #     if top_k is not None:
+        #         v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+        #         logits[logits < v[:, [-1]]] = -float("Inf")
+        #     # apply softmax to convert logits to (normalized) probabilities
+        #     probs = F.softmax(logits, dim=-1)
+        #     # sample from the distribution
+        #     idx_next = torch.multinomial(probs, num_samples=1)
+        #     # append sampled index to the running sequence and continue
         #     idx = torch.cat((idx, idx_next), dim=1)
 
         # return idx
+
+        for _ in range(0, max_output_tokens, self.config.lm_head_horizon):
+            # if the sequence context is growing too long we must crop it at d_block
+            idx_cond = (
+                idx
+                if idx.size(1) <= self.config.d_block
+                else idx[:, -self.config.d_block :]
+            )
+            # forward the model to get the logits for the index in the sequence
+            z = self.backbone(idx_cond)
+            idx_next = self.lm_head.generate(z[:, -1])
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
