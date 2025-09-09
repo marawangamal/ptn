@@ -72,26 +72,13 @@ def build_exp_name(args: argparse.Namespace):
     return "_".join(parts)
 
 
-# # Hyperparameters
-# batch_size = 16
-# block_size = 32
-# max_iters = 15000 # I've implemented early stopping for the training loop so test as you see fit.
-# eval_interval = 100
-# learning_rate = 1e-3
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-# eval_iters = 200
-# n_embd = 64
-# n_head = 4
-# n_layer = 4
-# dropout = 0.0
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoGPT on Shakespeare")
     parser.add_argument("--seq_len", type=int, default=256, help="Sequence length")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--use_scheduler", action="store_true", help="Use scheduler")
     parser.add_argument(
         "--max_samples", type=int, default=1000, help="Max samples to use"
     )
@@ -244,6 +231,31 @@ def train(args):
 
     # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    if args.use_scheduler:
+        num_training_steps = args.epochs * len(train_dataloader)
+        print(f"Num training steps: {num_training_steps}")
+        num_warmup_steps = 100
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda step: (
+                (step + 1) / num_warmup_steps
+                if step < num_warmup_steps
+                else 0.5
+                * (
+                    1
+                    + math.cos(
+                        math.pi
+                        * (step - num_warmup_steps)
+                        / max(1, num_training_steps - num_warmup_steps)
+                    )
+                )
+            ),
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda step: 1.0,
+        )
 
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
@@ -258,6 +270,7 @@ def train(args):
     # Training loop
     model.train()
     best_val_loss = float("inf")
+    train_start_time = time.time()
     for epoch in range(args.epochs):
         total_loss = 0
         start_time = time.time()
@@ -295,6 +308,7 @@ def train(args):
                         p.grad.mul_(scale)
 
             optimizer.step()
+            scheduler.step()
 
             total_loss += loss.item()
 
@@ -309,6 +323,7 @@ def train(args):
                         "epoch": epoch + 1,
                         "grad_norm": grad_norm.item(),
                         "param_norm": param_norm,
+                        "lr": scheduler.get_last_lr()[0],
                     }
                 )
 
@@ -331,7 +346,7 @@ def train(args):
         val_loss = evaluate(model, val_dataloader, device)
 
         print(
-            f"Epoch {epoch+1} completed. Train loss: {avg_loss:.4f} | Val loss: {val_loss:.4f} | Time: {time.time() - start_time:.2f}s"
+            f"Epoch {epoch+1} completed. Train loss: {avg_loss:.4f} | Val loss: {val_loss:.4f} | Epoch Time: {time.time() - start_time:.2f}s | Total Time: {time.time() - train_start_time:.2f}s"
         )
         wandb.log({"train/loss": avg_loss, "val/loss": val_loss, "epoch": epoch + 1})
 
