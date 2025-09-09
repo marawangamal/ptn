@@ -1,652 +1,377 @@
-"""Minimal training script for SmolLM.
-
-Usage:
-    python train_smol.py --model_name distilbert/distilgpt2 --dataset_name wikitext --max_length 32 --epochs 1 --batch_size 1
-    python train_smol.py --datasets wikipedia --max_num_samples 50 --batch_size 1 --max_length 8 --epochs 10 --model distilbert/distilgpt2
-"""
-
-# TODO:
-# Performance improvements
-# [x] (All) exclude prefix prediction from loss
-# [x] (Multihead) Add H-1 heads and Aux loss function
-# [ ] (All) Use chat-template whenever we have `--pretrained` flag to differentiate sft and pretraining
-# (i.e. tok.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"))
-# [ ] (All) Add option for non-chunking (use PAD or EOS)
-# [ ] (MuToR Specific) add bi-directionl attention for prefixes
-
-
-# Runtime improvements
-# [ ] copy data onto $SLURM_TMPDIR
-# [ ] use `torch.compile`
-
-# Misc:
-# [ ] Add evals (ARC, PIQA, etc.) See https://arxiv.org/pdf/2203.15556
-
+import math
 import os
 import re
-import argparse
-from typing import Any, List, Literal
-
+import time
+from tqdm import tqdm
 import torch
-import wandb
 from torch.utils.data import DataLoader
-import pytorch_lightning as pl
-from pytorch_lightning.tuner import Tuner
-from pytorch_lightning.utilities import rank_zero_only
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.utilities import rank_zero_only
-
-import datasets
 from transformers import AutoTokenizer
-from transformers.data.data_collator import (
-    DataCollatorForLanguageModeling,
-    default_data_collator,
-)
-from dataloaders import get_dataset
-import lm_eval
-from lm_eval import simple_evaluate
+import wandb
+from dataloaders.shakespeare import ShakespeareDataset
+from dataloaders.smiles import SmilesDataset
+from toks.ctok import CTokenizer
 
-from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
+from mtp.nanogpt.modelling_nanogpt import GPT, GPTConfig
 
-
-EXPERIMENTS_DIR = "experiments"
-DS_KWARGS = {  # presets for diff datasets
-    "omi:1m": {
-        "dataset_name": "nvidia/OpenMathInstruct-2",
-        "split": "train_1M",
-        "subset": "",
-        "column_names": ["problem", "generated_solution"],
-    },
-    "fineweb": {
-        "dataset_name": "HuggingFaceFW/fineweb",
-        "subset": "sample-10BT",
-        "split": "train",
-        "column_names": ["text"],
-    },
-    "wikitext": {
-        "dataset_name": "wikitext",
-        "subset": "wikitext-2-raw-v1",
-        "split": "train[:10000]",
-        "column_names": ["text"],
-    },
-    "gsm8k": {
-        "dataset_name": "openai/gsm8k",
-        "subset": "main",
-        "split": "train",
-        "column_names": ["question", "answer"],
-    },
-}
-
-# print("-" * 100)
-# print(f"HF_HOME: {os.environ.get('HF_HOME', 'data')}")
-# print("-" * 100)
+import argparse
 
 
-class LitLM(pl.LightningModule):
-    def __init__(
-        self,
-        model_name,
-        model_head,
-        horizon,
-        max_steps,
-        lr=5e-5,
-        scheduler: Literal["none", "cosine"] = "none",
-        loss_type: Literal["joint", "mhead"] = "mhead",
-        pretrained: bool = False,
-        warmup_ratio: float = 0.05,
-        lambda_mhead: float = 0.1,
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-        self.model = None
-
-    def configure_model(self) -> None:
-        if self.model is None:
-            config = MultiTokenHFConfig(
-                model_name=self.hparams["model_name"],
-                model_head=self.hparams["model_head"],
-                horizon=self.hparams["horizon"],
-                loss_type=self.hparams["loss_type"],
-                pretrained=self.hparams["pretrained"],
-                lambda_mhead=self.hparams["lambda_mhead"],
-            )
-            self.model = MultiTokenHF(config)
-
-    def forward(self, input_ids, attention_mask=None, labels=None):
-        return self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels,
-        )
-
-    def _grad_vector(self, module):
-        return torch.cat(
-            [
-                p.grad.detach().flatten()
-                for p in module.parameters()
-                if p.grad is not None
-            ]
-        )
-
-    def training_step(self, batch, batch_idx):
-        outputs = self(**batch)
-        loss = outputs.loss
-
-        # Optional: log gradient cosine if both main and aux are present
-        if (
-            self.model is not None
-            and hasattr(self.model, "backbone")
-            and outputs.loss_main is not None
-            and outputs.loss_aux is not None
-        ):
-            # Only log every N steps to save time
-            if batch_idx % 50 == 0:
-                print(f"[{batch_idx}] Logging grads")
-                # Get grads for main loss
-                self.zero_grad()
-                outputs.loss_main.backward(retain_graph=True)
-                g_main = self._grad_vector(self.model.backbone)
-
-                # Get grads for aux loss
-                self.zero_grad()
-                outputs.loss_aux.backward(retain_graph=True)
-                g_aux = self._grad_vector(self.model.backbone)
-
-                # Cosine similarity & ratio
-                cos = torch.cosine_similarity(g_main, g_aux, dim=0).item()
-                ratio = (g_aux.norm() / (g_main.norm() + 1e-12)).item()
-
-                self.log("grad_cosine_main_aux", cos, prog_bar=True)
-                self.log("grad_ratio_main_aux", ratio, prog_bar=False)
-
-                self.zero_grad()  # clean before actual backward
-
-        self.log("train_loss", loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        outputs = self(**batch)
-        loss = outputs.loss
-        self.log("val_loss", loss)
-        return loss
-
-    def on_after_backward(self) -> None:
-        norm = torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
-        self.log("grad_norm", norm, on_step=True, on_epoch=False)
-
-    def configure_optimizers(self):
-        if (
-            self.hparams["scheduler"] == "cosine"
-            and self.hparams["max_steps"] is not None
-        ):
-            print(
-                f"[INFO] Using cosine annealing with {self.hparams['max_steps']} steps."
-            )
-            wr = self.hparams["warmup_ratio"]
-            opt = torch.optim.AdamW(
-                self.parameters(), lr=self.hparams["lr"], weight_decay=0
-            )
-            warmup_steps = int(wr * self.hparams["max_steps"])
-            warmup_factor = lambda st: wr + (1 - wr) * (st / max(warmup_steps, 1))
-            warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(opt, warmup_factor)
-            cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                opt,
-                T_max=self.hparams["max_steps"] - warmup_steps,
-                eta_min=0.1 * self.hparams["lr"],  # end at 10% of lr
-            )
-            sched = torch.optim.lr_scheduler.SequentialLR(
-                opt,
-                schedulers=[warmup_scheduler, cos_scheduler],
-                milestones=[warmup_steps],
-            )
-
-            return {
-                "optimizer": opt,
-                "lr_scheduler": {"scheduler": sched, "interval": "step"},
-            }
-
-        else:
-            return torch.optim.AdamW(self.parameters(), lr=self.hparams["lr"])
+DEFAULT_SMILES_PATH = "./dataloaders/data/qm9.smi"
+DEFAULT_SHAKESPEARE_PATH = "./dataloaders/data/tinyshakespeare.txt"
 
 
-class LMDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        tokenizer_name,
-        dataset_name,
-        subset,
-        split,
-        batch_size,
-        max_length,
-        split_ratio=0.1,
-        column_names=["text"],
-    ):
-        super().__init__()
-        self.save_hyperparameters()
-        self.dataset_name = dataset_name
-        self.subset = subset
-        self.split = split
-        self.batch_size = batch_size
-        self.max_length = max_length
-        self.split_ratio = split_ratio
-        self.column_names = column_names
+def _ensure_smiles_file(path: str):
+    """Create ./data/qm9.smi by downloading from HF if missing."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        return
+    try:
+        from datasets import load_dataset
+    except Exception as e:
+        raise RuntimeError(
+            "Missing SMILES file and `datasets` not installed. "
+            "Run `pip install datasets` or create ./data/qm9.smi manually."
+        ) from e
 
-        self.tokenizer_name = tokenizer_name
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.tokenizer_name, use_fast=True
-        )
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-
-    def setup(self, stage=None):
-        ds = get_dataset(
-            dataset=self.dataset_name,
-            subset=self.subset,
-            split=self.split,
-            tokenizer=self.tokenizer_name,
-            max_len=self.max_length,
-            column_names=self.column_names,
-        )
-
-        self.dataset = ds.train_test_split(test_size=self.split_ratio)
-        self.dataset["val"] = self.dataset["test"]
-
-    def train_dataloader(self):
-        return DataLoader(
-            self.dataset["train"],
-            batch_size=self.batch_size,
-            collate_fn=default_data_collator,
-        )
-
-    def val_dataloader(self):
-        return DataLoader(
-            self.dataset["val"],
-            batch_size=self.batch_size,
-            collate_fn=default_data_collator,
-        )
-
-    # def state_dict(self):
-    #     # track whatever you want here
-    #     state = {"current_train_batch_index": self.current_train_batch_index}
-    #     return state
-
-    # def load_state_dict(self, state_dict):
-    #     # restore the state based on what you tracked in (def state_dict)
-    #     self.current_train_batch_index = state_dict["current_train_batch_index"]
+    print(f"[download] Creating {path} from Hugging Face yairschiff/qm9 …")
+    ds = load_dataset("yairschiff/qm9", split="train")
+    col = "canonical_smiles" if "canonical_smiles" in ds.column_names else "smiles"
+    with open(path, "w", encoding="utf-8") as f:
+        for s in ds[col]:
+            if isinstance(s, str) and s:
+                f.write(s + "\n")
+    print(f"[download] Wrote {path}")
 
 
-class LMEvalsCallback(pl.Callback):
-    def __init__(
-        self,
-        model_name,
-        evals,
-        batch_size,
-        val_check_interval=1,
-        val_on_start=False,
-        device=None,
-        limit=None,
-    ):
-
-        super().__init__()
-        self.model_name = model_name
-        self.evals = evals
-        self.batch_size = batch_size
-        self.val_check_interval = val_check_interval
-        self.val_on_start = val_on_start
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.limit = limit
-        datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
-
-    def _run_eval(self, pl_module, logger_prefix=None):
-        output = simple_evaluate(
-            model=lm_eval.models.huggingface.HFLM(pretrained=pl_module.model),
-            tasks=self.evals,
-            batch_size=self.batch_size,
-            limit=self.limit,
-        )
-        for task_name in output["results"].keys():
-            # Example output:
-            # >> output['results']['gsm8k_cot']
-            # {'alias': 'gsm8k_cot', 'exact_match,strict-match': np.float64(0.5),
-            # 'exact_match_stderr,strict-match': 0.16666666666666666,
-            # 'exact_match,flexible-extract': np.float64(0.5),
-            # 'exact_match_stderr,flexible-extract': 0.16666666666666666}
-            for metric_name in output["results"][task_name].keys():
-                # if metric is a number, log it
-                if isinstance(output["results"][task_name][metric_name], (int, float)):
-                    pl_module.log(
-                        f"eval/{task_name}/{metric_name}",
-                        output["results"][task_name][metric_name],
-                        sync_dist=False,
-                    )
-                    print(
-                        f"[{logger_prefix}] (LMEvalsCallback) {task_name}/{metric_name} = {output['results'][task_name][metric_name]}"
-                    )
-
-    @rank_zero_only
-    def on_train_batch_start(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-        batch: Any,
-        batch_idx: int,
-    ) -> None:
-        if (batch_idx + 1) % self.val_check_interval == 0 or (
-            batch_idx == 0 and self.val_on_start
-        ):
-            self._run_eval(
-                pl_module=pl_module,
-                logger_prefix=f"Batch {batch_idx + 1}",
-            )
-
-    @rank_zero_only
-    def on_train_epoch_end(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
-        if (
-            hasattr(trainer, "current_epoch")
-            and hasattr(trainer, "max_epochs")
-            and trainer.current_epoch is not None
-            and trainer.max_epochs is not None
-            and trainer.current_epoch == trainer.max_epochs - 1
-        ):
-            self._run_eval(
-                pl_module=pl_module,
-                logger_prefix="Epoch End",
-            )
+def _ensure_shakespeare_file(path: str):
+    pass
+    # raise NotImplementedError("Shakespeare dataset not implemented")
 
 
-class SampleEvalCallback(pl.Callback):
-    def __init__(
-        self,
-        tokenizer,
-        val_check_interval=1,
-        val_on_start=False,
-        prefix="Hello, I'm a language model,",
-    ):
-        super().__init__()
-        self.val_check_interval = val_check_interval
-        self.prefix = prefix
-        self.tokenizer = tokenizer
-        self.val_on_start = val_on_start
+def build_exp_name(args: argparse.Namespace):
+    ignore_keys = ["seed", "sample", "debug"]
+    abbrev_map = {
+        "lm_head_d_hidden": "md",
+        "lm_head_horizon": "mh",
+        "lm_head_rank": "mr",
+        "lm_head": "m",
+        "aux_head_d_hidden": "ad",
+        "aux_head_horizon": "ah",
+        "aux_head_rank": "ar",
+        "aux_lambda": "al",
+        "aux_head": "a",
+    }
+    parts = []
+    for k, v in args.__dict__.items():
+        if k not in ignore_keys:
+            # Use abbreviation if it exists, otherwise use first letter
+            abbrev = abbrev_map.get(k, k[:1])
+            parts.append(f"{abbrev}{v}")
 
-    def _run_eval(self, trainer, pl_module, logger_prefix="N/A"):
-        outputs = pl_module.model.generate(
-            self.tokenizer.encode(self.prefix, return_tensors="pt").to(
-                pl_module.device
-            ),
-            max_new_tokens=64,
-            do_sample=False,
-        )
-        columns = ["text"]
-        data = [[self.tokenizer.decode(outputs[0])]]
-        print(f"[{logger_prefix}] (SampleEvalCallback) Generated sample: {data[0][0]}")
-        trainer.logger.log_text(key="samples", columns=columns, data=data)
-
-    @rank_zero_only
-    def on_train_batch_start(
-        self,
-        trainer: pl.Trainer,
-        pl_module: pl.LightningModule,
-        batch: Any,
-        batch_idx: int,
-    ) -> None:
-        if (batch_idx + 1) % self.val_check_interval == 0 or (
-            batch_idx == 0 and self.val_on_start
-        ):
-            self._run_eval(
-                trainer=trainer,
-                pl_module=pl_module,
-                logger_prefix=f"Batch {batch_idx + 1}",
-            )
-
-    # @rank_zero_only
-    # def on_train_batch_end(
-    #     self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
-    # ):
-    #     if (batch_idx + 1) % self.val_check_interval == 0:
-    #         self._run_eval(trainer, pl_module, logger_prefix=f"Batch {batch_idx}")
-
-    # @rank_zero_only
-    # def on_train_start(self, trainer, pl_module):
-    #     if self.val_on_start:
-    #         self._run_eval(trainer, pl_module, logger_prefix="Start")
-
-
-class OrionCallback(pl.Callback):
-    """
-    Track the best value of `monitor` and send it to Orion at the end of fit().
-
-    Args
-    ----
-    monitor : str
-        Metric key in ``trainer.callback_metrics`` to track
-        (e.g. "val_loss_epoch", "eval/hellaswag_acc_norm").
-    mode : {"min", "max"}
-        Whether a lower or higher value is better.
-    """
-
-    def __init__(self, monitor: str = "val_loss_epoch", mode: str = "min"):
-        super().__init__()
-        self.monitor = monitor
-        self.minimize = mode == "min"
-        self.best = float("inf") if self.minimize else -float("inf")
-
-    # ---------- helpers -----------------------------------------------------
-    def _is_better(self, current):
-        if current is None:
-            return False
-        return (current < self.best) if self.minimize else (current > self.best)
-
-    # ---------- Lightning hooks --------------------------------------------
-    def on_validation_epoch_end(self, trainer, pl_module):
-        """Update best after every validation epoch."""
-        current = trainer.callback_metrics.get(self.monitor)
-        if self._is_better(current):
-            self.best = current
-
-    # @rank_zero_only
-    # def on_fit_end(self, trainer, pl_module):
-    #     """Send the score to Orion once training is finished."""
-    #     value = self.best.item() if torch.is_tensor(self.best) else float(self.best)
-    #     report_objective(value)
-    #     print(f"[Orion] reported {self.monitor} = {value:.5f}")
-
-
-def get_econfig_name(args: argparse.Namespace):
-    ignore_keys = [
-        "disable_auto_resume",
-        "disable_evals",
-        "val_check_interval",
-        "val_on_start",
-        "ckpt_interval",
-        "tags",
-        "evals",
-        "column_names",
-        # ds metadata
-        "subset",
-        "split",
-        "prepare_ds",
-        "fast_dev_run",
-    ]
-    parts = [f"{k[:1]}{v}" for k, v in args.__dict__.items() if k not in ignore_keys]
-    # remove special characters
     parts = [re.sub(r"[^a-zA-Z0-9]", "", p) for p in parts]
     return "_".join(parts)
 
 
-def lookup_ckpt(args: argparse.Namespace):
-    ckpt_path = f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}/last.ckpt"
-    if not os.path.exists(ckpt_path):
-        return None
-    return ckpt_path
+# # Hyperparameters
+# batch_size = 16
+# block_size = 32
+# max_iters = 15000 # I've implemented early stopping for the training loop so test as you see fit.
+# eval_interval = 100
+# learning_rate = 1e-3
+# device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# eval_iters = 200
+# n_embd = 64
+# n_head = 4
+# n_layer = 4
+# dropout = 0.0
 
 
-def lookup_wandb_run(args: argparse.Namespace):
-    run_name = get_econfig_name(args)
-    runs = wandb.Api(timeout=15).runs("mtl")
-    matches = [r for r in runs if r.name == run_name]
-    matches.sort(key=lambda x: x.created_at, reverse=True)
-    if len(matches) == 0:
-        return None
-    return matches[0].id
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train NanoGPT on Shakespeare")
+    parser.add_argument("--seq_len", type=int, default=256, help="Sequence length")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument(
+        "--max_samples", type=int, default=1000, help="Max samples to use"
+    )
+    parser.add_argument("--lm_head", type=str, default="stp", help="LM head type")
+    parser.add_argument(
+        "--lm_head_horizon", type=int, default=1, help="LM head horizon"
+    )
+    parser.add_argument("--lm_head_rank", type=int, default=1, help="LM head rank")
+    parser.add_argument(
+        "--lm_head_d_hidden", type=int, default=None, help="LM head hidden dimension"
+    )
+    parser.add_argument(
+        "--lm_head_pos_func",
+        type=str,
+        default="sigmoid",
+        help="LM head positivity function",
+    )
+    parser.add_argument("--aux_head", type=str, default=None, help="Aux head type")
+    parser.add_argument(
+        "--aux_head_horizon", type=int, default=2, help="Aux head horizon"
+    )
+    parser.add_argument("--aux_head_rank", type=int, default=8, help="Aux head rank")
+    parser.add_argument("--aux_lambda", type=float, default=0.1, help="Aux loss weight")
+    parser.add_argument(
+        "--aux_head_d_hidden", type=int, default=None, help="Aux head hidden dimension"
+    )
+    parser.add_argument("--sample", action="store_true", help="Sample from model")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument(
+        "--tags", type=str, nargs="*", default=[], help="Tags for wandb logging"
+    )
+    parser.add_argument("--debug", action="store_true", help="Debug mode")
+    parser.add_argument(
+        "--save_every", type=int, default=None, help="Save every n epochs"
+    )
+    parser.add_argument("--dataset", type=str, default="shakespeare", help="Dataset")
+    parser.add_argument("--tokenizer", type=str, default="gpt2", help="Tokenizer")
+    return parser.parse_args()
 
 
-def main():
-    p = argparse.ArgumentParser()
-    # model
-    p.add_argument("--model", type=str, default="HuggingFaceTB/SmolLM-135M")
-    p.add_argument("--model_head", type=str, default="stp")
-    p.add_argument("--lambda_mhead", type=float, default=0.1)
-    p.add_argument("--horizon", type=int, default=1)
-    p.add_argument("--pretrained", action="store_true")
-    p.add_argument("--loss_type", type=str, default="mhead", choices=["joint", "mhead"])
-    # data
-    p.add_argument("--dataset", type=str, default="fineweb", choices=DS_KWARGS.keys())
-    # optimization
-    p.add_argument("--batch_size", type=int, default=32)
-    p.add_argument("--max_length", type=int, default=2048)
-    p.add_argument("--epochs", type=int, default=1)
-    p.add_argument("--scheduler", type=str, default="none", choices=["none", "cosine"])
-    p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--accumulate_grad_batches", type=int, default=1)
-    # misc (untracked)
-    p.add_argument("--disable_auto_resume", action="store_true")
-    p.add_argument("--disable_evals", action="store_true")
-    p.add_argument("--val_check_interval", type=int, default=5000)
-    p.add_argument("--val_on_start", action="store_true")
-    p.add_argument("--ckpt_interval", type=int, default=1000)
-    p.add_argument("--limit_train_batches", type=int, default=None)  # used for hpo
-    p.add_argument("--limit_val_batches", type=int, default=None)  # used for hpo
-    p.add_argument("--tags", type=str, nargs="*", default=[])
-    p.add_argument("--evals", type=str, nargs="*", default=["hellaswag"])
-    p.add_argument("--fast_dev_run", action="store_true")
-    args = p.parse_args()
+def evaluate(model, dataloader, device):
+    model.eval()
+    total_loss = 0
+    num_batches = 0
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            x = input_ids[:, :-1]
+            y = input_ids[:, 1:]
+            output = model(x, y)
+            total_loss += output.loss.item()
+            num_batches += 1
+    model.train()
+    return total_loss / num_batches
 
-    # data
-    dm = LMDataModule(
-        tokenizer_name=args.model,
-        batch_size=args.batch_size,
-        max_length=args.max_length,
-        **DS_KWARGS[args.dataset],
+
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def train(args):
+    # Initialize wandb
+    wandb.init(
+        project=f"nanogpt-{args.dataset}",
+        name=build_exp_name(args),
+        config=vars(args),
+        tags=args.tags,
+    )
+    set_seed(args.seed)
+    os.makedirs(os.path.join("checkpoints", build_exp_name(args)), exist_ok=True)
+
+    # Device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # # Load tokenizer
+    #     tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    #     tokenizer.pad_token = tokenizer.eos_token
+
+    # Load tokenizer & download dataset if needed
+    dataset_path = {
+        "shakespeare": DEFAULT_SHAKESPEARE_PATH,
+        "smiles": DEFAULT_SMILES_PATH,
+    }[args.dataset]
+    _ensure_ds = {
+        "shakespeare": _ensure_shakespeare_file,
+        "smiles": _ensure_smiles_file,
+    }[args.dataset]
+    _ensure_ds(dataset_path)
+    tokenizer = CTokenizer(dataset_path)
+
+    # Load Shakespeare dataset
+    # shakespeare_path = "dataloaders/data/tinyshakespeare.txt"
+    full_dataset = {
+        "shakespeare": ShakespeareDataset,
+        "smiles": SmilesDataset,
+    }[
+        args.dataset
+    ](tokenizer, seq_len=args.seq_len, max_samples=args.max_samples)
+
+    # Split dataset into train and validation
+    train_size = int(0.9 * len(full_dataset))
+    val_size = len(full_dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        full_dataset, [train_size, val_size]
     )
 
-    # model
-    max_steps = args.limit_train_batches  # BUG: incorrect, seeing full cosine curve
-    if max_steps is None:
-        dm.setup()
-        max_steps = (
-            args.epochs
-            * len(dm.train_dataloader())
-            / (torch.cuda.device_count() if torch.cuda.is_available() else 1)
-            / args.accumulate_grad_batches
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True
+    )
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
+    print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
+
+    # n_embd = 64
+    # n_head = 4
+    # n_layer = 4
+    # dropout = 0.0
+
+    # python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
+
+    # Create model
+    print(f"Creating model..")
+    model_kwargs = {
+        "n_layers": 6,
+        "n_head": 6,
+        "d_model": 384,
+        "d_vocab": len(tokenizer),
+        "dropout": 0.2,
+        "d_block": args.seq_len,
+        "lm_head": args.lm_head,
+        "lm_head_horizon": args.lm_head_horizon,
+        "lm_head_rank": args.lm_head_rank,
+        "lm_head_d_hidden": args.lm_head_d_hidden,
+        "lm_head_pos_func": args.lm_head_pos_func,
+        "aux_head": args.aux_head,
+        "aux_head_horizon": args.aux_head_horizon,
+        "aux_head_rank": args.aux_head_rank,
+        "aux_head_d_hidden": args.aux_head_d_hidden,
+        "aux_lambda": args.aux_lambda,
+        "debug": args.debug,
+    }
+    model = GPT(GPTConfig(**model_kwargs))
+    print(f"Moving model to {device}")
+    model.to(device)
+
+    # Optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+
+    # Log model info
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+    print(f"Num tokens: {len(tokenizer)}")
+    print(f"Loss of uniform distribution: {math.log(len(tokenizer))}")
+    wandb.log({"total_parameters": total_params})
+
+    # Logs gradients and parameters histograms
+    wandb.watch(model, log="all", log_freq=100)  # log_freq = steps between logging
+
+    # Training loop
+    model.train()
+    best_val_loss = float("inf")
+    for epoch in range(args.epochs):
+        total_loss = 0
+        start_time = time.time()
+        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", leave=False)
+        for batch_idx, batch in enumerate(pbar):
+            # Move to device
+            input_ids = batch["input_ids"].to(device)
+
+            # # # Create input and target
+            x = input_ids[:, :-1]  # All but last token
+            y = input_ids[:, 1:].clone()  # All but first token
+
+            # Unshifted
+            # x, y = input_ids, input_ids.clone()
+
+            # Forward pass
+            optimizer.zero_grad()
+            output = model(x, y)
+            loss = output.loss
+
+            # Backward pass
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            param_norm = sum(torch.linalg.norm(p) for p in model.parameters())
+
+            # if grad norm very large skip
+            if grad_norm > 100:
+                continue
+
+            # Scale up grad norms
+            if grad_norm < 1.0 and grad_norm > 0:
+                scale = 1.0 / (grad_norm + 1e-6)
+                for p in model.parameters():
+                    if p.grad is not None:
+                        p.grad.mul_(scale)
+
+            optimizer.step()
+
+            total_loss += loss.item()
+
+            if loss.isnan():
+                raise ValueError("Loss is NaN")
+
+            if batch_idx % 10 == 0:
+                pbar.set_postfix(loss=f"{loss.item():.4f}")
+                wandb.log(
+                    {
+                        "train/batch_loss": loss.item(),
+                        "epoch": epoch + 1,
+                        "grad_norm": grad_norm.item(),
+                        "param_norm": param_norm,
+                    }
+                )
+
+                if hasattr(output, "loss_dict") and output.loss_dict is not None:
+                    for k, v in output.loss_dict.items():
+                        if isinstance(v, (list, tuple, torch.Tensor)):
+                            if isinstance(v, torch.Tensor):
+                                # detach, move to CPU, slice, and convert to plain list
+                                sampled = v.detach().cpu().view(-1)[:500].tolist()
+                            else:
+                                sampled = list(v)[:500]
+
+                            wandb.log({f"train/{k}_samples": sampled})
+                        else:
+                            wandb.log({f"train/{k}": v})
+
+        avg_loss = total_loss / len(train_dataloader)
+
+        # Evaluate on validation set
+        val_loss = evaluate(model, val_dataloader, device)
+
+        print(
+            f"Epoch {epoch+1} completed. Train loss: {avg_loss:.4f} | Val loss: {val_loss:.4f} | Time: {time.time() - start_time:.2f}s"
         )
-    model = LitLM(
-        model_name=args.model,
-        model_head=args.model_head,
-        horizon=args.horizon,
-        max_steps=max_steps,
-        scheduler=args.scheduler,
-        lr=args.lr,
-        loss_type=args.loss_type,
-        pretrained=args.pretrained,
-        lambda_mhead=args.lambda_mhead,
-    )
+        wandb.log({"train/loss": avg_loss, "val/loss": val_loss, "epoch": epoch + 1})
 
-    # hacky way to maybe auto resume
-    resume_ckpt = lookup_ckpt(args)
-    wandb_id = None
-    if not (args.disable_auto_resume or resume_ckpt is None):
-        print(f"[INFO] Resuming from checkpoint {resume_ckpt}.")
-        resume_ckpt = lookup_ckpt(args)
-        wandb_id = lookup_wandb_run(args)
+        # Generate sample text
+        if args.sample:
+            model.eval()
+            with torch.no_grad():
+                prompt = "VIRGILIA:"
+                input_ids = (
+                    torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device)
+                )
+                generated = model.generate(
+                    input_ids, max_output_tokens=100, stop_token=tokenizer.eos_token_id
+                )
+                generated_text = tokenizer.decode(
+                    generated[0].tolist(), skip_special_tokens=False
+                )
+                print(f"\nSample generation:\n{generated_text}\n")
+                wandb.log(
+                    {"generated_text": wandb.Html(f"<pre>{generated_text}</pre>")}
+                )
+            model.train()
 
-    # trainer callbacks
-    callbacks: List[pl.Callback] = [
-        LearningRateMonitor(logging_interval="step")
-        # ModelCheckpoint(  # save last
-        #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-        #     filename="last",
-        #     every_n_train_steps=args.ckpt_interval,
-        # ),
-        # OrionCallback(
-        #     monitor="val_loss_epoch",
-        # ),
-    ]
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "model_kwargs": model_kwargs,
+                    "epoch": epoch,
+                },
+                f"checkpoints/{build_exp_name(args)}/model_best.pt",
+            )
 
-    # Add evals
-    if not args.disable_evals:
-        callbacks.extend(
-            [
-                LMEvalsCallback(
-                    args.model,
-                    val_check_interval=args.val_check_interval,
-                    limit=args.limit_val_batches,
-                    evals=args.evals,
-                    batch_size=args.batch_size,
-                    val_on_start=args.val_on_start,
-                ),
-                SampleEvalCallback(
-                    dm.tokenizer,
-                    val_check_interval=args.val_check_interval,
-                    val_on_start=args.val_on_start,
-                ),
-                # ModelCheckpoint(  # save best ckpt according to eval
-                #     dirpath=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-                #     filename="best",
-                #     monitor="eval/hellaswag_acc_norm",
-                #     mode="max",
-                #     save_top_k=1,
-                # ),
-            ]
-        )
+    print("Training completed!")
 
-    trainer = pl.Trainer(
-        max_epochs=args.epochs,
-        accelerator="auto",
-        logger=WandbLogger(
-            project="mtl",
-            name=get_econfig_name(args),
-            id=wandb_id,
-            resume="allow",
-            tags=args.tags,
-        ),
-        default_root_dir=f"{EXPERIMENTS_DIR}/{get_econfig_name(args)}",
-        val_check_interval=args.val_check_interval,
-        # used for hpo
-        limit_train_batches=args.limit_train_batches,
-        limit_val_batches=args.limit_val_batches,
-        accumulate_grad_batches=args.accumulate_grad_batches,
-        fast_dev_run=args.fast_dev_run,
-    )
-
-    # Tune lr
-    if not resume_ckpt and args.lr is None:
-        # skip lr tuning if resuming from checkpoint
-        tuner = Tuner(trainer)
-        tuner.lr_find(model, dm)
-
-    # NOTE: Add callback after lr tuning to avoid issues
-    trainer.callbacks.extend(callbacks)
-    trainer.fit(model, dm, ckpt_path=resume_ckpt)  # for auto resume, not for saving
-    print("Done!")
-
-    # # Report to orion
-    # for cb in trainer.callbacks:
-    #     if isinstance(cb, ModelCheckpoint) and cb.monitor == "val_loss":
-    #         val_loss = cb.best_model_score
-    #         report_objective(val_loss)
-    #         print(f"Best val_loss: {val_loss}")
-    #         print(f"Best checkpoint path: {cb.best_model_path}")
+    # Finish wandb run
+    wandb.finish()
 
 
 if __name__ == "__main__":
-    main()
-
-
-# Epoch 0:   2%|██▉       | 5337/315209 [54:08<52:23:38,  1.64it/s, v_num=v874, train_loss_step=4.630]^C
-# Epoch 0:  21%|████████████████▋           | 16418/78803 [2:55:56<11:08:31,  1.56it/s, v_num=m7ey, train_loss_step=3.710]slurmstepd: error: container_p_join: open failed for /var/opt/slurm/localstorage/7233753/.ns: No such file or directory
-
-# Single gpu
-# Epoch 0:   0%|▏      | 171/157605 [01:39<25:29:40,  1.72it/s, v_num=06tw, train_loss_step=6.970]
-# BFloat16 and Float
+    args = parse_args()
+    train(args)

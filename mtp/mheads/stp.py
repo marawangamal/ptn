@@ -49,9 +49,8 @@ class STP(AbstractDisributionHead):
 
     def generate(self, x: torch.Tensor, do_sample: bool = True, **kwargs):
         """Generate a sequence of length H from the model."""
-        logits = self.decoder(x)  # (B, V)
-        dist = torch.distributions.Categorical(logits=logits)
-        return dist.sample().unsqueeze(-1)  # (B, 1)
+        p = torch.softmax(self.decoder(x), dim=-1)  # (B, V)
+        return torch.multinomial(p, num_samples=1)  # (B, 1)
 
 
 if __name__ == "__main__":
