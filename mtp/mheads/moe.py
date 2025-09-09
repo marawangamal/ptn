@@ -158,7 +158,7 @@ class MoE(AbstractDisributionHead):
         ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
 
         B, V = x.shape[0], self.config.d_output
-        H = self.config.horizon
+        H, R = self.config.horizon, self.config.rank
         loss = None
         loss_dict = {}
         if y is not None:
@@ -173,6 +173,16 @@ class MoE(AbstractDisributionHead):
                     theta_alpha_tilde,
                     theta_cp_tilde,
                 ).mean() * (1 / H)
+
+            # ---- auxiliary load-balancing loss (soft counts) ----
+            if self.config.load_balance_lambda:
+                w = torch.softmax(theta_alpha_tilde, dim=-1)  # (Bm, R)
+                n_alpha = w.sum(dim=0)  # (R,)
+                frac = n_alpha / (n_alpha.sum() + 1e-8)  # (R,)
+                aux_loss = ((frac - 1.0 / R) ** 2).sum()
+
+                lb_lambda = getattr(self.config, "load_balance_lambda", 0.0)
+                loss = loss + lb_lambda * aux_loss
 
             # DEBUGGING / ANALYSIS
             # logging the following list: softmax(--r,h--|p_dists_tilde|--|decoder|--)  (R,H,V)

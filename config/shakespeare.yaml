@@ -16,6 +16,7 @@ group:
   name: "main"
   type: parallel
   jobs:
+    # Shakespeare | MPSProj 
     - group:
         name: "mnist::cp"
         type: sweep
@@ -23,19 +24,21 @@ group:
         sweep:
           lr: [1e-3, 5e-4, 1e-4]
           rank: [8, 32, 64, 128]
-          model: ["cp"]
-          pos_func: ["relu", "abs", "square", "sigmoid"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+          model: ["cp_decoder"]
+          pos_func: ["square", "sigmoid", "exp"]
+        sweep_template: "python train.py --rank {rank} --model {model} --pos_func {pos_func} --lr {lr}"
 
 
-    # - group:
-    #     name: "mnist::moe"
-    #     type: sweep
-    #     preamble: glong
-    #     sweep:
-    #       lr: [1e-3, 5e-4, 1e-4]
-    #       rank: [8, 32, 64, 128]
-    #       model: ["moe"]
-    #       lm_head_load_balance_lambda: [0.0, 0.1, 0.5, 1.0]
-    #     sweep_template: "python scripts/train_mnist.py --rank {rank} --model {model} --epochs 10"
+
+    # Shakespeare | MPSProj 
+    - group:
+        name: "mnist::moe"
+        type: sweep
+        preamble: glong
+        sweep:
+          lr: [1e-3, 5e-4, 1e-4]
+          rank: [8, 32, 64, 128]
+          model: ["moe_decoder"]
+          lm_head_load_balance_lambda: [0.0, 0.1, 0.5, 1.0]
+        sweep_template: "python train.py --rank {rank} --model {model}  --lm_head_load_balance_lambda {lm_head_load_balance_lambda}"
 

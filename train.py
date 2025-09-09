@@ -96,6 +96,12 @@ def parse_args():
         default="sigmoid",
         help="LM head positivity function",
     )
+    parser.add_argument(
+        "--lm_head_load_balance_lambda",
+        type=float,
+        default=0.0,
+        help="LM head load balance lambda",
+    )
     parser.add_argument("--aux_head", type=str, default=None, help="Aux head type")
     parser.add_argument(
         "--aux_head_horizon", type=int, default=2, help="Aux head horizon"
@@ -197,13 +203,6 @@ def train(args):
     print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
     print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
 
-    # n_embd = 64
-    # n_head = 4
-    # n_layer = 4
-    # dropout = 0.0
-
-    # python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
-
     # Create model
     print(f"Creating model..")
     model_kwargs = {
@@ -218,6 +217,7 @@ def train(args):
         "lm_head_rank": args.lm_head_rank,
         "lm_head_d_hidden": args.lm_head_d_hidden,
         "lm_head_pos_func": args.lm_head_pos_func,
+        "lm_head_load_balance_lambda": args.lm_head_load_balance_lambda,
         "aux_head": args.aux_head,
         "aux_head_horizon": args.aux_head_horizon,
         "aux_head_rank": args.aux_head_rank,

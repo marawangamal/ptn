@@ -42,8 +42,8 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
     model.train()
     total_loss = 0
     num_batches = 0
-
-    for batch in tqdm(train_loader, desc="Training"):
+    pbar = tqdm(train_loader, desc="Training")
+    for batch in pbar:
         y, x = batch  # for generative modeling, reverse x, y
         B = x.shape[0]
 
@@ -65,6 +65,8 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
 
         total_loss += loss.item()
         num_batches += 1
+
+        pbar.set_postfix({"train/loss": loss.item()})
 
     return total_loss / num_batches
 
@@ -184,6 +186,9 @@ def main():
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
         val_loss = evaluate(model, val_loader, device)
+
+        if train_loss.isnan():
+            raise ValueError("Loss is NaN!")
 
         print(
             f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
