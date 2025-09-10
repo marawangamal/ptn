@@ -2,6 +2,7 @@ from mtp.mheads.cp import CP
 from mtp.mheads.cp_decoder import CPD
 from mtp.mheads.moe_decoder import MoED
 from mtp.mheads.mps import MPS
+from mtp.mheads.mps_borno import MPSBO
 from mtp.mheads.mps_decoder import MPSD
 from mtp.mheads.multihead import Multihead
 from mtp.mheads.moe import MoE
@@ -18,6 +19,7 @@ MHEADS = {
     "moe": MoE,
     "moe_decoder": MoED,
     "mps": MPS,
-    "mps_decoder": MPSD,
+    "mps_decoder": MPSD,  # mps with shared decoder
+    "mps_borno": MPSBO,  # mps-based born machine w/ orthogonal parameterization
     "umps": UMPS,
 }

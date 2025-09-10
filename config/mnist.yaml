@@ -34,7 +34,7 @@ group:
         preamble: glong
         sweep:
           lr: [1e-3]
-          rank: [2, 4]
+          rank: [2]
           model: ["mps"]
           pos_func: ["abs"]
         sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"

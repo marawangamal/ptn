@@ -148,6 +148,9 @@ def main():
         default=None,
         help="Limit number of training samples for quick testing",
     )
+    parser.add_argument(
+        "--save_checkpoint", action="store_true", help="Save checkpoint"
+    )
 
     args = parser.parse_args()
 
@@ -156,6 +159,7 @@ def main():
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    os.makedirs(f"checkpoints/{build_exp_name(args)}", exist_ok=True)
     print(f"Using device: {device}")
 
     # Data
@@ -187,6 +191,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # Training loop
+    best_val_loss = float("inf")
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
         val_loss = evaluate(model, val_loader, device)
@@ -211,6 +216,17 @@ def main():
                 ],
             }
         )
+
+        if val_loss < best_val_loss and args.save_checkpoint:
+            best_val_loss = val_loss
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "config": vars(args),
+                    "epoch": epoch,
+                },
+                f"checkpoints/{build_exp_name(args)}/model_best.pt",
+            )
 
     wandb.finish()
 

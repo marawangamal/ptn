@@ -143,17 +143,16 @@ class MPS(AbstractDisributionHead):
         with torch.no_grad():
             B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
 
-            # g = POS_FUNC_MAP[self.config.pos_func](
-            #     torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
-            # )  # (B, H, R, V, R)
-            g = self.w_mps(x)
+            # Get MPS tensor
+            g = self.w_mps(x)  # (B, H, R, V, R)
 
-            # -1: marginalize
+            # Build marginals dp array
             y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
             g_dot = g.sum(dim=-2)  # (B, H, R, R)
             m = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
             res = self.beta.unsqueeze(0).expand(B, -1)
-            for h in range(H - 1, -1, -1):
+            m[:, :, H - 1] = res
+            for h in range(H - 2, -1, -1):
                 res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
                 res = res / torch.max(res, dim=-1, keepdim=True)[0]
                 m[:, :, h] = res
@@ -174,8 +173,8 @@ class MPS(AbstractDisributionHead):
                     g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
                     g_y = g_y / torch.max(g_y, dim=1, keepdim=True)[0]  # (B, R)
                 g_ = g[:, h]  # (B, R, V, R)  free leg
-                p_tilde = torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h])  # (B, V)
-                probs = p_tilde / p_tilde.sum(-1, keepdim=True)
+                p_tilde = torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h + 1])
+                probs = p_tilde / p_tilde.sum(-1, keepdim=True)  # (B, V)
                 dist = torch.distributions.Categorical(probs=probs)
                 yi = dist.sample()  # (B,1)
                 y_out[:, h] = yi

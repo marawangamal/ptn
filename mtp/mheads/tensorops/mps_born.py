@@ -39,5 +39,22 @@ def born_mps_select(g: torch.Tensor, a: torch.Tensor, b: torch.Tensor, y: torch.
     return L.pow(2)
 
 
+def born_mps_ortho_marginalize(g: torch.Tensor, a: torch.Tensor, b: torch.Tensor):
+    """Marginalize an Orthogonal Born MPS tensor.
+
+    Args:
+        g (torch.Tensor): g tensor. Shape: (H, R, D, R)
+
+    Returns:
+        torch.Tensor: Marginalized tensor. Shape: (1,)
+    """
+    return torch.einsum(
+        "r,q,ris,qis,sjp,sjt,p,t->", a, a, g[0], g[0], g[-1], g[-1], b, b
+    )
+
+
 batch_born_mps_marginalize = torch.vmap(born_mps_marginalize, in_dims=(0, 0, 0))
 batch_born_mps_select = torch.vmap(born_mps_select, in_dims=(0, 0, 0, 0))
+batch_ortho_born_mps_marginalize = torch.vmap(
+    born_mps_ortho_marginalize, in_dims=(0, 0, 0)
+)
