@@ -134,40 +134,45 @@ class MPS(AbstractDisributionHead):
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
-        B, D, H = x.shape[0], x.shape[1], self.config.horizon
-        y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+        with torch.no_grad():
+            B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
 
-        theta_mps = POS_FUNC_MAP[self.config.pos_func](
-            torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
-        )
+            g = POS_FUNC_MAP[self.config.pos_func](
+                torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
+            )  # (B, H, R, V, R)
 
-        for h in range(H):
-            y_mrgn = torch.full(
-                (B, H - h - 1),
-                -2,
-                dtype=torch.long,
-                device=x.device,
-            )
-            y_free = torch.full(
-                (B, 1),
-                -1,
-                dtype=torch.long,
-                device=x.device,
-            )
-            ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
-            p_tilde, gammas_p = select_margin_mps_tensor_batched(
-                self.alpha.unsqueeze(0).expand(B, -1),
-                self.beta.unsqueeze(0).expand(B, -1),
-                theta_mps,  # (B, R, H, V)
-                ops,
-                use_scale_factors=True,
-            )  # (B, V), (B, H)
+            # -1: marginalize
+            y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
+            g_dot = g.sum(dim=-2)  # (B, H, R, R)
+            m = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
+            res = self.beta.unsqueeze(0).expand(B, -1)
+            for h in range(H - 1, -1, -1):
+                res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
+                res = res / torch.max(res, dim=-1, keepdim=True)[0]
+                m[:, :, h] = res
 
-            dist = torch.distributions.Categorical(logits=p_tilde)
-            yi = dist.sample()  # (B,1)
-            y_out[:, h] = yi
+            g_y = self.alpha.unsqueeze(0).expand(B, -1)  # (B, R)
 
-        return y_out
+            for h in range(H):
+                y_slct_h = (
+                    y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
+                    .reshape(B, 1, min(max(0, h), 1), 1)
+                    .expand(B, R, -1, R)
+                )  # (B, R, 1/0, R)
+                gh_yh = g[:, h].gather(  # (B, R, V, R) => (B, R, 1/0, R)
+                    -2,
+                    y_slct_h,
+                )  # (B, R, 1/0, R)
+                if gh_yh.shape[2] > 0:
+                    g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
+                    g_y = g_y / torch.max(g_y, dim=1, keepdim=True)[0]  # (B, R)
+                g_ = g[:, h]  # (B, R, V, R)  free leg
+                p_tilde = torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h])  # (B, V)
+                probs = p_tilde / p_tilde.sum(-1, keepdim=True)
+                dist = torch.distributions.Categorical(probs=probs)
+                yi = dist.sample()  # (B,1)
+                y_out[:, h] = yi
+            return y_out
 
 
 def run_test():

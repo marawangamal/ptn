@@ -37,7 +37,7 @@ def get_data_loaders(batch_size=32, data_dir="./data"):
     return train_loader, val_loader
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_samples=None):
+def train_epoch(model, train_loader, optimizer, device, wandb_logger):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
@@ -68,8 +68,8 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_sample
 
         pbar.set_postfix({"train/loss": loss.item()})
 
-        if num_samples is not None and i >= num_samples:
-            break
+        if loss.isnan():
+            raise ValueError("Loss is NaN!")
 
     return total_loss / num_batches
 
@@ -152,7 +152,7 @@ def main():
     args = parser.parse_args()
 
     # Initialize wandb
-    wandb.init(project="mnist-mtp", name=build_exp_name(args), config=vars(args))
+    wandb.init(project="ctn-mnist", name=build_exp_name(args), config=vars(args))
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -188,13 +188,8 @@ def main():
 
     # Training loop
     for epoch in range(args.epochs):
-        train_loss = train_epoch(
-            model, train_loader, optimizer, device, wandb, num_samples=args.num_samples
-        )
+        train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
         val_loss = evaluate(model, val_loader, device)
-
-        if train_loss.isnan():
-            raise ValueError("Loss is NaN!")
 
         print(
             f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
