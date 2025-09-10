@@ -33,10 +33,10 @@ class MPSBO(MPS):
             config.d_output,
         )
 
-        std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
+        # std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
         # self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
-        self.w_hr = torch.nn.Parameter(torch.randn(H, R, Do, Di) * std_fan_in)
-        self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R) * std_fan_in)
+        self.w_hr = torch.nn.Parameter(torch.randn(H, R, Do, Di))
+        self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R))
 
         dtype = self.w_hr.dtype
         self.alpha = torch.nn.Parameter(
@@ -47,6 +47,8 @@ class MPSBO(MPS):
             torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(dtype),
             requires_grad=False,
         )
+
+        self.sig = lambda x: x**2
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
         raise NotImplementedError("set_output_embeddings not implemented")
@@ -120,9 +122,6 @@ class MPSBO(MPS):
             loss=loss,
             loss_dict=loss_dict,
         )
-
-    def generate(self, x: torch.Tensor):
-        pass
 
 
 def run_test():
