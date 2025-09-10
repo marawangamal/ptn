@@ -16,16 +16,29 @@ group:
   name: "main"
   type: parallel
   jobs:
+    # - group:
+    #     name: "mnist::cp"
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:
+    #       lr: [1e-3]
+    #       rank: [8, 32, 64]
+    #       model: ["cp"]
+    #       pos_func: ["abs"]
+    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+
+
     - group:
-        name: "mnist::cp"
+        name: "mnist::mps"
         type: sweep
         preamble: glong
         sweep:
           lr: [1e-3]
-          rank: [8, 32, 64]
-          model: ["cp"]
+          rank: [2, 4]
+          model: ["mps"]
           pos_func: ["abs"]
         sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+
 
 
     # - group:

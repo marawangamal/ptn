@@ -37,10 +37,10 @@ class MPS(AbstractDisributionHead):
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
+        self._w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
         self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R) * std_fan_in)
 
-        dtype = self.w_mps.dtype
+        dtype = self._w_mps.dtype
         self.alpha = torch.nn.Parameter(
             torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(dtype),
             requires_grad=False,
@@ -49,6 +49,11 @@ class MPS(AbstractDisributionHead):
             torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(dtype),
             requires_grad=False,
         )
+
+    def w_mps(self, x: torch.Tensor):
+        return POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
+        )  # (B, H, R, V, R)
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
         raise NotImplementedError("set_output_embeddings not implemented")
@@ -84,9 +89,10 @@ class MPS(AbstractDisributionHead):
 
         if y is not None:
 
-            theta_mps = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
-            )
+            # theta_mps = POS_FUNC_MAP[self.config.pos_func](
+            #     torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
+            # )
+            theta_mps = self.w_mps(x)
 
             p_tilde, gammas_p = select_margin_mps_tensor_batched(
                 self.alpha.unsqueeze(0).expand(B, -1),
@@ -137,9 +143,10 @@ class MPS(AbstractDisributionHead):
         with torch.no_grad():
             B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
 
-            g = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
-            )  # (B, H, R, V, R)
+            # g = POS_FUNC_MAP[self.config.pos_func](
+            #     torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
+            # )  # (B, H, R, V, R)
+            g = self.w_mps(x)
 
             # -1: marginalize
             y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
