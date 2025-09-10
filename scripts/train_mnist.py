@@ -37,13 +37,13 @@ def get_data_loaders(batch_size=32, data_dir="./data"):
     return train_loader, val_loader
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger):
+def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_samples=None):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
     num_batches = 0
     pbar = tqdm(train_loader, desc="Training")
-    for batch in pbar:
+    for i, batch in enumerate(pbar):
         y, x = batch  # for generative modeling, reverse x, y
         B = x.shape[0]
 
@@ -67,6 +67,9 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         num_batches += 1
 
         pbar.set_postfix({"train/loss": loss.item()})
+
+        if num_samples is not None and i >= num_samples:
+            break
 
     return total_loss / num_batches
 
@@ -132,6 +135,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=10)
     parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument("--num_samples", type=int, default=None)
     parser.add_argument(
         "--num_gen_images",
         type=int,
@@ -184,7 +188,9 @@ def main():
 
     # Training loop
     for epoch in range(args.epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
+        train_loss = train_epoch(
+            model, train_loader, optimizer, device, wandb, num_samples=args.num_samples
+        )
         val_loss = evaluate(model, val_loader, device)
 
         if train_loss.isnan():
