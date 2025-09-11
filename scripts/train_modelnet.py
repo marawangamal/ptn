@@ -14,14 +14,22 @@ import numpy as np
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads import MHEADS
 
-os.environ["SSL_CERT_FILE"] = certifi.where()
-
 
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")  # non-GUI backend
+import io
+import numpy as np
+import matplotlib.pyplot as plt
+from datasets import load_dataset
 
 
 import torch
 from sklearn.cluster import KMeans
+
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
 def disc(
@@ -88,21 +96,39 @@ def cluster(x: torch.Tensor, K: int, seed: int = 0) -> torch.Tensor:
     return centers
 
 
+# def collate_fn(batch):
+#     # For each point: (Li, 3) -> (1024, 3)
+#     B = len(batch)
+#     pts_clustered = [cluster(torch.tensor(x["inputs"]), K=1024) for x in batch]
+#     pts_clustered = torch.stack(pts_clustered)  # (B, 1024, 3)
+#     x = disc(pts_clustered).reshape(B, -1)  # (B, L, 3)
+#     y = torch.stack([torch.tensor(x["label"]) for x in batch])
+#     return x, y
+
+
 def collate_fn(batch):
-    # For each point: (Li, 3) -> (1024, 3)
-    B = len(batch)
-    pts_clustered = [cluster(torch.tensor(x["inputs"]), K=1024) for x in batch]
-    pts_clustered = torch.stack(pts_clustered)  # (B, 1024, 3)
-    x = disc(pts_clustered).reshape(B, -1)  # (B, L, 3)
-    y = torch.stack([torch.tensor(x["label"]) for x in batch])
+    # x, y = batch["inputs"], batch["label"]
+    x = torch.stack([torch.tensor(b["inputs"]) for b in batch])
+    y = torch.stack([torch.tensor(b["label"]) for b in batch])
     return x, y
+
+
+def preprocess(example):
+    # For each point: (Li, 3) -> (1024, 3)
+    pts_clustered = cluster(torch.tensor(example["inputs"]), K=1024)
+    x = disc(pts_clustered).reshape(-1)  # (B, L, 3)
+    y = torch.tensor(example["label"])
+    return {"inputs": x, "label": y}
 
 
 def get_data_loaders(batch_size=32, test_size=0.1):
     ds = load_dataset("jxie/modelnet40")  # has train/test splits in parquet
     # limit to 100 for testing
-    ds["train"] = ds["train"].select(range(100))
-    ds["test"] = ds["test"].select(range(100))
+    ds["train"] = ds["train"].select(range(3))
+    ds["test"] = ds["test"].select(range(3))
+    ds["train"] = ds["train"].map(preprocess)
+    ds["test"] = ds["test"].map(preprocess)
+
     # map to tensors
     train_loader = torch.utils.data.DataLoader(
         ds["train"], batch_size=batch_size, shuffle=True, collate_fn=collate_fn
@@ -160,10 +186,10 @@ def evaluate(model, val_loader, device):
     with torch.no_grad():
         for y, x in val_loader:
             B = x.shape[0]
-            z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
-            z, y = z.to(device), y.to(device)
+            x = F.one_hot(x, num_classes=40).reshape(B, -1).float()
+            x, y = x.to(device), y.to(device)
 
-            output = model(z, y.reshape(B, -1))
+            output = model(x, y.reshape(B, -1))
             total_loss += output.loss.item()
             num_batches += 1
 
@@ -175,21 +201,14 @@ def generate_images(model, device, num_images=8):
     Render a few 3D samples from ModelNet40 'test' split as PNG arrays for W&B.
     Returns: list[np.ndarray] where each item is an HxWx3 uint8 image.
     """
-    import io
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from datasets import load_dataset
-
-    # Load a small slice of the test split (no training data dependency)
     ds = load_dataset("jxie/modelnet40")
     test = ds["test"].select(range(min(num_images, len(ds["test"]))))
 
     images = []
     for i in range(len(test)):
-        pts = np.array(test[i]["input"], dtype=np.float32)  # (N, 3)
+        pts = np.array(test[i]["inputs"], dtype=np.float32)  # (N, 3)
         label = int(test[i]["label"])
 
-        # --- Make a 3D scatter figure ---
         fig = plt.figure(figsize=(4, 4))
         ax = fig.add_subplot(111, projection="3d")
         ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=1)
@@ -201,10 +220,8 @@ def generate_images(model, device, num_images=8):
         plt.tight_layout()
 
         # --- Convert figure to HxWx3 uint8 array ---
-        buf = io.BytesIO()
         fig.canvas.draw()
-        w, h = fig.canvas.get_width_height()
-        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(h, w, 3)
+        img = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
         images.append(img)
         plt.close(fig)
 
