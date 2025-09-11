@@ -50,6 +50,10 @@ class MPS(AbstractDisributionHead):
             requires_grad=False,
         )
 
+        self.sig = (
+            lambda x: x
+        )  # left for user to override (i.e. when using born machine)
+
     def w_mps(self, x: torch.Tensor):
         return POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
@@ -134,6 +138,93 @@ class MPS(AbstractDisributionHead):
             loss_dict=loss_dict,
         )
 
+    # USED FOR DEBUGGING
+    # def generate_v1(self, x: torch.Tensor):
+    #     B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
+
+    #     y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+
+    #     # theta_mps = POS_FUNC_MAP[self.config.pos_func](
+    #     #     torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
+    #     # )
+    #     g = self.w_mps(x)  # (B, H, R, V, R)
+
+    #     g_dot = g.sum(dim=-2)  # (B, H, R, R)
+    #     m = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
+    #     res = self.beta.unsqueeze(0).expand(B, -1)
+    #     m[:, :, H] = res
+    #     for h in range(H - 1, -1, -1):
+    #         res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
+    #         res = res / torch.linalg.norm(res, dim=-1, keepdim=True)[0]
+    #         m[:, :, h] = res
+
+    #     for h in range(H):
+
+    #         # 0:h-1 -- select
+    #         # h -- free
+    #         # h+1:H -- marginalize
+    #         # gh_yh -- g_{h, yh}
+    #         # g_y -- stack(g_{0, y0}, g_{1, y1}, ..., g_{h-1, yh-1})
+
+    #         # **** DEBUG ****
+    #         g_y = self.alpha.unsqueeze(0).expand(B, -1)  # (B, R)
+
+    #         y_slct_h = (
+    #             y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
+    #             .reshape(B, 1, min(max(0, h), 1), 1)
+    #             .expand(B, R, -1, R)
+    #         )  # (B, R, 1/0, R)
+    #         gh_yh = g[
+    #             :, min(0, h - 1)
+    #         ].gather(  # (B, H, R, V, R) => (B, 1/0, R, 1/0, R)
+    #             2,
+    #             y_slct_h,
+    #         )  # (B, R, 1/0, R)
+    #         if gh_yh.shape[2] > 0:
+    #             g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
+    #             g_y = g_y / torch.linalg.norm(g_y, dim=1, keepdim=True)[0]  # (B, R)
+    #         g_ = g[:, h]  # (B, R, V, R)  free leg
+    #         p_tilde = self.sig(torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h + 1]))
+    #         # probs = p_tilde / p_tilde.sum(-1, keepdim=True)  # (B, V)
+    #         # dist = torch.distributions.Categorical(probs=probs)
+    #         # yi = dist.sample()  # (B,1)
+    #         # y_out[:, h] = yi
+    #         # **** DEBUG ****
+
+    #         y_mrgn = torch.full(
+    #             (B, H - h - 1),
+    #             -2,
+    #             dtype=torch.long,
+    #             device=x.device,
+    #         )
+    #         y_free = torch.full(
+    #             (B, 1),
+    #             -1,
+    #             dtype=torch.long,
+    #             device=x.device,
+    #         )
+    #         ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
+    #         p_tilde, gammas_p = select_margin_mps_tensor_batched(
+    #             self.alpha.unsqueeze(0).expand(B, -1),
+    #             self.beta.unsqueeze(0).expand(B, -1),
+    #             g,  # (B, R, H, V)
+    #             ops,
+    #             use_scale_factors=True,
+    #             m=m,
+    #             g_y=g_y,
+    #             g_=g_,
+    #             p_tilde=p_tilde,
+    #             y_slct_h=y_slct_h,
+    #             y_out=y_out,
+    #             gh_yh=gh_yh,
+    #         )  # (B, V), (B, H)
+
+    #         dist = torch.distributions.Categorical(logits=p_tilde)
+    #         yi = dist.sample()  # (B,1)
+    #         y_out[:, h] = yi
+
+    #     return y_out
+
     def generate(self, x: torch.Tensor):
         """Generate a sequence of length H from the model.
 
@@ -157,7 +248,7 @@ class MPS(AbstractDisributionHead):
             m[:, :, H] = res
             for h in range(H - 1, -1, -1):
                 res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
-                res = res / torch.max(res, dim=-1, keepdim=True)[0]
+                res = res / torch.linalg.norm(res, dim=-1, keepdim=True)[0]
                 m[:, :, h] = res
 
             g_y = self.alpha.unsqueeze(0).expand(B, -1)  # (B, R)
@@ -168,13 +259,13 @@ class MPS(AbstractDisributionHead):
                     .reshape(B, 1, min(max(0, h), 1), 1)
                     .expand(B, R, -1, R)
                 )  # (B, R, 1/0, R)
-                gh_yh = g[:, h].gather(  # (B, R, V, R) => (B, R, 1/0, R)
+                gh_yh = g[:, min(0, h - 1)].gather(  # (B, R, V, R) => (B, R, 1/0, R)
                     -2,
                     y_slct_h,
                 )  # (B, R, 1/0, R)
                 if gh_yh.shape[2] > 0:
                     g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
-                    g_y = g_y / torch.max(g_y, dim=1, keepdim=True)[0]  # (B, R)
+                    g_y = g_y / torch.linalg.norm(g_y, dim=1, keepdim=True)[0]  # (B, R)
                 g_ = g[:, h]  # (B, R, V, R)  free leg
                 p_tilde = self.sig(
                     torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h + 1])
