@@ -58,10 +58,19 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
+
         g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        p = sum(torch.linalg.norm(p) for p in model.parameters())
+
         optimizer.step()
 
-        wandb_logger.log({"train/batch_loss": loss.item(), "train/grad_norm": g})
+        wandb_logger.log(
+            {
+                "train/batch_loss": loss.item(),
+                "train/grad_norm": g,
+                "train/param_norm": p,
+            }
+        )
 
         total_loss += loss.item()
         num_batches += 1
@@ -192,6 +201,7 @@ def main():
 
     # Training loop
     best_val_loss = float("inf")
+    wandb.watch(model, log="all", log_freq=20)  # log_freq = steps between logging
     for epoch in range(args.epochs):
         train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
         val_loss = evaluate(model, val_loader, device)

@@ -152,7 +152,7 @@ def set_seed(seed: int):
 def train(args):
     # Initialize wandb
     wandb.init(
-        project=f"nanogpt-{args.dataset}",
+        project=f"ctn-{args.dataset}",
         name=build_exp_name(args),
         config=vars(args),
         tags=args.tags,

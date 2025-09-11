@@ -16,29 +16,55 @@ group:
   name: "main"
   type: parallel
   jobs:
-    # Shakespeare | MPSProj 
+
+    # Shakespeare | None 
+    # - group:
+    #     name: "shakespeare::none"
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:
+    #       lr: [1e-3]
+    #     sweep_template: "python train.py --lr {lr}"
+
+    # Shakespeare | CP
     - group:
-        name: "mnist::cp"
+        name: "shakespeare::cp"
         type: sweep
         preamble: glong
         sweep:
-          lr: [1e-3, 5e-4, 1e-4]
-          rank: [8, 32, 64, 128]
-          model: ["cp_decoder"]
-          pos_func: ["square", "sigmoid", "exp"]
-        sweep_template: "python train.py --rank {rank} --model {model} --pos_func {pos_func} --lr {lr}"
+          lr: [1e-3]
+          lm_head: ["cp"]
+          lm_head_pos_func: ["abs"]
+          lm_head_rank: [2]
+          lm_head_horizon: [4]
+        sweep_template: "python train.py --lr {lr} --lm_head {lm_head} --lm_head_pos_func {lm_head_pos_func} --lm_head_rank {lm_head_rank} --lm_head_horizon {lm_head_horizon}"
 
 
-
-    # Shakespeare | MPSProj 
+    # Shakespeare | CP
     - group:
-        name: "mnist::moe"
+        name: "shakespeare::moe"
         type: sweep
         preamble: glong
         sweep:
-          lr: [1e-3, 5e-4, 1e-4]
-          rank: [8, 32, 64, 128]
-          model: ["moe_decoder"]
-          lm_head_load_balance_lambda: [0.0, 0.1, 0.5, 1.0]
-        sweep_template: "python train.py --rank {rank} --model {model}  --lm_head_load_balance_lambda {lm_head_load_balance_lambda}"
+          lr: [1e-3]
+          lm_head: ["moe"]
+          lm_head_pos_func: ["abs"]
+          lm_head_rank: [2]
+          lm_head_horizon: [4]
+        sweep_template: "python train.py --lr {lr} --lm_head {lm_head} --lm_head_pos_func {lm_head_pos_func} --lm_head_rank {lm_head_rank} --lm_head_horizon {lm_head_horizon}"
+
+
+
+    # Shakespeare | CP
+    - group:
+        name: "shakespeare::mps"
+        type: sweep
+        preamble: glong
+        sweep:
+          lr: [1e-3]
+          lm_head: ["mps"]
+          lm_head_pos_func: ["abs"]
+          lm_head_rank: [2]
+          lm_head_horizon: [4]
+        sweep_template: "python train.py --lr {lr} --lm_head {lm_head} --lm_head_pos_func {lm_head_pos_func} --lm_head_rank {lm_head_rank} --lm_head_horizon {lm_head_horizon}"
 

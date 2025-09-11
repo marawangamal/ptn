@@ -144,13 +144,37 @@ def plot_training_metrics(
     **kwargs,
 ):
     """Plot training metrics using seaborn."""
+
     df = pd.concat(
         [pd.DataFrame(log_dict) for log_dict in log_dicts], ignore_index=True
     )
+
+    # --- compute dynamic cutoff ---
+    ycol = kwargs["y"]
+    if np.isinf(df[ycol]).any():
+        finite_vals = df.loc[np.isfinite(df[ycol]), ycol]
+        if len(finite_vals) > 0:
+            replace_inf_val = 2 * finite_vals.max()
+        else:
+            replace_inf_val = 1.0  # fallback if everything is inf
+        df[ycol] = df[ycol].replace([np.inf, -np.inf], replace_inf_val)
+    else:
+        replace_inf_val = None
+
+    if replace_inf_val is not None:
+        df = df.replace([np.inf], replace_inf_val)
+
     g = sns.relplot(
         data=df,
+        # set y limit to the same as replace_inf_val
         **kwargs,
     )
+
+    if replace_inf_val is not None:
+        # remove auto-scaling margins
+        for ax in g.axes.flat:
+            ax.margins(y=0)  # turn off extra padding
+            ax.set_ylim(0, replace_inf_val)
 
     if reduce_fn is not None and reduce_fn(kwargs["y"]) is not None:
         x, y = kwargs["x"], kwargs["y"]
