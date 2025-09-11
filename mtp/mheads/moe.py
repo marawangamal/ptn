@@ -91,9 +91,10 @@ class MoE(AbstractDisributionHead):
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
 
         # === params
-        self.w_alpha = torch.nn.Linear(Di, R)
+        self.w_alpha = torch.nn.Linear(Di, R, bias=False)
+        torch.nn.init.zeros_(self.w_alpha.weight)  # uniform mixture weights at init
         self.w_moe = torch.nn.Parameter(torch.randn(R, H, Di, V) * std_fan_in)
-        self.b_moe = torch.nn.Parameter(torch.randn(R, H, V))
+        self.b_moe = torch.nn.Parameter(torch.zeros(R, H, V))
 
     def w_cp_params(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum("be,rhed->brhd", x, self.w_moe) + self.b_moe.unsqueeze(0)

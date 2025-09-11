@@ -110,7 +110,9 @@ def run_train(
                     log_dict[k].append(v)
 
             # also add grad_norm and loss to log_dict
-            log_dict["loss"].append(out.loss.item())
+            log_dict["loss"].append(
+                out.loss.item() if not torch.isnan(out.loss) else float("inf")
+            )
             log_dict["grad_norm"].append(get_grad_norm(model.parameters()))
             log_dict["param_norm"].append(get_param_norm(model.parameters()))
             log_dict["logits_norm"].append(out.logits.norm().item())
@@ -142,7 +144,9 @@ def plot_training_metrics(
     **kwargs,
 ):
     """Plot training metrics using seaborn."""
-    df = pd.concat([pd.DataFrame(log_dict) for log_dict in log_dicts])
+    df = pd.concat(
+        [pd.DataFrame(log_dict) for log_dict in log_dicts], ignore_index=True
+    )
     g = sns.relplot(
         data=df,
         **kwargs,
@@ -198,19 +202,19 @@ if __name__ == "__main__":
     # Common HPs
     BATCH_SIZE = 8
     LR = 1e-2
-    EPOCHS = 1
+    EPOCHS = 10
     N_TRAIN = 100
     N_VAL = 10
 
     # Plot
     ranks = [2]
-    horizons = [8, 32, 128, 1024]
+    horizons = [128, 512, 1024, 2048, 4096, 8192]
     seeds = [0]
-    d_models = [32]
+    d_models = [10]
     d_outputs = [2]
     plot_kwargs = {
-        # "row": "d_model",
-        "col": "d_output",
+        "col": "horizon",
+        "col_wrap": 3,
         "hue": "name",
         "x": "iteration",
         "kind": "line",
@@ -238,15 +242,16 @@ if __name__ == "__main__":
             d_outputs,
             [
                 "cp",
-                "cp_decoder",
-                "moe_decoder",
-                "mps_decoder",
+                "mps",
+                "moe",
             ],
         )
     ]
 
     log_dicts = []
     pbar = tqdm(configs)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
     for config in configs:
         dstring = f"Dm: {config['mt_kwargs']['d_model']} | Do: {config['mt_kwargs']['d_output']} | R: {config['mt_kwargs']['rank']} | H: {config['mt_kwargs']['horizon']}"
         pbar.set_description(f"{config['mt_name']} | {dstring}")
@@ -275,6 +280,7 @@ if __name__ == "__main__":
                 val_dataloader=val_dl,
                 lr=LR,
                 epochs=EPOCHS,
+                device=device,
                 **config,
             )
 
