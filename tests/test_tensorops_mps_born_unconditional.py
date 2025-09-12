@@ -52,9 +52,16 @@ class TestEinLogSumExp(unittest.TestCase):
         self.assertTrue(torch.allclose(res_1, res_2, atol=1e-4), "Contraction mismatch")
         self.assertTrue(not torch.allclose(g, gc))
 
-    def test_born_mps_cano_maringals(self):
-        # test exact marginal and cano marginal match
-        pass
+    def test_born_mps_cano_unitary(self):
+        R, H, D = 8, 5, 2
+        g = torch.randn(H, R, D, R)  # cores
+        a = torch.eye(R)
+        b = torch.eye(R)
+        canonicalize(g, [2])
+
+        # should be unitary
+        norms = torch.linalg.norm(g[0].reshape(-1, R), dim=(0))
+        self.assertTrue(torch.allclose(norms, torch.ones(R)))
 
 
 if __name__ == "__main__":

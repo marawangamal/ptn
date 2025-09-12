@@ -25,22 +25,18 @@ class BornMachineUnconditional(AbstractDisributionHead):
             config.d_output,
         )
 
+        # NOTE: unsure how we should normalize
         # std_fan_in = torch.sqrt(torch.tensor(2.0)) / Do**0.5
-        self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R))
+        self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, dtype=torch.float64))
         self.is_canonical = False
         self.canonical_index = [config.horizon // 2]
         if self.canonical_index[0] % 2 == 0:
             self.canonical_index.insert(0, self.canonical_index[0] - 1)
 
         dtype = self.w_mps.dtype
-        self.alpha = torch.nn.Parameter(
-            torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(dtype),
-            requires_grad=False,
-        )
-        self.beta = torch.nn.Parameter(
-            torch.nn.functional.one_hot(torch.tensor(0), num_classes=R).to(dtype),
-            requires_grad=False,
-        )
+        # IMPORTANT: cannot use one-hot or anything else, since that would violate the canonical representation
+        self.alpha = torch.nn.Parameter(torch.ones(R, dtype=dtype, requires_grad=False))
+        self.beta = torch.nn.Parameter(torch.ones(R, dtype=dtype, requires_grad=False))
 
         self.canonicalize()
 
@@ -107,7 +103,7 @@ class BornMachineUnconditional(AbstractDisributionHead):
             self.is_canonical = False
 
         return AbstractDisributionHeadOutput(
-            logits=torch.randn(B, H, V),
+            logits=torch.randn(B, H, V, dtype=torch.float64),
             loss=loss,
             loss_dict=loss_dict,
         )
@@ -117,13 +113,16 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
 
 def canonicalize(theta_mps: torch.Tensor, canonical_index: List[int]):
+    # Shape(theta_mps): (H, R, D, R)
     h = 0
     while h < theta_mps.shape[0] - 1:
         if h not in canonical_index:
             a_4oder = torch.einsum("idj,jvk->idvk", theta_mps[h], theta_mps[h + 1])
             R1, V1, V2, R2 = a_4oder.shape
             Rm = theta_mps[h].shape[2]  # middle rank
-            u, s, vt = torch.linalg.svd(a_4oder.reshape(R1 * V1, V2 * R2))
+            u, s, vt = torch.linalg.svd(
+                a_4oder.reshape(R1 * V1, V2 * R2), full_matrices=True
+            )
             u, s, vt = u[:, :Rm], s[:Rm], vt[:Rm]  # truncate
             if h < min(canonical_index):  # left cano
                 theta_mps[h] = u.reshape(R1, V1, Rm)
@@ -141,7 +140,7 @@ def canonicalize(theta_mps: torch.Tensor, canonical_index: List[int]):
 
 
 def run_test():
-    B, H, D, V = 1, 28, 9, 2
+    B, H, D, V = 1, 28 * 28, 9, 2
     mt_head = BornMachineUnconditional(
         AbstractDisributionHeadConfig(
             d_model=D,
@@ -150,10 +149,10 @@ def run_test():
             rank=8,
         ),
     )
-    x = torch.randn(B, D)
+    x = torch.randn(B, D, dtype=torch.float64)
     y = torch.randint(0, V, (B, H))
     loss = mt_head(x, y).loss
-    # print(f"loss: {loss}")
+    print(f"loss: {loss}")
     # out = mt_head.generate(x)
     # print(f"generated: {out}")
 
