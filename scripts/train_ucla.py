@@ -2,6 +2,7 @@ import argparse
 import os
 import re
 import certifi
+from datasets import load_dataset
 import torch
 import torch.nn.functional as F
 import torchvision
@@ -9,23 +10,150 @@ import torchvision.transforms as transforms
 from tqdm import tqdm
 import wandb
 import numpy as np
+from urllib.request import urlretrieve, urlopen
 
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads import MHEADS
 
+
+import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")  # non-GUI backend
+import io
+import numpy as np
+import matplotlib.pyplot as plt
+from datasets import load_dataset
+
+
+import torch
+from sklearn.cluster import KMeans
+
+
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
-def get_data_loaders(batch_size=32, data_dir="./data"):
-    """Create MNIST data loaders with binary thresholding."""
-    transform = transforms.Compose([transforms.ToTensor(), lambda x: (x > 0.5).long()])
+def collate_fn(batch):
+    # x, y = batch["inputs"], batch["label"]
+    x = torch.stack([torch.tensor(b["inputs"]) for b in batch])
+    y = torch.stack([torch.tensor(b["label"]) for b in batch])
+    return x, y
 
-    train_set = torchvision.datasets.MNIST(
-        data_dir, train=True, transform=transform, download=True
-    )
-    val_set = torchvision.datasets.MNIST(
-        data_dir, train=False, transform=transform, download=True
-    )
+
+def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
+    """Create MNIST data loaders with binary thresholding."""
+
+    URI = "https://raw.githubusercontent.com/UCLA-StarAI/Density-Estimation-Datasets/refs/heads/master/datasets/"
+
+    URLS = {
+        "nltcs": {
+            "train": URI + "nltcs/nltcs.train.data",
+            "val": URI + "nltcs/nltcs.test.data",
+        },
+        "msnbc": {
+            "train": URI + "msnbc/msnbc.train.data",
+            "val": URI + "msnbc/msnbc.test.data",
+        },
+        "kdd": {
+            "train": URI + "kdd/kdd.train.data",
+            "val": URI + "kdd/kdd.test.data",
+        },
+        "plants": {
+            "train": URI + "plants/plants.train.data",
+            "val": URI + "plants/plants.test.data",
+        },
+        "baudio": {
+            "train": URI + "baudio/baudio.train.data",
+            "val": URI + "baudio/baudio.test.data",
+        },
+        "jester": {
+            "train": URI + "jester/jester.train.data",
+            "val": URI + "jester/jester.test.data",
+        },
+        "bnetflix": {
+            "train": URI + "bnetflix/bnetflix.train.data",
+            "val": URI + "bnetflix/bnetflix.test.data",
+        },
+        "accidents": {
+            "train": URI + "accidents/accidents.train.data",
+            "val": URI + "accidents/accidents.test.data",
+        },
+        "retail": {
+            "train": URI + "tretail/tretail.train.data",
+            "val": URI + "tretail/tretail.test.data",
+        },
+        "pumsb_star": {
+            "train": URI + "pumsb_star/pumsb_star.train.data",
+            "val": URI + "pumsb_star/pumsb_star.test.data",
+        },
+        "dna": {
+            "train": URI + "dna/dna.train.data",
+            "val": URI + "dna/dna.test.data",
+        },
+        "kosarek": {
+            "train": URI + "kosarek/kosarek.train.data",
+            "val": URI + "kosarek/kosarek.test.data",
+        },
+        "msweb": {
+            "train": URI + "msweb/msweb.train.data",
+            "val": URI + "msweb/msweb.test.data",
+        },
+        "book": {
+            "train": URI + "book/book.train.data",
+            "val": URI + "book/book.test.data",
+        },
+        "eachmovie": {
+            "train": URI + "tmovie/tmovie.train.data",
+            "val": URI + "tmovie/tmovie.test.data",
+        },
+        "webkb": {
+            "train": URI + "webkb/webkb.train.data",
+            "val": URI + "webkb/webkb.test.data",
+        },
+        "reuters_52": {
+            "train": URI + "reuters_52/reuters_52.train.data",
+            "val": URI + "reuters_52/reuters_52.test.data",
+        },
+        "20news": {
+            "train": URI + "c20ng/c20ng.train.data",
+            "val": URI + "c20ng/c20ng.test.data",
+        },
+        "bbc": {
+            "train": URI + "bbc/bbc.train.data",
+            "val": URI + "bbc/bbc.test.data",
+        },
+        "ad": {
+            "train": URI + "ad/ad.train.data",
+            "val": URI + "ad/ad.test.data",
+        },
+    }
+
+    train_path = os.path.join(data_dir, dataset, f"{dataset}.train.data")
+    val_path = os.path.join(data_dir, dataset, f"{dataset}.test.data")
+    os.makedirs(os.path.join(data_dir, dataset), exist_ok=True)
+
+    # Download if missing
+    if not os.path.exists(train_path):
+        urlretrieve(URLS[dataset]["train"], train_path)
+    if not os.path.exists(val_path):
+        urlretrieve(URLS[dataset]["val"], val_path)
+
+    with urlopen(URLS[dataset]["train"]) as f:
+        x_train = np.loadtxt(f, dtype=int, delimiter=",")
+
+    with urlopen(URLS[dataset]["val"]) as f:
+        x_val = np.loadtxt(f, dtype=int, delimiter=",")
+
+    x_train = torch.from_numpy(x_train)
+    x_val = torch.from_numpy(x_val)
+
+    D = x_train.shape[1]
+    cols = torch.randperm(D)
+    x_train, y_train = x_train[:, cols[: D // 2]], x_train[:, cols[D // 2 :]]
+    x_val, y_val = x_val[:, cols[: D // 2]], x_val[:, cols[D // 2 :]]
+
+    train_set = torch.utils.data.TensorDataset(x_train, y_train)
+    val_set = torch.utils.data.TensorDataset(x_val, y_val)
 
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=batch_size, shuffle=True
@@ -33,35 +161,33 @@ def get_data_loaders(batch_size=32, data_dir="./data"):
     val_loader = torch.utils.data.DataLoader(
         val_set, batch_size=batch_size, shuffle=False
     )
-
     return train_loader, val_loader
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger):
+def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_classes):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
     num_batches = 0
     pbar = tqdm(train_loader, desc="Training")
-    for i, batch in enumerate(pbar):
-        y, x = batch  # for generative modeling, reverse x, y
-        B = x.shape[0]
+    for batch in pbar:
+        # for gen modelling: x is the class, y is the pixel values
+        x, y = batch
+        B = y.shape[0]
 
         # Convert to one-hot encoding
-        z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
-        z, y = z.to(device), y.to(device)
+        x = x.float()
+        x, y = x.to(device), y.to(device)
 
         # Forward pass
-        output = model(z, y.reshape(B, -1))
+        output = model(x, y.reshape(B, -1))
         loss = output.loss
 
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
-
         g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         p = sum(torch.linalg.norm(p) for p in model.parameters())
-
         optimizer.step()
 
         wandb_logger.log(
@@ -83,43 +209,23 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
     return total_loss / num_batches
 
 
-def evaluate(model, val_loader, device):
+def evaluate(model, val_loader, device, num_classes):
     """Evaluate model on validation set."""
     model.eval()
     total_loss = 0
     num_batches = 0
 
     with torch.no_grad():
-        for y, x in val_loader:
+        for x, y in val_loader:
             B = x.shape[0]
-            z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
-            z, y = z.to(device), y.to(device)
+            x = x.float()
+            x, y = x.to(device), y.to(device)
 
-            output = model(z, y.reshape(B, -1))
+            output = model(x, y.reshape(B, -1))
             total_loss += output.loss.item()
             num_batches += 1
 
     return total_loss / num_batches
-
-
-def generate_images(model, device, num_images=10, image_size=(28, 28)):
-    """Generate images from the model and return as wandb-compatible format."""
-    model.eval()
-    generated_images = []
-
-    with torch.no_grad():
-        for digit in range(min(num_images, 10)):
-            # Create one-hot encoding for the digit
-            z = F.one_hot(torch.tensor([digit], device=device), num_classes=10).float()
-
-            # Generate image
-            generated = model.generate(z)[0].detach().cpu().view(*image_size).numpy()
-
-            # Convert to 0-255 range for better visualization
-            generated = (generated * 255).astype(np.uint8)
-            generated_images.append(generated)
-
-    return generated_images
 
 
 def build_exp_name(args: argparse.Namespace):
@@ -136,15 +242,19 @@ def build_exp_name(args: argparse.Namespace):
     return "_".join(parts)
 
 
+def set_seeds(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
-    parser.add_argument("--model", default="moe_proj")
+    parser = argparse.ArgumentParser(description="Train MHEADS on ModelNet40")
+    parser.add_argument("--model", default="cp")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--rank", type=int, default=10)
+    parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
-    parser.add_argument("--num_samples", type=int, default=None)
     parser.add_argument(
         "--num_gen_images",
         type=int,
@@ -160,11 +270,13 @@ def main():
     parser.add_argument(
         "--save_checkpoint", action="store_true", help="Save checkpoint"
     )
-
+    parser.add_argument("--dataset", type=str, default="nltcs")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     # Initialize wandb
-    wandb.init(project="ctn-mnist", name=build_exp_name(args), config=vars(args))
+    wandb.init(project="ctn-ucla", name=build_exp_name(args), config=vars(args))
+    set_seeds(args.seed)
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,7 +284,7 @@ def main():
     print(f"Using device: {device}")
 
     # Data
-    train_loader, val_loader = get_data_loaders(args.batch_size, "./data")
+    train_loader, val_loader = get_data_loaders(args.batch_size, dataset=args.dataset)
 
     # Limit training data for quick testing
     if args.max_samples is not None:
@@ -183,15 +295,15 @@ def main():
             train_dataset, batch_size=args.batch_size, shuffle=True
         )
 
-    print(f"Training samples: {len(train_loader.dataset)}")
-    print(f"Validation samples: {len(val_loader.dataset)}")
-
     # Model
+    test_batch = next(iter(train_loader))
+    horizon = test_batch[0].shape[1]
+    num_classes = 2
     model = MHEADS[args.model](
         AbstractDisributionHeadConfig(
-            horizon=(28 * 28),  # 28x28 for MNIST
-            d_model=10,
-            d_output=2,
+            horizon=test_batch[1].shape[1],  # horizon is num bits to predict
+            d_model=test_batch[0].shape[1],  # input is bit-vector
+            d_output=2,  # binary
             rank=args.rank,
             pos_func=args.pos_func,
         )
@@ -200,18 +312,26 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # Training loop
+    print(f"Training samples: {len(train_loader.dataset)}")
+    print(f"Validation samples: {len(val_loader.dataset)}")
+    print(f"Horizon: {horizon}")
+    wandb.log(
+        {
+            "train/samples": len(train_loader.dataset),
+            "val/samples": len(val_loader.dataset),
+            "horizon": horizon,
+        }
+    )
     best_val_loss = float("inf")
-    wandb.watch(model, log="all", log_freq=20)  # log_freq = steps between logging
     for epoch in range(args.epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
-        val_loss = evaluate(model, val_loader, device)
+        train_loss = train_epoch(
+            model, train_loader, optimizer, device, wandb, num_classes
+        )
+        val_loss = evaluate(model, val_loader, device, num_classes)
 
         print(
             f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
         )
-
-        # Generate and log images
-        generated_images = generate_images(model, device, args.num_gen_images)
 
         # Log to wandb
         wandb.log(
@@ -220,10 +340,6 @@ def main():
                 "train/loss": train_loss,
                 "val/loss": val_loss,
                 "learning_rate": optimizer.param_groups[0]["lr"],
-                "generated_images": [
-                    wandb.Image(img, caption=f"Digit {i} - Epoch {epoch+1}")
-                    for i, img in enumerate(generated_images)
-                ],
             }
         )
 
