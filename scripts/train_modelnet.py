@@ -124,8 +124,8 @@ def preprocess(example):
 def get_data_loaders(batch_size=32, test_size=0.1):
     ds = load_dataset("jxie/modelnet40")  # has train/test splits in parquet
     # limit to 100 for testing
-    ds["train"] = ds["train"].select(range(3))
-    ds["test"] = ds["test"].select(range(3))
+    # ds["train"] = ds["train"].select(range(100))
+    # ds["test"] = ds["test"].select(range(100))
     ds["train"] = ds["train"].map(preprocess)
     ds["test"] = ds["test"].map(preprocess)
 
@@ -162,9 +162,16 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         optimizer.zero_grad()
         loss.backward()
         g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        p = sum(torch.linalg.norm(p) for p in model.parameters())
         optimizer.step()
 
-        wandb_logger.log({"train/batch_loss": loss.item(), "train/grad_norm": g})
+        wandb_logger.log(
+            {
+                "train/batch_loss": loss.item(),
+                "train/grad_norm": g,
+                "train/param_norm": p,
+            }
+        )
 
         total_loss += loss.item()
         num_batches += 1
@@ -243,14 +250,13 @@ def build_exp_name(args: argparse.Namespace):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
+    parser = argparse.ArgumentParser(description="Train MHEADS on ModelNet40")
     parser.add_argument("--model", default="cp")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--rank", type=int, default=10)
+    parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
-    parser.add_argument("--num_samples", type=int, default=None)
     parser.add_argument(
         "--num_gen_images",
         type=int,

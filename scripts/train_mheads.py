@@ -14,6 +14,7 @@ import pandas as pd
 from mtp.mheads._abc import AbstractDisributionHeadConfig
 from mtp.mheads import MHEADS
 from tqdm import tqdm
+import numpy as np
 
 # set theme
 sns.set_theme()
@@ -232,7 +233,8 @@ if __name__ == "__main__":
 
     # Plot
     ranks = [2]
-    horizons = [128, 512, 1024, 2048, 4096, 8192]
+    # horizons = [128, 512, 1024, 2048, 4096, 8192]
+    horizons = [2, 4, 8, 16]
     seeds = [0]
     d_models = [10]
     d_outputs = [2]
