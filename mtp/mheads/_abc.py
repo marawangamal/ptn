@@ -55,17 +55,14 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
                     stacklevel=2,
                 )
 
-    @abstractmethod
-    def set_output_embeddings(self, new_embeddings: torch.Tensor):
-        pass
+    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
+        raise NotImplementedError("set_output_embeddings not implemented")
 
-    @abstractmethod
-    def get_output_embeddings(self) -> torch.Tensor:
-        pass
+    def get_output_embeddings(self):
+        raise NotImplementedError("get_output_embeddings not implemented")
 
-    @abstractmethod
     def freeze_decoder(self):
-        pass
+        raise NotImplementedError("freeze_decoder not implemented")
 
     @abstractmethod
     def forward(

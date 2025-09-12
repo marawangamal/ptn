@@ -14,7 +14,6 @@ from mtp.mheads.tensorops.mps_born import (
 )
 
 
-# TODO: instead of a separate generate, maybe handle the case when y is not given as generate
 class BornMachineUnconditional(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
@@ -26,8 +25,7 @@ class BornMachineUnconditional(AbstractDisributionHead):
             config.d_output,
         )
 
-        # NOTE: unsure how we should normalize
-        # std_fan_in = torch.sqrt(torch.tensor(2.0)) / Do**0.5
+        # TODO: make init more stable s.t. out var follows N(0, 1)
         self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, dtype=torch.float64))
         self.is_canonical = False
         self.canonical_index = [config.horizon // 2]
@@ -41,18 +39,9 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
         self.canonicalize()
 
-    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
-        raise NotImplementedError("set_output_embeddings not implemented")
-
-    def get_output_embeddings(self):
-        raise NotImplementedError("get_output_embeddings not implemented")
-
-    def freeze_decoder(self):
-        raise NotImplementedError("freeze_decoder not implemented")
-
     def canonicalize(self):
         with torch.no_grad():
-            canonicalize(self.w_mps, self.canonical_index)
+            left_cano(self.w_mps, self.canonical_index)
             self.is_canonical = True
 
     def forward(
@@ -86,11 +75,21 @@ class BornMachineUnconditional(AbstractDisributionHead):
             g = self.w_mps.unsqueeze(0).expand(B, -1, -1, -1, -1)
             a = self.alpha.unsqueeze(0).expand(B, -1)
             b = self.beta.unsqueeze(0).expand(B, -1)
-            p_tilde = batch_born_mps_select(g, a, b, y)
-            z = batch_born_mps_canonical_marginalize(g, a, b, self.canonical_index)
+            p_tilde, gamma_p = batch_born_mps_select(g, a, b, y, use_scale_factors=True)
+            z, gamma_z = batch_born_mps_marginalize(
+                g,
+                a,
+                b,
+                # self.canonical_index,  only for cano variant
+                use_scale_factors=True,
+            )
 
             loss = (1 / H) * (  # avg across seq dimension
-                -torch.log(p_tilde) + torch.log(z)  # (B,)  # (B,)
+                -torch.log(p_tilde)  # (B,)
+                + torch.log(z)  # (B,)
+                # Contraction Stability Scale Factors
+                - (gamma_p.log().sum(dim=-1))  # (B, H)
+                + (gamma_z.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
 
             self.is_canonical = False
@@ -102,15 +101,17 @@ class BornMachineUnconditional(AbstractDisributionHead):
         )
 
     def generate(self, x: torch.Tensor):
-        pass
+        raise NotImplementedError("generate not implemented")
 
 
-def canonicalize(theta_mps: torch.Tensor, canonical_index: List[int]):
+def left_cano(theta_mps: torch.Tensor, canonical_index: List[int]):
     # Shape(theta_mps): (H, R, D, R)
     h = 0
     while h < theta_mps.shape[0] - 1:
         if h not in canonical_index:
-            a_4oder = torch.einsum("idj,jvk->idvk", theta_mps[h], theta_mps[h + 1])
+            a_4oder = torch.einsum(
+                "idj,jvk->idvk", theta_mps[h], theta_mps[h + 1]
+            )  # merged tensor A^{h,h+1}
             R1, V1, V2, R2 = a_4oder.shape
             Rm = theta_mps[h].shape[2]  # middle rank
             u, s, vt = torch.linalg.svd(
@@ -119,12 +120,8 @@ def canonicalize(theta_mps: torch.Tensor, canonical_index: List[int]):
             u, s, vt = u[:, :Rm], s[:Rm], vt[:Rm]  # truncate
             if h < min(canonical_index):  # left cano
                 theta_mps[h] = u.reshape(R1, V1, Rm)
-                # theta_mps[h + 1] = (s.unsqueeze(-1) * vt).reshape(Rm, V2, R2)
-                # theta_mps[h + 1] = (torch.diag(s) @ vt).reshape(Rm, V2, R2)
                 theta_mps[h + 1] = (s[:, None] * vt).reshape(Rm, V2, R2)
             else:
-                # theta_mps[h] = (u * s.unsqueeze(0)).reshape(R1, V1, Rm)
-                # theta_mps[h] = (u @ torch.diag(s)).reshape(R1, V1, Rm)
                 theta_mps[h + 1] = vt.reshape(Rm, V2, R2)
                 theta_mps[h] = (u * s[None, :]).reshape(R1, V1, Rm)
 

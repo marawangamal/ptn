@@ -4,7 +4,7 @@ import math
 import torch
 
 from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads.mps_born_unconditional import BornMachineUnconditional, canonicalize
+from mtp.mheads.mps_born_unconditional import BornMachineUnconditional, left_cano
 
 # If einlogsumexp is in another module, import it:
 # from your_module import einlogsumexp
@@ -23,7 +23,7 @@ class TestEinLogSumExp(unittest.TestCase):
         g = torch.randn(H, R, D, R)  # cores
         a = torch.eye(R)
         b = torch.eye(R)
-        gc = canonicalize(g.clone(), [2])
+        gc = left_cano(g.clone(), [2])
         res_1 = torch.einsum(
             g[0],
             [0, 1, 2],
@@ -58,7 +58,7 @@ class TestEinLogSumExp(unittest.TestCase):
         g = torch.randn(H, R, D, R)  # cores
         a = torch.eye(R)
         b = torch.eye(R)
-        canonicalize(g, [2])
+        left_cano(g, [2])
 
         # should be unitary
         norms = torch.linalg.norm(g[0].reshape(-1, R), dim=(0))
