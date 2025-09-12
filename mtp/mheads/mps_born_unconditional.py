@@ -1,3 +1,4 @@
+from typing import List
 import torch
 
 from mtp.mheads._abc import (
@@ -54,23 +55,7 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
     def canonicalize(self):
         with torch.no_grad():
-            h = 0
-            while h < self.config.horizon - 1:
-                if h not in self.canonical_index:
-                    a_4oder = torch.einsum(
-                        "idj,jvk->idvk", self.w_mps[h], self.w_mps[h + 1]
-                    )
-                    R1, V1, V2, R2 = a_4oder.shape
-                    Rm = self.w_mps[h].shape[2]  # middle rank
-                    u, s, vt = torch.svd(a_4oder.reshape(R1 * V1, V2 * R2))
-                    u, s, vt = u[:, :Rm], s[:Rm], vt[:Rm]  # truncate
-                    if h < min(self.canonical_index):  # left cano
-                        self.w_mps[h] = u.reshape(R1, V1, Rm)
-                        self.w_mps[h + 1] = (s.unsqueeze(-1) * vt).reshape(Rm, V2, R2)
-                    else:
-                        self.w_mps[h] = (u * s.unsqueeze(0)).reshape(R1, V1, Rm)
-                        self.w_mps[h + 1] = vt.reshape(Rm, V2, R2)
-                h += 1
+            canonicalize(self.w_mps, self.canonical_index)
             self.is_canonical = True
 
     def forward(
@@ -129,6 +114,30 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
     def generate(self, x: torch.Tensor):
         pass
+
+
+def canonicalize(theta_mps: torch.Tensor, canonical_index: List[int]):
+    h = 0
+    while h < theta_mps.shape[0] - 1:
+        if h not in canonical_index:
+            a_4oder = torch.einsum("idj,jvk->idvk", theta_mps[h], theta_mps[h + 1])
+            R1, V1, V2, R2 = a_4oder.shape
+            Rm = theta_mps[h].shape[2]  # middle rank
+            u, s, vt = torch.linalg.svd(a_4oder.reshape(R1 * V1, V2 * R2))
+            u, s, vt = u[:, :Rm], s[:Rm], vt[:Rm]  # truncate
+            if h < min(canonical_index):  # left cano
+                theta_mps[h] = u.reshape(R1, V1, Rm)
+                # theta_mps[h + 1] = (s.unsqueeze(-1) * vt).reshape(Rm, V2, R2)
+                # theta_mps[h + 1] = (torch.diag(s) @ vt).reshape(Rm, V2, R2)
+                theta_mps[h + 1] = (s[:, None] * vt).reshape(Rm, V2, R2)
+            else:
+                # theta_mps[h] = (u * s.unsqueeze(0)).reshape(R1, V1, Rm)
+                # theta_mps[h] = (u @ torch.diag(s)).reshape(R1, V1, Rm)
+                theta_mps[h + 1] = vt.reshape(Rm, V2, R2)
+                theta_mps[h] = (u * s[None, :]).reshape(R1, V1, Rm)
+
+        h += 1
+    return theta_mps
 
 
 def run_test():
