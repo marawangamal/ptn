@@ -1,0 +1,66 @@
+# Experiment 1
+# Evaluating efficacy of multi-token regularization during pretraining and finetuning
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:rtx8000:1"
+    - "#SBATCH --mem=32G"
+    - "#SBATCH --cpus-per-task=8"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+
+    - group:
+        name: "mnist::moe"
+        type: sweep
+        preamble: glong
+        sweep:
+          lr: [5e-4]
+          rank: [8]
+          model: ["moe"]
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --epochs 10"
+
+
+    # - group:
+    #     name: "mnist::cp"
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:
+    #       lr: [5e-4]
+    #       rank: [8, 32, 64]
+    #       model: ["cp"]
+    #       pos_func: ["abs"]
+    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+
+
+    # - group:
+    #     name: "mnist::mps"
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:
+    #       lr: [1e-3]
+    #       rank: [2]
+    #       model: ["mps"]
+    #       pos_func: ["abs"]
+    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+
+
+
+    # - group:
+    #     name: "mnist::moe"
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:
+    #       lr: [1e-3, 5e-4, 1e-4]
+    #       rank: [8, 32, 64, 128]
+    #       model: ["moe"]
+    #       lm_head_load_balance_lambda: [0.0, 0.1, 0.5, 1.0]
+    #     sweep_template: "python scripts/train_mnist.py --rank {rank} --model {model} --epochs 10"
+

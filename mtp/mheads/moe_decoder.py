@@ -13,6 +13,7 @@ def log_prob_moe(
     y: torch.Tensor,
     alpha_tilde: torch.Tensor,
     p_dists_tilde: torch.Tensor,
+    decoder: torch.Tensor,
     **kwargs,
 ) -> torch.Tensor:
     """Compute log probability of MoE distribution.
@@ -20,7 +21,8 @@ def log_prob_moe(
     Args:
         y (torch.Tensor): Indices. Shape: (H).
         alpha_tilde (torch.Tensor): Mixture weights. Shape: (R).
-        p_dists_tilde (torch.Tensor): Unnormalized logits. Shape: (R, H, V).
+        p_dists_tilde (torch.Tensor): Unnormalized logits. Shape: (R, H, D).
+        decoder (torch.Tensor): Decoder weights. Shape: (D, V).
 
     Returns:
         torch.Tensor: Log probability. Shape: (,).
@@ -34,7 +36,7 @@ def log_prob_moe(
     lsm_cp_cores = torch.stack(
         [
             torch.log_softmax(
-                p_dists_tilde[:, i],
+                torch.einsum("rd,vd->rv", p_dists_tilde[:, i], decoder),
                 dim=-1,
             )
             .gather(dim=-1, index=y[i : i + 1].unsqueeze(0).repeat(R, 1))
@@ -46,10 +48,10 @@ def log_prob_moe(
     return torch.logsumexp(lsm_alpha + lsm_cp_cores, dim=-1)
 
 
-log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0))  # type: ignore
+log_prob_moe_batched = torch.func.vmap(log_prob_moe, in_dims=(0, 0, 0, None))  # type: ignore
 
 
-class MoE(AbstractDisributionHead):
+class MoED(AbstractDisributionHead):
     """Variant of MoE that projects input onto CP parameters.
 
     This is a MoE that projects the input onto the CP parameters, rather than
@@ -80,10 +82,11 @@ class MoE(AbstractDisributionHead):
 
         # === dims
         self.config = config
-        H, R, Di, V = (
+        H, R, Di, Do, V = (
             self.config.horizon,
             self.config.rank,
             self.config.d_model,
+            self.config.d_hidden or self.config.d_model,
             self.config.d_output,
         )
 
@@ -91,22 +94,24 @@ class MoE(AbstractDisributionHead):
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
 
         # === params
-        self.w_alpha = torch.nn.Linear(Di, R, bias=False)
-        torch.nn.init.zeros_(self.w_alpha.weight)  # uniform mixture weights at init
-        self.w_moe = torch.nn.Parameter(torch.randn(R, H, Di, V) * std_fan_in)
-        self.b_moe = torch.nn.Parameter(torch.zeros(R, H, V))
+        self.w_alpha = torch.nn.Linear(Di, R)
+        self._w_cp_params = torch.nn.Parameter(torch.randn(R, H, Di, Do) * std_fan_in)
+        self._b_cp_params = torch.nn.Parameter(torch.randn(R, H, Do))
+        self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
 
     def w_cp_params(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("be,rhed->brhd", x, self.w_moe) + self.b_moe.unsqueeze(0)
+        return torch.einsum(
+            "be,rhed->brhd", x, self._w_cp_params
+        ) + self._b_cp_params.unsqueeze(0)
 
     def freeze_decoder(self):
         raise NotImplementedError("freeze_decoder not implemented")
 
     def get_output_embeddings(self):
-        raise NotImplementedError("get_output_embeddings not implemented")
+        return self.decoder
 
     def set_output_embeddings(self, new_embeddings):
-        raise NotImplementedError("set_output_embeddings not implemented")
+        self.decoder = new_embeddings
 
     def generate(self, x: torch.Tensor, do_sample: bool = True):
         """Generate a sequence of length H from the model.
@@ -117,19 +122,19 @@ class MoE(AbstractDisributionHead):
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
-        theta_cp_tilde = torch.einsum("bd,rhdv->brhv", x, self.w_moe) + self.b_moe
-        theta_alpha_tilde = self.w_alpha(x)  # (B, R)
+        cp_params_tilde = torch.einsum(
+            "brhd,vd->brhv", self.w_cp_params(x), self.decoder
+        )  # (B, R, H, D)
+        alphas_tilde = self.w_alpha(x)  # (B, R)
 
-        B, R, H, D = theta_cp_tilde.shape
+        B, R, H, D = cp_params_tilde.shape
 
         y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
 
         for h in range(H):
             # Compute log P(y_h | x, y_1, ..., y_h-1)
-            lsm_a = torch.log_softmax(theta_alpha_tilde, dim=-1).unsqueeze(
-                -1
-            )  # (B, R, 1)
-            lsm_cp = theta_cp_tilde.log_softmax(dim=-1)  # (B, R, H, V)
+            lsm_a = torch.log_softmax(alphas_tilde, dim=-1).unsqueeze(-1)  # (B, R, 1)
+            lsm_cp = cp_params_tilde.log_softmax(dim=-1)  # (B, R, H, V)
             lsm_select = lsm_cp.gather(  # (B, R, H, V) before gather
                 dim=-1,
                 index=y_out[:, :h].unsqueeze(1).unsqueeze(-1).expand(-1, R, -1, -1),
@@ -142,6 +147,15 @@ class MoE(AbstractDisributionHead):
             dist = torch.distributions.Categorical(logits=log_p)
             yi = dist.sample()  # (B,)
             y_out[:, h] = yi
+
+            # exponentiate and sample
+            # prob_y_bar_xy = torch.exp(log_p)  # (B, V)
+            # prob_y_bar_xy = prob_y_bar_xy / prob_y_bar_xy.sum(-1, keepdim=True)
+            # if do_sample:
+            #     dist =
+            #     y_out[:, h] = torch.multinomial(prob_y_bar_xy, 1).squeeze(-1)
+            # else:
+            #     y_out[:, h] = torch.argmax(prob_y_bar_xy, dim=-1)
 
         return y_out
 
@@ -166,30 +180,31 @@ class MoE(AbstractDisributionHead):
             # NOTE: this is not optimal, as it will over-filter samples
             # filter out entire sample if any of the H y vals are ignore_index
             mask = (y != ignore_index).all(dim=-1)  # (B,)
-            theta_alpha_tilde = self.w_alpha(x[mask])  # (B, R)
-            theta_cp_tilde = torch.einsum("bd,rhdv->brhv", x, self.w_moe) + self.b_moe
+            alpha_tilde = self.w_alpha(x[mask])  # (B, R)
+            p_dists_tilde = self.w_cp_params(x[mask])  # (B, R, H, D)
             if y[mask].shape[0] > 0:
                 loss = -log_prob_moe_batched(
                     y[mask],  # (B, H)
-                    theta_alpha_tilde,
-                    theta_cp_tilde,
+                    alpha_tilde,
+                    p_dists_tilde,
+                    self.decoder,
                 ).mean() * (1 / H)
 
-            # ---- auxiliary load-balancing loss (soft counts) ----
-            if self.config.load_balance_lambda:
-                w = torch.softmax(theta_alpha_tilde, dim=-1)  # (Bm, R)
-                n_alpha = w.sum(dim=0)  # (R,)
-                frac = n_alpha / (n_alpha.sum() + 1e-8)  # (R,)
-                aux_loss = ((frac - 1.0 / R) ** 2).sum()
+                # ---- auxiliary load-balancing loss (soft counts) ----
+                if self.config.load_balance_lambda:
+                    w = torch.softmax(alpha_tilde, dim=-1)  # (Bm, R)
+                    n_alpha = w.sum(dim=0)  # (R,)
+                    frac = n_alpha / (n_alpha.sum() + 1e-8)  # (R,)
+                    aux_loss = ((frac - 1.0 / R) ** 2).sum()
 
-                lb_lambda = getattr(self.config, "load_balance_lambda", 0.0)
-                loss = loss + lb_lambda * aux_loss
+                    lb_lambda = getattr(self.config, "load_balance_lambda", 0.0)
+                    loss = loss + lb_lambda * aux_loss
 
             # DEBUGGING / ANALYSIS
             # logging the following list: softmax(--r,h--|p_dists_tilde|--|decoder|--)  (R,H,V)
             if self.debug:
                 alphas = torch.softmax(
-                    torch.einsum("brhd,vd->brhv", theta_cp_tilde, self.decoder), dim=-1
+                    torch.einsum("brhd,vd->brhv", p_dists_tilde, self.decoder), dim=-1
                 )
                 loss_dict["alphas"] = alphas.reshape(-1).detach().cpu()
 
@@ -202,9 +217,26 @@ class MoE(AbstractDisributionHead):
 
 if __name__ == "__main__":
     H, R, D, V = 28 * 28, 1, 10, 2
-    moe = MoE(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
+    moe = MoED(AbstractDisributionHeadConfig(horizon=H, rank=R, d_model=D, d_output=V))
+
+    # # Sample
+    # model = MHEADS["moe_proj"](
+    #     AbstractDisributionHeadConfig(
+    #         horizon=28*28,
+    #         d_model=10,  # 9 digits
+    #         d_output=2,  # 2 classes
+    #         rank=1,
+    #     )
+    # )
+    # z = torch.nn.functional.one_hot(torch.tensor([0]), num_classes=10).to(torch.float32).to(device)
+    # y = model.generate(z)
+
+    # horizon=300,
+    # d_model=10,  # 9 digits
+    # d_output=2,  # 2 classes
+    # rank=1,
 
     x = torch.randn(2, D)
     y = torch.randint(0, V, (2, H))
-    print(f"loss: {moe(x, y).loss}")
+    # print(f"loss: {moe(x, y).loss}")
     print(f"generated: {moe.generate(x)}")

@@ -5,3 +5,5 @@ test_model
 *.egg-info
 wandb
 data
+checkpoints
+media

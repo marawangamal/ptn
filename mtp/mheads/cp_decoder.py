@@ -1,5 +1,12 @@
+"""
+CPD: CP parameterized distribution with decoder.
+
+Note: this is the non-memory efficient version.
+
+Runtime memory complexity: O(BRHV)
+"""
+
 import torch
-from tqdm import tqdm
 
 from mtp.mheads._abc import (
     AbstractDisributionHead,
@@ -25,26 +32,31 @@ POS_FUNC_MAP = {
 }
 
 
-class CP(AbstractDisributionHead):
+class CPD(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
-        H, R, Di, V = (
+        H, R, Di, Do, V = (
             config.horizon,
             config.rank,
             config.d_model,
+            config.d_hidden or config.d_model,
             config.d_output,
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        self.w_cp = torch.nn.Parameter(torch.randn(R, H, Di, V) * std_fan_in)
-        self.b_cp = torch.nn.Parameter(torch.zeros(R, H, V) * std_fan_in)
+        self.w_cp = torch.nn.Parameter(torch.randn(R, H, Di, Do) * std_fan_in)
+        self.b_cp = torch.nn.Parameter(torch.zeros(R, H, Do) * std_fan_in)
+        self.decoder = torch.nn.Parameter(torch.randn(V, Do) * std_fan_in)
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
-        raise NotImplementedError("set_output_embeddings not implemented")
+        assert (
+            embeddings.shape == self.decoder.shape
+        ), f"embeddings must be of shape {self.decoder.shape} but got {embeddings.shape}"
+        self.decoder = embeddings
 
     def get_output_embeddings(self):
-        raise NotImplementedError("get_output_embeddings not implemented")
+        return self.decoder
 
     def freeze_decoder(self):
         raise NotImplementedError("freeze_decoder not implemented")
@@ -75,7 +87,7 @@ class CP(AbstractDisributionHead):
         if y is not None:
 
             theta_cp = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + self.b_cp
+                torch.einsum("bi,rhid,vd->brhv", x, self.w_cp, self.decoder) + self.b_cp
             )
 
             p_tilde, gammas_p = select_margin_cp_tensor_batched(
@@ -121,56 +133,52 @@ class CP(AbstractDisributionHead):
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
-        with torch.no_grad():
-            B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
-            # y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+        B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
 
-            theta_cp = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + self.b_cp
-            )
+        theta_cp = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,rhid,vd->brhv", x, self.w_cp, self.decoder) + self.b_cp
+        )
 
-            # -1: marginalize
-            y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
-            cp_mrgn = theta_cp.sum(dim=-1)  # (B, R, H)
-            cp_mrgn_reduced = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
+        # -1: marginalize
+        y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
+        cp_mrgn = theta_cp.sum(dim=-1)  # (B, R, H)
+        cp_mrgn_reduced = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
 
-            # DP: cp_mrgn_reduced_h =  \prod_{i=h}^{H} \sum_v \theta_cp_{iv}
-            res = torch.ones(B, R, device=x.device, dtype=x.dtype)
-            for h in range(H - 1, -1, -1):
-                res = res * cp_mrgn[:, :, h]  # (B, R)
-                res = res / torch.max(res, dim=-1, keepdim=True)[0]
-                cp_mrgn_reduced[:, :, h] = res
+        # DP: cp_mrgn_reduced_h =  \prod_{i=h}^{H} \sum_v \theta_cp_{iv}
+        res = torch.ones(B, R, device=x.device, dtype=x.dtype)
+        for h in range(H - 1, -1, -1):
+            res = res * cp_mrgn[:, :, h]  # (B, R)
+            res = res / torch.max(res, dim=-1, keepdim=True)[0]
+            cp_mrgn_reduced[:, :, h] = res
 
-            cp_slct = torch.empty(B, R, 0, device=x.device, dtype=x.dtype)
+        cp_slct = torch.empty(B, R, 0, device=x.device, dtype=x.dtype)
 
-            for h in tqdm(range(H), desc="Generating"):
-                y_slct_h = (
-                    y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
-                    .reshape(B, 1, min(max(0, h), 1))
-                    .expand(B, R, -1)
-                )  # (B, R, 1/``)
-                cp_slct_h = theta_cp[:, :, h].gather(  # (B, R, 1)
-                    -1,
-                    y_slct_h,
-                )  # (B, R, 1/0)
-                cp_slct = torch.cat([cp_slct, cp_slct_h], dim=-1)  # (B, R, 2)
-                cp_slct = cp_slct.prod(dim=-1, keepdim=True)  # (B, R, 1)
-                cp_slct = (
-                    cp_slct / torch.max(cp_slct, dim=1, keepdim=True)[0]
-                )  # (B, R, 1)
+        for h in range(H):
+            y_slct_h = (
+                y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
+                .reshape(B, 1, min(max(0, h), 1))
+                .expand(B, R, -1)
+            )  # (B, R, 1/``)
+            cp_slct_h = theta_cp[:, :, h].gather(  # (B, R, 1)
+                -1,
+                y_slct_h,
+            )  # (B, R, 1/0)
+            cp_slct = torch.cat([cp_slct, cp_slct_h], dim=-1)  # (B, R, 2)
+            cp_slct = cp_slct.prod(dim=-1, keepdim=True)  # (B, R, 1)
+            cp_slct = cp_slct / torch.max(cp_slct, dim=1, keepdim=True)[0]  # (B, R, 1)
 
-                cp_free = theta_cp[:, :, h]  # (B, R, V)
-                p_tilde = (
-                    cp_slct
-                    * cp_mrgn_reduced[:, :, h + 1 : h + 2]
-                    * cp_free
-                    # (B, R, V) -> (B, V)
-                ).sum(dim=1)
-                probs = p_tilde / p_tilde.sum(-1, keepdim=True)
-                dist = torch.distributions.Categorical(probs=probs)
-                yi = dist.sample()  # (B,1)
-                y_out[:, h] = yi
-            return y_out
+            cp_free = theta_cp[:, :, h]  # (B, R, V)
+            p_tilde = (
+                cp_slct
+                * cp_mrgn_reduced[:, :, h + 1 : h + 2]
+                * cp_free
+                # (B, R, V) -> (B, V)
+            ).sum(dim=1)
+            probs = p_tilde / p_tilde.sum(-1, keepdim=True)
+            dist = torch.distributions.Categorical(probs=probs)
+            yi = dist.sample()  # (B,1)
+            y_out[:, h] = yi
+        return y_out
 
 
 def run_test():

@@ -1,0 +1,62 @@
+# Experiment 1
+# Evaluating efficacy of multi-token regularization during pretraining and finetuning
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:rtx8000:1"
+    - "#SBATCH --mem=32G"
+    - "#SBATCH --cpus-per-task=8"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+
+  clong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --mem=32G"
+    - "#SBATCH --cpus-per-task=8"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+
+    - group:
+        name: "ucla::moe"
+        type: sweep
+        preamble: clong
+        sweep:
+          lr: [1e-3]
+          rank: [8, 32, 64]
+          model: ["moe"]
+          dataset: [
+              "nltcs",
+              "msnbc",
+              "kdd",
+              "plants",
+              "baudio",
+              # "jester",
+              # "bnetflix",
+              # "accidents",
+              # "retail",        # actually `tretail` in repo
+              # "pumsb_star",
+              # "dna",
+              # "kosarek",
+              # "msweb",         # actually `MSWeb` in repo
+              # "book",
+              # "eachmovie",     # actually `tmovie` in repo
+              # "webkb",         # actually `cwebkb` in repo
+              # "reuters_52",    # actually `cr52` in repo
+              # "20news",        # actually `c20ng` in repo
+              # "bbc",
+              # "ad",            # actually `adult` in repo
+          ]
+        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 10"
+

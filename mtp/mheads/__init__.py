@@ -1,17 +1,25 @@
-from mtp.mheads.cp_cond import CPCond
-from mtp.mheads.cp_condl import CPCondl
-from mtp.mheads.moe import MoE
-from mtp.mheads.multihead import Multihead
-from mtp.mheads.stp import STP
 from mtp.mheads.cp import CP
+from mtp.mheads.cp_decoder import CPD
+from mtp.mheads.moe_decoder import MoED
+from mtp.mheads.mps import MPS
+from mtp.mheads.mps_borno import MPSBO
+from mtp.mheads.mps_decoder import MPSD
+from mtp.mheads.multihead import Multihead
+from mtp.mheads.moe import MoE
+from mtp.mheads.stp import STP
+from mtp.mheads.umps import UMPS
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 # !! IMPORTANT !! ::  Keep in sync with mtp.mheads.types
 MHEADS = {
     "stp": STP,
     "multihead": Multihead,
-    "moe": MoE,
     "cp": CP,
-    "cp_cond": CPCond,
-    "cp_condl": CPCondl,
+    "cp_decoder": CPD,
+    "moe": MoE,
+    "moe_decoder": MoED,
+    "mps": MPS,
+    "mps_decoder": MPSD,  # mps with shared decoder
+    "mps_borno": MPSBO,  # mps-based born machine w/ orthogonal parameterization
+    "umps": UMPS,
 }
