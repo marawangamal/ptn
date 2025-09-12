@@ -3,7 +3,8 @@ import unittest
 import math
 import torch
 
-from mtp.mheads.mps_born_unconditional import canonicalize
+from mtp.mheads._abc import AbstractDisributionHeadConfig
+from mtp.mheads.mps_born_unconditional import BornMachineUnconditional, canonicalize
 
 # If einlogsumexp is in another module, import it:
 # from your_module import einlogsumexp
@@ -62,6 +63,10 @@ class TestEinLogSumExp(unittest.TestCase):
         # should be unitary
         norms = torch.linalg.norm(g[0].reshape(-1, R), dim=(0))
         self.assertTrue(torch.allclose(norms, torch.ones(R)))
+
+    def test_born_mps_cano_normalization(self):
+        # Simple normalization should give same result as full
+        pass
 
 
 if __name__ == "__main__":

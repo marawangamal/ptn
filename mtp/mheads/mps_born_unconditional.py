@@ -8,6 +8,7 @@ from mtp.mheads._abc import (
 )
 from mtp.mheads.tensorops.mps import select_margin_mps_tensor_batched
 from mtp.mheads.tensorops.mps_born import (
+    batch_born_mps_canonical_marginalize,
     batch_born_mps_marginalize,
     batch_born_mps_select,
 )
@@ -82,22 +83,14 @@ class BornMachineUnconditional(AbstractDisributionHead):
             if not self.is_canonical:
                 self.canonicalize()
 
-            g = self.w_mps
+            g = self.w_mps.unsqueeze(0).expand(B, -1, -1, -1, -1)
             a = self.alpha.unsqueeze(0).expand(B, -1)
             b = self.beta.unsqueeze(0).expand(B, -1)
-            p_tilde = batch_born_mps_select(
-                g.unsqueeze(0).expand(B, -1, -1, -1, -1), a, b, y
-            )
-            if len(self.canonical_index) == 1:
-                z_tilde = torch.einsum(
-                    "idj,idj->", g[self.canonical_index[0]], g[self.canonical_index[0]]
-                )
-            else:
-                i0, i1 = self.canonical_index
-                z_tilde = torch.einsum("idj,jvr,idq,qvr->", g[i0], g[i1], g[i0], g[i1])
+            p_tilde = batch_born_mps_select(g, a, b, y)
+            z = batch_born_mps_canonical_marginalize(g, a, b, self.canonical_index)
 
             loss = (1 / H) * (  # avg across seq dimension
-                -torch.log(p_tilde) + torch.log(z_tilde)  # (B,)  # (B,)
+                -torch.log(p_tilde) + torch.log(z)  # (B,)  # (B,)
             ).mean()  # avg across batch dimension
 
             self.is_canonical = False

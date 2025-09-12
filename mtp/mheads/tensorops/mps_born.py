@@ -1,3 +1,4 @@
+from typing import List
 import torch
 
 
@@ -53,8 +54,33 @@ def born_mps_ortho_marginalize(g: torch.Tensor, a: torch.Tensor, b: torch.Tensor
     )
 
 
+def born_mps_canonical_marginalize(
+    g: torch.Tensor, a: torch.Tensor, b: torch.Tensor, canonical_index: List[int]
+):
+    """Marginalize a Canonical Born MPS tensor.
+
+    Args:
+        g (torch.Tensor): g tensor. Shape: (H, R, D, R)
+        a (torch.Tensor): a tensor. Shape: (R,)
+        b (torch.Tensor): b tensor. Shape: (R,)
+        canonical_index (List[int]): Canonical index.
+    """
+    assert len(canonical_index) in [1, 2], "Canonical index must be 1 or 2"
+    if len(canonical_index) == 1:
+        z_tilde = torch.einsum(
+            "idj,idj->", g[canonical_index[0]], g[canonical_index[0]]
+        )
+    else:
+        i0, i1 = canonical_index
+        z_tilde = torch.einsum("idj,jvr,idq,qvr->", g[i0], g[i1], g[i0], g[i1])
+    return z_tilde
+
+
 batch_born_mps_marginalize = torch.vmap(born_mps_marginalize, in_dims=(0, 0, 0))
 batch_born_mps_select = torch.vmap(born_mps_select, in_dims=(0, 0, 0, 0))
 batch_ortho_born_mps_marginalize = torch.vmap(
     born_mps_ortho_marginalize, in_dims=(0, 0, 0)
+)
+batch_born_mps_canonical_marginalize = torch.vmap(
+    born_mps_canonical_marginalize, in_dims=(0, 0, 0, None)
 )
