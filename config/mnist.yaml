@@ -22,10 +22,10 @@ group:
         type: sweep
         preamble: glong
         sweep:
-          lr: [5e-4]
-          rank: [8]
+          lr: [1e-3, 5e-4]
+          rank: [8, 32, 64]
           model: ["moe"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --epochs 10"
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --epochs 20"
 
 
     # - group:
@@ -45,11 +45,11 @@ group:
     #     type: sweep
     #     preamble: glong
     #     sweep:
-    #       lr: [1e-3]
-    #       rank: [2]
+    #       lr: [1e-3, 5e-4, 1e-4]
+    #       rank: [2, 4, 8]
     #       model: ["mps"]
-    #       pos_func: ["abs"]
-    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
+    #       pos_func: ["abs", "relu"]
+    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 20"
 
 
 
