@@ -43,6 +43,7 @@ def select_margin_mps_tensor_batched(
     core: torch.Tensor,
     ops: torch.Tensor,
     use_scale_factors: bool = True,
+    eps: float = 1e-12,
     **kwargs,
 ):
     """Performs selection and marginalization operations on a MPS tensor representation.
@@ -123,7 +124,9 @@ def select_margin_mps_tensor_batched(
             if use_scale_factors:
                 sf[mask_select] = torch.linalg.norm(update, dim=-1)
             scale_factors.append(sf)
-            res_left[mask_select] = update / sf[mask_select].unsqueeze(-1)
+            res_left[mask_select] = update / sf[mask_select].unsqueeze(-1).clamp(
+                min=eps
+            )
             diagnose(core_margins, "res_left")
 
         # Free
@@ -142,7 +145,9 @@ def select_margin_mps_tensor_batched(
             if use_scale_factors:
                 sf[mask_margin] = torch.linalg.norm(update, dim=-1)
             scale_factors.append(sf)
-            res_right[mask_margin] = update / sf[mask_margin].unsqueeze(-1)
+            res_right[mask_margin] = update / sf[mask_margin].unsqueeze(-1).clamp(
+                min=eps
+            )
             diagnose(core_margins, "res_right")
 
     if not use_scale_factors:

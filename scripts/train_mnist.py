@@ -55,6 +55,16 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         output = model(z, y.reshape(B, -1))
         loss = output.loss
 
+        if loss.isnan():
+            # Save model state, input, and output for debugging
+            debug_dir = "debug_nan"
+            os.makedirs(debug_dir, exist_ok=True)
+            torch.save(model.state_dict(), os.path.join(debug_dir, f"model_nan_{i}.pt"))
+            torch.save(z.cpu(), os.path.join(debug_dir, f"input_z_nan_{i}.pt"))
+            torch.save(y.cpu(), os.path.join(debug_dir, f"input_y_nan_{i}.pt"))
+            torch.save(output, os.path.join(debug_dir, f"output_nan_{i}.pt"))
+            raise ValueError(f"Loss is NaN! Saved model and inputs to {debug_dir}")
+
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
@@ -76,9 +86,6 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         num_batches += 1
 
         pbar.set_postfix({"train/loss": loss.item()})
-
-        if loss.isnan():
-            raise ValueError("Loss is NaN!")
 
     return total_loss / num_batches
 
@@ -136,6 +143,12 @@ def build_exp_name(args: argparse.Namespace):
     return "_".join(parts)
 
 
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
     parser.add_argument("--model", default="moe_proj")
@@ -170,6 +183,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(f"checkpoints/{build_exp_name(args)}", exist_ok=True)
     print(f"Using device: {device}")
+    set_seed()
 
     # Data
     train_loader, val_loader = get_data_loaders(args.batch_size, "./data")
@@ -197,7 +211,7 @@ def main():
         )
     )
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # Training loop
     best_val_loss = float("inf")

@@ -8,3 +8,5 @@ wandb
 datatrove
 pandas
 seaborn
+torchvision
+opt_einsum
