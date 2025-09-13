@@ -35,6 +35,8 @@ class MPS(AbstractDisributionHead):
             config.d_model,
             config.d_output,
         )
+        # epsilon for numerical stability
+        # self.register_buffer("eps", torch.tensor(1e-12))
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
         self._w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
@@ -58,15 +60,6 @@ class MPS(AbstractDisributionHead):
         return POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
         )  # (B, H, R, V, R)
-
-    def set_output_embeddings(self, embeddings: torch.nn.Parameter):
-        raise NotImplementedError("set_output_embeddings not implemented")
-
-    def get_output_embeddings(self):
-        raise NotImplementedError("get_output_embeddings not implemented")
-
-    def freeze_decoder(self):
-        raise NotImplementedError("freeze_decoder not implemented")
 
     def forward(
         self,
@@ -123,6 +116,12 @@ class MPS(AbstractDisributionHead):
 
             gammas_p = torch.stack(gammas_p, dim=-1)
             gammas_z = torch.stack(gammas_z, dim=-1)  # (B, H)
+
+            # # --- clamp before logs ---
+            # p_tilde = p_tilde.clamp(min=self.eps)
+            # z_tilde = z_tilde.clamp(min=self.eps)
+            # gammas_p = gammas_p.clamp(min=self.eps)
+            # gammas_z = gammas_z.clamp(min=self.eps)
 
             loss = (1 / H) * (  # avg across seq dimension
                 -torch.log(p_tilde)  # (B,)
@@ -292,8 +291,8 @@ def run_test():
     y = torch.randint(0, V, (B, H))
     loss = mt_head(x, y).loss
     print(f"loss: {loss}")
-    out = mt_head.generate(x)
-    print(f"generated: {out}")
+    # out = mt_head.generate(x)
+    # print(f"generated: {out}")
 
 
 if __name__ == "__main__":

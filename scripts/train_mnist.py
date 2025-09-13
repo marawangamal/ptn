@@ -211,7 +211,11 @@ def main():
         )
 
         # Generate and log images
-        generated_images = generate_images(model, device, args.num_gen_images)
+        try:
+            generated_images = generate_images(model, device, args.num_gen_images)
+        except Exception as e:
+            print(f"Error generating images: {e}")
+            generated_images = []
 
         # Log to wandb
         wandb.log(
