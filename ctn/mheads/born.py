@@ -2,7 +2,7 @@ import torch
 from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
 
 
-def compute_lr_marginalization_terms(g: torch.nn.ParameterList):
+def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
     """Compute the left and right terms for the Born machine loss.
 
     Args:
@@ -35,7 +35,7 @@ def compute_lr_marginalization_terms(g: torch.nn.ParameterList):
     return torch.stack(left), torch.stack(right)  # (H, R)
 
 
-def compute_lr_selection_terms(g: torch.nn.ParameterList, y: torch.Tensor):
+def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
     """Compute the left and right terms for the Born machine loss.
 
     Args:
@@ -70,7 +70,7 @@ def compute_lr_selection_terms(g: torch.nn.ParameterList, y: torch.Tensor):
 
 
 batch_compute_lr_selection_terms = torch.vmap(
-    compute_lr_selection_terms, in_dims=(None, 0)
+    compute_lr_selection_cache, in_dims=(None, 0)
 )
 
 
@@ -146,7 +146,7 @@ class BM(AbstractDisributionHead):
 
         # Precomputes left/right selection and marginalization caches
         sl, sr = batch_compute_lr_selection_terms(g, y)  # (B, H, R), (B, H, R)
-        ml, mr = compute_lr_marginalization_terms(g)  # (H, R), (H, R)
+        ml, mr = compute_lr_marginalization_cache(g)  # (H, R), (H, R)
 
         # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
         sl = [x for x in sl.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
