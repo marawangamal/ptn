@@ -244,6 +244,12 @@ class BornMachineUnconditional(AbstractDisributionHead):
         sl, sr = batch_compute_lr_select_terms(g, y)  # (B, H, R), (B, H, R)
         ml, mr = compute_lr_marginal_terms(g)  # (H, R), (H, R)
 
+        # Convert sl, sr, ml, mr to lists since ranks can change, only convert batch dim to list
+        sl = [x for x in sl.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
+        sr = [x for x in sr.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
+        ml = [x for x in ml]  # (H, R) -> H x (R,)
+        mr = [x for x in mr]  # (H, R) -> H x (R,)
+
         going_right = True
         for n_sweeps in range(n_sweeps):
             for h in range(H) if going_right else range(H - 1, -1, -1):
@@ -255,7 +261,7 @@ class BornMachineUnconditional(AbstractDisributionHead):
                 # Map: (R, D, R) -> (R, B, R)
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                psi_y = torch.einsum("bi,ibj,bj->b", sl[:, h], gh_yh, sr[:, h])
+                psi_y = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
                 z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
                 loss = z.clamp(min=eps).log() - psi_y.pow(2).clamp(min=eps).log()
                 loss.backward()
@@ -263,16 +269,21 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
                 # Now we need to re-canonicalize and update left or right terms
                 with torch.no_grad():
+                    # NOTE: Going right, so everything in front is right canonicalized and we need to leave
+                    # our wake left canonicalized as we pass through.
                     if going_right:
-                        U, s, Vt = torch.linalg.svd(g[h].reshape(R * Do, R))
+                        Rl, Rr = g[h].size(0), g[h].size(-1)
+                        U, s, Vt = torch.linalg.svd(g[h].reshape(Rl * Do, Rr))
                         R_prime = U.size(-1)
-                        g[h] = U.reshape(R, Do, R_prime)[:, :, :R]  # (R, Do, R)
-                        g[h + 1] = torch.einsum("ir,rp,pvj->ivj", s, Vt, g[h + 1])[:R]
+                        g[h] = U.reshape(Rl, Do, R_prime)[:, :, :Rr]  # (R, Do, R)
+                        g[h + 1] = torch.einsum(
+                            "ir,rp,pvj->ivj", torch.diag(s), Vt[: len(s)], g[h + 1]
+                        )[:Rr]
                         # NOTE: we changed gh and gh+1 so al[h+1:], ar[:h+1] are invalid for both s,m mats
                         # But, we only need to use h+1 in the next iteration.
                         # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
                         # But sr, mr will be invalid everywhere.
-                        sl[:, h + 1] = torch.einsum("bi,idj->bj", sl[:, h], g[h])
+                        sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
                         ml[h + 1] = torch.einsum("i,ij->j", ml[h], g[h].sum(dim=1))
                         # sr[:, h] = torch.einsum(
                         #     "ij, bj->bj", self._g[h + 1][:, y[h + 1]], sr[:, h + 1]
