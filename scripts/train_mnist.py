@@ -44,6 +44,8 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
     num_batches = 0
     pbar = tqdm(train_loader, desc="Training")
     for i, batch in enumerate(pbar):
+        # if i == 114:
+        #     print(f"Batch {i} is {batch}")
         y, x = batch  # for generative modeling, reverse x, y
         B = x.shape[0]
 

@@ -15,12 +15,18 @@ def print_tens_stats(t: torch.Tensor, name: str):
     )
 
 
+def rbf_activation(x: torch.Tensor, sigma: float = 1.0) -> torch.Tensor:
+    # Elementwise RBF around 0: exp(-x^2 / (2*sigma^2))
+    return torch.exp(-x.pow(2) / (2 * (sigma**2)))
+
+
 POS_FUNC_MAP = {
     "sigmoid": torch.nn.functional.sigmoid,
     "relu": torch.nn.functional.relu,
     "exp": torch.exp,
     "square": torch.square,
     "abs": torch.abs,
+    "rbf": rbf_activation,
 }
 
 
@@ -53,6 +59,7 @@ class MPS(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
+        self._init_weights()
 
         self.eps = 1e-12
 
@@ -60,6 +67,17 @@ class MPS(AbstractDisributionHead):
         return POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
         )  # (B, H, R, V, R)
+
+    def _init_weights(self):
+        H, R, Do, Di = (
+            self.config.horizon,
+            self.config.rank,
+            self.config.d_output,
+            self.config.d_model,
+        )
+        self._w_mps.data = (
+            torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
+        )
 
     def forward(
         self,
@@ -138,6 +156,13 @@ class MPS(AbstractDisributionHead):
                 - (gammas_p.log().sum(dim=-1))  # (B, H)
                 + (gammas_z.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
+
+            # pmask = loss.isfinite() & (loss >= 0)
+            # loss = loss[pmask].mean()  # avg across batch dimension
+
+            if loss.isnan() or loss < 0:
+                print(f"[MPS] Loss is NaN or negative: {loss}")
+                raise ValueError("[MPS] Loss is NaN or negative")
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
