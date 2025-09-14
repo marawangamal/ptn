@@ -176,7 +176,7 @@ class MoE(AbstractDisributionHead):
                 ).mean() * (1 / H)
 
             # ---- auxiliary load-balancing loss (soft counts) ----
-            if self.config.load_balance_lambda:
+            if self.config.lambda_load_balance:
                 w = torch.softmax(theta_alpha_tilde, dim=-1)  # (Bm, R)
                 n_alpha = w.sum(dim=0)  # (R,)
                 frac = n_alpha / (n_alpha.sum() + 1e-8)  # (R,)

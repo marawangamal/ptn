@@ -1,22 +1,96 @@
-from typing import List
 import torch
+from mtp.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
 
-from mtp.mheads._abc import (
-    AbstractDisributionHead,
-    AbstractDisributionHeadConfig,
-    AbstractDisributionHeadOutput,
-)
-from mtp.mheads.tensorops.mps import select_margin_mps_tensor_batched
-from mtp.mheads.tensorops.mps_born import (
-    batch_born_mps_canonical_marginalize,
-    batch_born_mps_marginalize,
-    batch_born_mps_select,
+
+def compute_lr_marginalization_terms(g: torch.nn.ParameterList):
+    """Compute the left and right terms for the Born machine loss.
+
+    Args:
+        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
+
+    Returns:
+        torch.Tensor: Left term. Shape: (H, R).
+        torch.Tensor: Right term. Shape: (H, R).
+    """
+    _, H = g[1].shape[0], len(g)
+
+    # Map: (1, Do, R) -> (R,)
+    lh = g[0].sum(dim=1).squeeze(0)  # (R,)
+    left = [torch.zeros_like(lh), lh]
+    for h in range(1, H - 1):
+        # Map: (R, Do, R) -> (R, R)
+        gh_y = g[h].sum(dim=1)  # (R, R)
+        lh = torch.einsum("i,ij->j", lh, gh_y)
+        left.append(lh)
+
+    # Map: (R, Do, 1) -> (R,)
+    rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
+    right = [torch.zeros_like(rh), rh]
+    for h in range(H - 2, 0, -1):
+        gh_y = g[h].sum(dim=1)  # (R, R)
+        rh = torch.einsum("ij,j->i", gh_y, rh)
+        right.append(rh)
+    right.reverse()
+
+    return torch.stack(left), torch.stack(right)  # (H, R)
+
+
+def compute_lr_selection_terms(g: torch.nn.ParameterList, y: torch.Tensor):
+    """Compute the left and right terms for the Born machine loss.
+
+    Args:
+        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
+        y (torch.Tensor): Target tensor. Shape: (H,).
+
+    Returns:
+        torch.Tensor: Left term. Shape: (H, R).
+        torch.Tensor: Right term. Shape: (H, R).
+    """
+    R, H = g[1].shape[0], len(g)
+    y_slct = y.reshape(1, -1, 1).expand(R, -1, R)  # (R, H, R)
+
+    # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
+    lh = g[0].gather(dim=1, index=y_slct[:1, :1]).squeeze(0, 1)  # (R,)
+    left = [torch.zeros_like(lh), lh]
+    for h in range(1, H - 1):
+        gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
+        lh = torch.einsum("i,ij->j", lh, gh_y)
+        left.append(lh)
+
+    # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
+    rh = g[-1].gather(dim=1, index=y_slct[:, -1:, :1]).squeeze(1, 2)  # (R,)
+    right = [torch.zeros_like(rh), rh]
+    for h in range(H - 2, 0, -1):
+        gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
+        rh = torch.einsum("ij,j->i", gh_y, rh)
+        right.append(rh)
+    right.reverse()
+
+    return torch.stack(left), torch.stack(right)  # (H, R)
+
+
+batch_compute_lr_selection_terms = torch.vmap(
+    compute_lr_selection_terms, in_dims=(None, 0)
 )
 
 
 class BornMachineUnconditional(AbstractDisributionHead):
+    """Unconditional Born machine distribution.
+
+    MPS based Born Machine probabilistic.
+
+    .. math::
+        p(y1, y2, ..., yH) = \\left(G0[y1] G1[y2] ... GH[yH] \\right) **2 / Z
+
+    where :math:`G0, G1, ..., GH` are the MPS cores and :math:`Z` is the partition function.
+
+    .. math::
+        Z = \\sum_{y1, y2, ..., yH} \\left(G0[y1] G1[y2] ... GH[yH] \\right) **2
+
+
+    """
+
     def __init__(self, config: AbstractDisributionHeadConfig):
-        """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
         H, R, Di, Do = (
             config.horizon,
@@ -24,109 +98,126 @@ class BornMachineUnconditional(AbstractDisributionHead):
             config.d_model,
             config.d_output,
         )
+        plist = []
+        # Right-canonical format on init
+        for h in range(H):
+            if h == 0:
+                plist.append(torch.nn.Parameter(torch.eye(1, Do * R).reshape(1, Do, R)))
+            elif h == H - 1:
+                plist.append(torch.nn.Parameter(torch.eye(R, Do * 1).reshape(R, Do, 1)))
+            else:
+                plist.append(torch.nn.Parameter(torch.eye(R, Do * R).reshape(R, Do, R)))
+        self.g = torch.nn.ParameterList(plist)
 
-        # TODO: make init more stable s.t. out var follows N(0, 1)
-        self.w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, dtype=torch.float64))
-        self.is_canonical = False
-        self.canonical_index = [config.horizon // 2]
-        if self.canonical_index[0] % 2 == 0:
-            self.canonical_index.insert(0, self.canonical_index[0] - 1)
-
-        dtype = self.w_mps.dtype
-        # IMPORTANT: cannot use one-hot or anything else, since that would violate the canonical representation
-        self.alpha = torch.nn.Parameter(torch.ones(R, dtype=dtype, requires_grad=False))
-        self.beta = torch.nn.Parameter(torch.ones(R, dtype=dtype, requires_grad=False))
-
-        self.canonicalize()
-
-    def canonicalize(self):
-        with torch.no_grad():
-            left_cano(self.w_mps, self.canonical_index)
-            self.is_canonical = True
+    def g_dot(self, h: int):
+        return self.g[h].sum(dim=1)
 
     def forward(
         self,
-        x,
-        y=None,
-        ignore_index: int = -100,
-        return_logits: bool = False,
+        x: torch.Tensor,
+        y: torch.Tensor,
     ):
-        # Input validation
-        assert x.ndim == 2, "x must be 2D (B, D)"
-        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
-        assert (
-            y is None or y.size(1) == self.config.horizon
-        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
+        raise NotImplementedError("Forward does not exist for BornMachineUnconditional")
 
-        B, R, H, V = (
-            x.size(0),
-            self.config.rank,
-            self.config.horizon,
-            self.config.d_output,
-        )
-        loss = None
-        loss_dict = {}
+    def train_example(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        optimizer: torch.optim.Optimizer,
+        n_sweeps: int = 1,
+        eps: float = 1e-10,
+    ):
+        """Train the model for one step.
 
-        if y is not None:
+        Args:
+            x (torch.Tensor): Input tensor. Shape: (B, H).
+            y (torch.Tensor): Target tensor. Shape: (B, H).
+            optimizer (torch.optim.Optimizer): Optimizer.
+            n_sweeps (int, optional): Number of sweeps. Defaults to 1.
 
-            if not self.is_canonical:
-                self.canonicalize()
+        Note: we don't use x since this is an unconditional model.
 
-            g = self.w_mps.unsqueeze(0).expand(B, -1, -1, -1, -1)
-            a = self.alpha.unsqueeze(0).expand(B, -1)
-            b = self.beta.unsqueeze(0).expand(B, -1)
-            p_tilde, gamma_p = batch_born_mps_select(g, a, b, y, use_scale_factors=True)
-            z, gamma_z = batch_born_mps_marginalize(
-                g,
-                a,
-                b,
-                # self.canonical_index,  only for cano variant
-                use_scale_factors=True,
-            )
+        Returns:
+            torch.Tensor: Loss.
+        """
+        # Precompute L and R
+        B, H = y.shape
+        R, Do = self.config.rank, self.config.d_output
+        # g, a, b = self.g, self.alpha, self.beta  # (H, R, Do, R), (R,), (R,)
+        g = self.g
+        sl, sr = batch_compute_lr_selection_terms(g, y)  # (B, H, R), (B, H, R)
+        ml, mr = compute_lr_marginalization_terms(g)  # (H, R), (H, R)
 
-            loss = (1 / H) * (  # avg across seq dimension
-                -torch.log(p_tilde)  # (B,)
-                + torch.log(z)  # (B,)
-                # Contraction Stability Scale Factors
-                - (gamma_p.log().sum(dim=-1))  # (B, H)
-                + (gamma_z.log().sum(dim=-1))  # (B, H)
-            ).mean()  # avg across batch dimension
+        # Convert sl, sr, ml, mr to lists since ranks can change, only convert batch dim to list
+        sl = [x for x in sl.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
+        sr = [x for x in sr.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
+        ml = [x for x in ml]  # (H, R) -> H x (R,)
+        mr = [x for x in mr]  # (H, R) -> H x (R,)
 
-            self.is_canonical = False
+        going_right = True
+        for n_sweeps in range(n_sweeps):
+            for h in range(H) if going_right else range(H - 1, -1, -1):
+                optimizer.zero_grad()
+                # Freeze all cores except h
+                for k in range(H):
+                    g[k].requires_grad = True if k == h else False
 
-        return AbstractDisributionHeadOutput(
-            logits=torch.randn(B, H, V, dtype=torch.float64),
-            loss=loss,
-            loss_dict=loss_dict,
-        )
+                # Map: (R, D, R) -> (R, B, R)
+                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+                psi_y = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
+                z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
+                loss = z.clamp(min=eps).log() - psi_y.pow(2).clamp(min=eps).log()
+                loss.backward()
+                optimizer.step()
 
-    def generate(self, x: torch.Tensor):
-        raise NotImplementedError("generate not implemented")
+                # Now we need to re-canonicalize and update left or right terms
+                with torch.no_grad():
+                    # NOTE: Going right, so everything in front is right canonicalized and we need to leave
+                    # our wake left canonicalized as we pass through.
+                    if going_right:
+                        Rl, Rr = g[h].size(0), g[h].size(-1)
+                        U, s, Vt = torch.linalg.svd(g[h].reshape(Rl * Do, Rr))
+                        R_prime = U.size(-1)
+                        g[h] = U.reshape(Rl, Do, R_prime)[:, :, :Rr]  # (R, Do, R)
+                        g[h + 1] = torch.einsum(
+                            "ir,rp,pvj->ivj", torch.diag(s), Vt[: len(s)], g[h + 1]
+                        )[:Rr]
+                        # NOTE: we changed gh and gh+1 so al[h+1:], ar[:h+1] are invalid for both s,m mats
+                        # But, we only need to use h+1 in the next iteration.
+                        # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
+                        # But sr, mr will be invalid everywhere.
+                        sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
+                        ml[h + 1] = torch.einsum("i,ij->j", ml[h], g[h].sum(dim=1))
+
+                    # TODO: left sweep
+                    # else:  # going left
+                    #     U, s, Vt = torch.linalg.svd(g[h].reshape(R, Do * R))
+                    #     R_prime = Vt.size(0)
+                    #     g[h] = Vt.reshape(R_prime, Do, R)[:R]  # (R, Do, R)
+                    #     g[h - 1] = torch.einsum("ivk,kr,rj->ivj", g[h - 1], U, s)[
+                    #         :, :, :R
+                    #     ]
+                    #     # sl[:, h + 1] = torch.einsum("bi,idj->bj", sl[:, h], self._g[h])
+                    #     # ml[h + 1] = torch.einsum(
+                    #     #     "i,ij->j", ml[h], self._g[h].sum(dim=1)
+                    #     # )
 
 
-def left_cano(theta_mps: torch.Tensor, canonical_index: List[int]):
-    # Shape(theta_mps): (H, R, D, R)
-    h = 0
-    while h < theta_mps.shape[0] - 1:
-        if h not in canonical_index:
-            a_4oder = torch.einsum(
-                "idj,jvk->idvk", theta_mps[h], theta_mps[h + 1]
-            )  # merged tensor A^{h,h+1}
-            R1, V1, V2, R2 = a_4oder.shape
-            Rm = theta_mps[h].shape[2]  # middle rank
-            u, s, vt = torch.linalg.svd(
-                a_4oder.reshape(R1 * V1, V2 * R2), full_matrices=True
-            )
-            u, s, vt = u[:, :Rm], s[:Rm], vt[:Rm]  # truncate
-            if h < min(canonical_index):  # left cano
-                theta_mps[h] = u.reshape(R1, V1, Rm)
-                theta_mps[h + 1] = (s[:, None] * vt).reshape(Rm, V2, R2)
-            else:
-                theta_mps[h + 1] = vt.reshape(Rm, V2, R2)
-                theta_mps[h] = (u * s[None, :]).reshape(R1, V1, Rm)
-
-        h += 1
-    return theta_mps
+def train_example():
+    B, H, D, V = 1, 28 * 28, 9, 2
+    mt_head = BornMachineUnconditional(
+        AbstractDisributionHeadConfig(
+            d_model=D,
+            d_output=V,
+            horizon=H,
+            rank=8,
+        ),
+    )
+    x = torch.randn(B, D, dtype=torch.float64)
+    y = torch.randint(0, V, (B, H))
+    optimizer = torch.optim.AdamW(mt_head.parameters(), lr=1e-3)
+    mt_head.train_example(x, y, optimizer)
 
 
 def run_test():
@@ -148,4 +239,4 @@ def run_test():
 
 
 if __name__ == "__main__":
-    run_test()
+    train_example()

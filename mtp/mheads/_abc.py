@@ -18,7 +18,8 @@ class AbstractDisributionHeadConfig:
     pool_method: str = "mean"  # "mean" or "linear"
     pos_func: str = "sigmoid"
     debug: bool = False
-    load_balance_lambda: float = 0.0
+    lambda_load_balance: float = 0.0
+    lambda_ortho: float = 0.0  # orthogonal regularization
 
 
 @dataclass
