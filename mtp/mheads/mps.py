@@ -80,15 +80,16 @@ class MPS(AbstractDisributionHead):
         )
 
     def compute_orthogonal_reg(self):
-        H, R, Do = (
+        H, R, Do, Di = (
             self.config.horizon,
             self.config.rank,
             self.config.d_output,
+            self.config.d_model,
         )
         # _w_mps: (H, R, Do, R, Di)
         # want _w_mps[h, :, d, :, k].T _w_mps[h, :, d, :, k] = I
         w = torch.einsum("hpoqi->hoipq", self._w_mps)
-        I = torch.eye(R, R).reshape(1, 1, 1, R, R).expand(H, R, Do, -1, -1)
+        I = torch.eye(R, R).reshape(1, 1, 1, R, R).expand(H, Do, Di, -1, -1)
         I_hat = torch.einsum("hoipq,hoipz->hoipz", w, w)
         loss = (I - I_hat).pow(2).mean()
         return loss
