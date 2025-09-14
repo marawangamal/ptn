@@ -8,7 +8,7 @@ Modelling high dimensional conditional distributions using tensor networks.
 
 ```bash
 # Install dependencies
-pip install --update pip
+pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
 

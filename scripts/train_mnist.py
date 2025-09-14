@@ -183,7 +183,7 @@ def main():
     args = parser.parse_args()
 
     # Initialize wandb
-    wandb.init(project="ctn-mnist", name=build_exp_name(args), config=vars(args))
+    wandb.init(project="ctn", name=build_exp_name(args), config=vars(args))
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
