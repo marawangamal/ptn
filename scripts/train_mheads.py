@@ -11,8 +11,8 @@ import torch.utils.data as data
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS
 from tqdm import tqdm
 import numpy as np
 

@@ -11,8 +11,8 @@ from tqdm import tqdm
 import wandb
 import numpy as np
 
-from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS
 
 
 import numpy as np
