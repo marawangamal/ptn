@@ -3,7 +3,7 @@ import unittest
 import math
 import torch
 
-from mtp.mheads.tensorops.mps_born import born_mps_marginalize, born_mps_select
+from ctn.mheads.tensorops.mps_born import born_mps_marginalize, born_mps_select
 
 # If einlogsumexp is in another module, import it:
 # from your_module import einlogsumexp

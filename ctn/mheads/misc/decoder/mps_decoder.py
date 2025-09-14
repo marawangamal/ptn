@@ -3,12 +3,12 @@ import random
 import torch
 import torch.nn as nn
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads._tensorops import (
+from ctn.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_margin_only,
     batch_cp_reduce,
     batch_cp_reduce_decoder,

@@ -3,7 +3,7 @@ from typing import Callable, Optional
 
 import torch
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,

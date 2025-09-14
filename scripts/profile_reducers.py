@@ -35,7 +35,7 @@ import time
 import pandas as pd
 from tqdm import tqdm
 import torch
-from mtp.mheads._tensorops import (
+from ctn.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_margin_only,
     batch_cp_reduce,
     batch_cp_reduce_decoder,
@@ -43,7 +43,7 @@ from mtp.mheads._tensorops import (
     batch_cp_reduce_decoder_einlse_select_only,
     select_margin_cp_tensor_batched,
 )
-from mtp.mheads.moe import log_prob_moe_batched
+from ctn.mheads.moe import log_prob_moe_batched
 
 
 def test_latency(fn, n_warmup, n_iters, *args, **kwargs):

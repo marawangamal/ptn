@@ -3,8 +3,8 @@ import unittest
 import math
 import torch
 
-from mtp.mheads._abc import AbstractDisributionHeadConfig
-from mtp.mheads.mps_born_unconditional import BornMachineUnconditional, left_cano
+from ctn.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads.mps_born_unconditional import BornMachineUnconditional, left_cano
 
 # If einlogsumexp is in another module, import it:
 # from your_module import einlogsumexp

@@ -1,5 +1,5 @@
 import torch
-from mtp.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
+from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
 
 
 def compute_lr_marginalization_terms(g: torch.nn.ParameterList):

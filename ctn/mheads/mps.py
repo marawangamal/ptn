@@ -1,11 +1,11 @@
 import torch
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads.tensorops.mps import select_margin_mps_tensor_batched
+from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
 
 
 def print_tens_stats(t: torch.Tensor, name: str):

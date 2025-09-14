@@ -47,7 +47,7 @@ from dataloaders import get_dataset
 import lm_eval
 from lm_eval import simple_evaluate
 
-from mtp.mthf import MultiTokenHFConfig, MultiTokenHF
+from ctn.mthf import MultiTokenHFConfig, MultiTokenHF
 
 
 EXPERIMENTS_DIR = "experiments"

@@ -4,14 +4,19 @@ Modelling high dimensional conditional distributions using tensor networks.
 
 ## Quick Start
 
+**Requirements:** Python 3.10+
+
 ```bash
 # Install dependencies
+pip install --update pip
 pip install -r requirements.txt
 pip install -e .
 
 # Train MNIST model with MPS architecture
 python scripts/train_mnist.py --model mps --rank 32 --pos_func eps
 ```
+
+Results will be logged to wandb.
 
 ## Available Models
 

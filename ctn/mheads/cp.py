@@ -1,12 +1,12 @@
 import torch
 from tqdm import tqdm
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads._tensorops import select_margin_cp_tensor_batched
+from ctn.mheads._tensorops import select_margin_cp_tensor_batched
 
 
 def print_tens_stats(t: torch.Tensor, name: str):

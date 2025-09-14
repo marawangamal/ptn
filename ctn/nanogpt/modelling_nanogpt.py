@@ -16,8 +16,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from mtp.mheads import MHEADS
-from mtp.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
 
 
 @dataclass

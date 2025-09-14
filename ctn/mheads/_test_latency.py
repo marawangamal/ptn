@@ -1,8 +1,8 @@
 import time
 
 import torch
-from mtp.mheads import MHEADS
-from mtp.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
 
 
 def test_latency(fn, n_warmup, n_iters, **kwargs):

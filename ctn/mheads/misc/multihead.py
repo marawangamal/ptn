@@ -2,7 +2,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,

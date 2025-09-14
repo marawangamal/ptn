@@ -35,7 +35,7 @@ from pathlib import Path
 
 import wandb
 
-from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig
+from ctn.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig
 
 
 # ---------- Constants ----------
@@ -332,7 +332,7 @@ def save_hf_checkpoint(model, tokenizer, output_dir):
     )
 
     open(os.path.join(output_dir, "modeling_multi_token_hfmodel.py"), "w").write(
-        "from mtp.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
+        "from ctn.mthf.modelling_mthf import MultiTokenHF, MultiTokenHFConfig\n"
     )
 
     # Save base model weights + tokenizer

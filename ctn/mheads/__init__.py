@@ -1,10 +1,10 @@
-from mtp.mheads.mps import MPS
-from mtp.mheads.moe import MoE
-from mtp.mheads.cp import CP
-from mtp.mheads.born import BM
+from ctn.mheads.mps import MPS
+from ctn.mheads.moe import MoE
+from ctn.mheads.cp import CP
+from ctn.mheads.born import BM
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
-# !! IMPORTANT !! ::  Keep in sync with mtp.mheads.types
+# !! IMPORTANT !! ::  Keep in sync with ctn.mheads.types
 MHEADS = {
     "cp": CP,  # Canonical Polyadic
     "moe": MoE,  # Mixture of Experts

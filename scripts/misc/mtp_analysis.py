@@ -1,5 +1,5 @@
 import torch
-from mtp.mheads import MHEADS, AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS, AbstractDisributionHeadConfig
 
 
 class TrueModel:

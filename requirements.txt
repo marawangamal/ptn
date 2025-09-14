@@ -1,12 +1,14 @@
-transformers
-matplotlib
 torch
-tiktoken
-datasets
-lightning
-wandb
-datatrove
-pandas
-seaborn
 torchvision
+wandb
 opt_einsum
+setuptools
+wheel
+# numpy
+# pandas
+# lightning
+# seaborn
+# tiktoken
+# datasets
+# transformers
+# matplotlib

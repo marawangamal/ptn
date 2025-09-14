@@ -1,8 +1,8 @@
 import torch
 import torch.nn.functional as F
 import os
-from mtp.mheads import MHEADS
-from mtp.mheads._abc import AbstractDisributionHeadConfig
+from ctn.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
 
 
 def debug_nan():

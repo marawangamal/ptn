@@ -3,12 +3,12 @@ import random
 import torch
 import torch.nn as nn
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads._tensorops import batch_cp_reduce
+from ctn.mheads._tensorops import batch_cp_reduce
 
 
 def print_tens_stats(t: torch.Tensor, name: str):

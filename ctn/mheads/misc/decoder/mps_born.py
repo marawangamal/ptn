@@ -1,12 +1,12 @@
 import torch
 
-from mtp.mheads._abc import (
+from ctn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from mtp.mheads.tensorops.mps import select_margin_mps_tensor_batched
-from mtp.mheads.tensorops.mps_born import (
+from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
+from ctn.mheads.tensorops.mps_born import (
     batch_born_mps_marginalize,
     batch_born_mps_select,
 )
