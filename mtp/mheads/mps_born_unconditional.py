@@ -220,23 +220,5 @@ def train_example():
     mt_head.train_example(x, y, optimizer)
 
 
-def run_test():
-    B, H, D, V = 1, 28 * 28, 9, 2
-    mt_head = BornMachineUnconditional(
-        AbstractDisributionHeadConfig(
-            d_model=D,
-            d_output=V,
-            horizon=H,
-            rank=8,
-        ),
-    )
-    x = torch.randn(B, D, dtype=torch.float64)
-    y = torch.randint(0, V, (B, H))
-    loss = mt_head(x, y).loss
-    print(f"loss: {loss}")
-    # out = mt_head.generate(x)
-    # print(f"generated: {out}")
-
-
 if __name__ == "__main__":
     train_example()
