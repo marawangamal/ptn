@@ -74,8 +74,8 @@ batch_compute_lr_selection_terms = torch.vmap(
 )
 
 
-class BornMachineUnconditional(AbstractDisributionHead):
-    """Unconditional Born machine distribution.
+class BM(AbstractDisributionHead):
+    """Unconditional Born Machine distribution.
 
     MPS based Born Machine probabilistic.
 
@@ -141,14 +141,14 @@ class BornMachineUnconditional(AbstractDisributionHead):
             torch.Tensor: Loss.
         """
         # Precompute L and R
-        B, H = y.shape
-        R, Do = self.config.rank, self.config.d_output
-        # g, a, b = self.g, self.alpha, self.beta  # (H, R, Do, R), (R,), (R,)
-        g = self.g
+        Do, H = self.config.d_output, self.config.horizon
+        g = self.g  # MPS cores list H x (R, Do, R)
+
+        # Precomputes left/right selection and marginalization caches
         sl, sr = batch_compute_lr_selection_terms(g, y)  # (B, H, R), (B, H, R)
         ml, mr = compute_lr_marginalization_terms(g)  # (H, R), (H, R)
 
-        # Convert sl, sr, ml, mr to lists since ranks can change, only convert batch dim to list
+        # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
         sl = [x for x in sl.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
         sr = [x for x in sr.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
         ml = [x for x in ml]  # (H, R) -> H x (R,)
@@ -171,10 +171,11 @@ class BornMachineUnconditional(AbstractDisributionHead):
                 loss.backward()
                 optimizer.step()
 
-                # Now we need to re-canonicalize and update left or right terms
+                # Now we need to re-canonicalize and update left / right caches
                 with torch.no_grad():
-                    # NOTE: Going right, so everything in front is right canonicalized and we need to leave
-                    # our wake left canonicalized as we pass through.
+                    # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
+                    # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
+                    # end of the rightwards sweep.
                     if going_right:
                         Rl, Rr = g[h].size(0), g[h].size(-1)
                         U, s, Vt = torch.linalg.svd(g[h].reshape(Rl * Do, Rr))
@@ -183,10 +184,10 @@ class BornMachineUnconditional(AbstractDisributionHead):
                         g[h + 1] = torch.einsum(
                             "ir,rp,pvj->ivj", torch.diag(s), Vt[: len(s)], g[h + 1]
                         )[:Rr]
-                        # NOTE: we changed gh and gh+1 so al[h+1:], ar[:h+1] are invalid for both s,m mats
+                        # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
                         # But, we only need to use h+1 in the next iteration.
                         # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
-                        # But sr, mr will be invalid everywhere.
+                        # But sr, mr will be invalid everywhere. Thankfully we wont need sr, mr on initial leftwards sweep.
                         sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
                         ml[h + 1] = torch.einsum("i,ij->j", ml[h], g[h].sum(dim=1))
 
@@ -206,7 +207,7 @@ class BornMachineUnconditional(AbstractDisributionHead):
 
 def train_example():
     B, H, D, V = 1, 28 * 28, 9, 2
-    mt_head = BornMachineUnconditional(
+    mt_head = BM(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
