@@ -1,43 +1,30 @@
-# Sample Efficient Learning via Multi-Token Prediction
+# Conditional Tensor Networks
 
-A PyTorch Lightning based script for pretraining and finetuning language models using **multi-token prediction** for improved sample efficiency.
+Modelling high dimensional conditional distributions using tensor networks.
 
 ## Quick Start
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
-pip install git+https://github.com/EleutherAI/lm-evaluation-harness.git
 pip install -e .
 
-# Train SmolLM-135M from scratch
-# NOTE: set --model_head multihead --rank 2 --horizon 2 for multi-token prediction
-python train.py \
-    --model HuggingFaceTB/SmolLM-135M \
-    --model_head stp \
-    --lr 4e-3 \
-    --scheduler cosine \
-    --dataset fineweb
+# Train MNIST model with MPS architecture
+python scripts/train_mnist.py --model mps --rank 32 --pos_func eps
 ```
 
-> **Note:** For faster data processing, we recommend preparing the dataset in advance using additional CPU resources, as described in the [Data Preparation](#data-preparation) section. This step is optional; if not performed, the dataset will be prepared automatically during training (but may be slower).
+## Available Models
 
-## Data Preparation
+The framework supports various tensor network architectures including:
+- MPS (Matrix Product States)
+- CP (Canonical Polyadic)
 
-For SLURM clusters, set environment variables:
+## Example Usage
+
+Train a model on MNIST dataset with MPS architecture:
 ```bash
-# Set env vars if needed for wandb and huggingface
-# export WANDB_CACHE_DIR=$SCRATCH/wandb
-# export HF_HOME=$SCRATCH/huggingface
-# Prepare dataset (requires SLURM allocation)
-salloc --cpus-per-task=64 --mem=64G
-python dataloaders/prepare_hf_ds.py --dataset fineweb --tokenizer HuggingFaceTB/SmolLM-135M
+python scripts/train_mnist.py --model mps --rank 32 --pos_func exp
 ```
 
-<!-- ## Hardware Requirements
-
-| Model | Dataset | Hardware | Training Time |
-|-------|---------|----------|---------------|
-| SmolLM-135M | FineWeb 10B | 4× A100 | ~15 hrs |
-| Llama-3.2-3B | OpenMathInstruct-2 | 4× A100 | ~12 hrs | -->
+This command trains a Matrix Product State model with rank 32 using the exponential function for positivity on the MNIST dataset.
 
