@@ -159,6 +159,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=10)
     parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument("--lambda_ortho", type=float, default=0.0)
     parser.add_argument("--num_samples", type=int, default=None)
     parser.add_argument(
         "--num_gen_images",
@@ -210,6 +211,7 @@ def main():
             d_output=2,
             rank=args.rank,
             pos_func=args.pos_func,
+            lambda_ortho=args.lambda_ortho,
         )
     )
     model.to(device)

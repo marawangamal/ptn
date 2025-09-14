@@ -202,7 +202,7 @@ class GPT(nn.Module):
                 d_hidden=config.lm_head_d_hidden,
                 pos_func=config.lm_head_pos_func,
                 debug=config.debug,
-                load_balance_lambda=config.lm_head_load_balance_lambda,
+                lambda_load_balance=config.lm_head_load_balance_lambda,
             )
         )
         self.transformer.wte.weight = self.lm_head.get_output_embeddings()

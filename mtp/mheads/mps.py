@@ -79,6 +79,20 @@ class MPS(AbstractDisributionHead):
             torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
         )
 
+    def compute_orthogonal_reg(self):
+        H, R, Do = (
+            self.config.horizon,
+            self.config.rank,
+            self.config.d_output,
+        )
+        # _w_mps: (H, R, Do, R, Di)
+        # want _w_mps[h, :, d, :, k].T _w_mps[h, :, d, :, k] = I
+        w = torch.einsum("hpoqi->hoipq", self._w_mps)
+        I = torch.eye(R, R).reshape(1, 1, 1, R, R).expand(H, R, Do, -1, -1)
+        I_hat = torch.einsum("hoipq,hoipz->hoipz", w, w)
+        loss = (I - I_hat).pow(2).mean()
+        return loss
+
     def forward(
         self,
         x,
@@ -157,12 +171,12 @@ class MPS(AbstractDisributionHead):
                 + (gammas_z.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
 
-            # pmask = loss.isfinite() & (loss >= 0)
-            # loss = loss[pmask].mean()  # avg across batch dimension
-
             if loss.isnan() or loss < 0:
                 print(f"[MPS] Loss is NaN or negative: {loss}")
                 raise ValueError("[MPS] Loss is NaN or negative")
+
+            if self.config.lambda_ortho > 0:
+                loss += self.config.lambda_ortho * self.compute_orthogonal_reg()
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
