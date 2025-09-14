@@ -20,6 +20,7 @@ class AbstractDisributionHeadConfig:
     debug: bool = False
     lambda_load_balance: float = 0.0
     lambda_ortho: float = 0.0  # orthogonal regularization
+    init_method: str = "randn"  # "randn" or "uniform"
 
 
 @dataclass

@@ -59,7 +59,9 @@ class MPS(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
-        self._init_weights()
+
+        if config.init_method == "ortho":
+            self._ortho_init()
 
         self.eps = 1e-12
 
@@ -68,7 +70,7 @@ class MPS(AbstractDisributionHead):
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
         )  # (B, H, R, V, R)
 
-    def _init_weights(self):
+    def _ortho_init(self):
         H, R, Do, Di = (
             self.config.horizon,
             self.config.rank,
