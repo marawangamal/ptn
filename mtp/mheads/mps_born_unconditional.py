@@ -33,32 +33,56 @@ from mtp.mheads.tensorops.mps_born import (
 #     return left, right
 
 
+# def compute_lr_marginal_terms(g: torch.nn.ParameterList):
+#     """Compute the left and right terms for the Born machine loss."""
+#     R, H = g[1].shape[0], len(g)
+#     dt, dv = g[1].dtype, g[1].device
+#     left, right = torch.zeros(H, R, dtype=dt, device=dv), torch.ones(
+#         H, R, dtype=dt, device=dv
+#     )
+#     left[0], right[-1] = g[0].sum(dim=1), g[-1].sum(dim=1)
+
+#     # Map: (H, R, Do, R) -> (H, R, 1, R) -> (H, R, R)
+#     for h in range(1, H):
+#         left[h] = torch.einsum("i,ij->j", left[h - 1], g[h].sum(-2))
+
+#     for h in range(H - 2, -1, -1):
+#         right[h] = torch.einsum("ij,j->i", g[h].sum(-2), right[h + 1])
+
+#     return left, right
+
+
 def compute_lr_marginal_terms(g: torch.nn.ParameterList):
-    """Compute the left and right terms for the Born machine loss."""
-    R, H = g[1].shape[0], len(g)
-    dt, dv = g[1].dtype, g[1].device
-    left, right = torch.zeros(H, R, dtype=dt, device=dv), torch.ones(
-        H, R, dtype=dt, device=dv
-    )
-    left[0], right[-1] = g[0].sum(dim=1), g[-1].sum(dim=1)
-
-    # Map: (H, R, Do, R) -> (H, R, 1, R) -> (H, R, R)
-    for h in range(1, H):
-        left[h] = torch.einsum("i,ij->j", left[h - 1], g[h].sum(-2))
-
-    for h in range(H - 2, -1, -1):
-        right[h] = torch.einsum("ij,j->i", g[h].sum(-2), right[h + 1])
-
-    return left, right
-
-
-def gather_g(g: torch.Tensor, y: torch.Tensor):
-    """_summary_
+    """Compute the left and right terms for the Born machine loss.
 
     Args:
-        g (torch.Tensor): MPS core. Shape: (Rh-1, Do, Rh)
-        y (torch.Tensor): Target tensor. Shape: (1,).
+        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
+
+    Returns:
+        torch.Tensor: Left term. Shape: (H, R).
+        torch.Tensor: Right term. Shape: (H, R).
     """
+    _, H = g[1].shape[0], len(g)
+
+    # Map: (1, Do, R) -> (R,)
+    lh = g[0].sum(dim=1).squeeze(0)  # (R,)
+    left = [torch.zeros_like(lh), lh]
+    for h in range(1, H - 1):
+        # Map: (R, Do, R) -> (R, R)
+        gh_y = g[h].sum(dim=1)  # (R, R)
+        lh = torch.einsum("i,ij->j", lh, gh_y)
+        left.append(lh)
+
+    # Map: (R, Do, 1) -> (R,)
+    rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
+    right = [torch.zeros_like(rh), rh]
+    for h in range(H - 2, 0, -1):
+        gh_y = g[h].sum(dim=1)  # (R, R)
+        rh = torch.einsum("ij,j->i", gh_y, rh)
+        right.append(rh)
+    right.reverse()
+
+    return torch.stack(left), torch.stack(right)  # (H, R)
 
 
 def compute_lr_terms(g: torch.nn.ParameterList, y: torch.Tensor):
@@ -75,15 +99,15 @@ def compute_lr_terms(g: torch.nn.ParameterList, y: torch.Tensor):
     R, H = g[1].shape[0], len(g)
     y_slct = y.reshape(1, -1, 1).expand(R, -1, R)  # (R, H, R)
 
-    # Map: (H, R, Do, R) -> (H, R, 1, R) -> (H, R, R)
+    # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     lh = g[0].gather(dim=1, index=y_slct[:1, :1]).squeeze(0, 1)  # (R,)
     left = [torch.zeros_like(lh), lh]
     for h in range(1, H - 1):
-        # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
         gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
         lh = torch.einsum("i,ij->j", lh, gh_y)
         left.append(lh)
 
+    # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     rh = g[-1].gather(dim=1, index=y_slct[:, -1:, :1]).squeeze(1, 2)  # (R,)
     right = [torch.zeros_like(rh), rh]
     for h in range(H - 2, 0, -1):
@@ -188,12 +212,16 @@ class BornMachineUnconditional(AbstractDisributionHead):
                 plist.append(torch.nn.Parameter(torch.eye(R, Do * R).reshape(R, Do, R)))
         self.g = torch.nn.ParameterList(plist)
 
+    def g_dot(self, h: int):
+        return self.g[h].sum(dim=1)
+
     def train_example(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
         optimizer: torch.optim.Optimizer,
         n_sweeps: int = 1,
+        eps: float = 1e-10,
     ):
         """Train the model for one step.
 
@@ -219,13 +247,17 @@ class BornMachineUnconditional(AbstractDisributionHead):
         going_right = True
         for n_sweeps in range(n_sweeps):
             for h in range(H) if going_right else range(H - 1, -1, -1):
-                for h in range(H):
-                    g[h].requires_grad = False if h != h else True  # single site update
-
                 optimizer.zero_grad()
-                psi_y = torch.einsum("bi,ij,bj->b", sl[:, h], g[h][:, y[h]], sr[h])
-                z = torch.einsum("bi,ij,bj->b", ml[h], g[h].sum(dim=1), mr[h])
-                loss = z.log() - psi_y.pow(2).log()
+                # Freeze all cores except h
+                for k in range(H):
+                    g[k].requires_grad = True if k == h else False
+
+                # Map: (R, D, R) -> (R, B, R)
+                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+                psi_y = torch.einsum("bi,ibj,bj->b", sl[:, h], gh_yh, sr[:, h])
+                z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
+                loss = z.clamp(min=eps).log() - psi_y.pow(2).clamp(min=eps).log()
                 loss.backward()
                 optimizer.step()
 
