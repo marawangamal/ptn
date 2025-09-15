@@ -103,6 +103,14 @@ def select_margin_mps_tensor_batched(
     diagnose(core_margins, "core_margins")
     scale_factors = []
 
+    left_cache, right_cache = kwargs.get("left_cache", None), kwargs.get(
+        "right_cache", None
+    )
+    if left_cache is None:
+        left_cache = torch.ones(batch_size, horizon, rank, device=core.device) * -100
+    if right_cache is None:
+        right_cache = torch.ones(batch_size, horizon, rank, device=core.device) * -100
+
     for t in range(horizon):
         mask_select = t < bp_free  # (B,)
         mask_margin = t >= bp_margin  # (B,)
@@ -110,24 +118,28 @@ def select_margin_mps_tensor_batched(
 
         # Select
         if mask_select.any():
-            core_select = torch.gather(
-                # (B, H, R, V, R) -> (B', R, V, R) -> (B', R, 1, R) -> (B', R, R)
-                core[mask_select, t],
-                dim=2,
-                index=ops[mask_select, t]  # (B',)
-                .reshape(-1, 1, 1, 1)
-                .expand(-1, rank, -1, rank),  # (B', R, 1, R)
-            ).squeeze(2)
-            #  (B', 1, R) @ (B', R, R) -> (B', 1, R) -> (B', R)
-            update = (res_left[mask_select].unsqueeze(1) @ core_select).squeeze(1)
-            sf = torch.ones(batch_size, device=core.device)  # (B,)
-            if use_scale_factors:
-                sf[mask_select] = torch.linalg.norm(update, dim=-1)
-            scale_factors.append(sf)
-            res_left[mask_select] = update / sf[mask_select].unsqueeze(-1).clamp(
-                min=eps
-            )
-            diagnose(core_margins, "res_left")
+            if (left_cache[mask_select, t] != -100).all():  # cache hit
+                res_left[mask_select] = left_cache[mask_select, t]
+            else:
+                core_select = torch.gather(
+                    # (B, H, R, V, R) -> (B', R, V, R) -> (B', R, 1, R) -> (B', R, R)
+                    core[mask_select, t],
+                    dim=2,
+                    index=ops[mask_select, t]  # (B',)
+                    .reshape(-1, 1, 1, 1)
+                    .expand(-1, rank, -1, rank),  # (B', R, 1, R)
+                ).squeeze(2)
+                #  (B', 1, R) @ (B', R, R) -> (B', 1, R) -> (B', R)
+                update = (res_left[mask_select].unsqueeze(1) @ core_select).squeeze(1)
+                sf = torch.ones(batch_size, device=core.device)  # (B,)
+                if use_scale_factors:
+                    sf[mask_select] = torch.linalg.norm(update, dim=-1)
+                scale_factors.append(sf)
+                res_left[mask_select] = update / sf[mask_select].unsqueeze(-1).clamp(
+                    min=eps
+                )
+                left_cache[mask_select, t] = res_left[mask_select].clone()
+                diagnose(core_margins, "res_left")
 
         # Free
         if mask_free.any():
@@ -138,17 +150,23 @@ def select_margin_mps_tensor_batched(
 
         # Marginalize
         if mask_margin.any():
-            core_margin = core_margins[mask_margin, t]  # (B', R, R)
-            # (B', R, R) @ (B', R, 1) -> (B', R, 1) -> (B', R)
-            update = (core_margin @ res_right[mask_margin].unsqueeze(-1)).squeeze(-1)
-            sf = torch.ones(batch_size, device=core.device)  # (B,)
-            if use_scale_factors:
-                sf[mask_margin] = torch.linalg.norm(update, dim=-1)
-            scale_factors.append(sf)
-            res_right[mask_margin] = update / sf[mask_margin].unsqueeze(-1).clamp(
-                min=eps
-            )
-            diagnose(core_margins, "res_right")
+            if (right_cache[mask_margin, t] != -100).all():  # cache hit
+                res_right[mask_margin] = right_cache[mask_margin, t]
+            else:
+                core_margin = core_margins[mask_margin, t]  # (B', R, R)
+                # (B', R, R) @ (B', R, 1) -> (B', R, 1) -> (B', R)
+                update = (core_margin @ res_right[mask_margin].unsqueeze(-1)).squeeze(
+                    -1
+                )
+                sf = torch.ones(batch_size, device=core.device)  # (B,)
+                if use_scale_factors:
+                    sf[mask_margin] = torch.linalg.norm(update, dim=-1)
+                scale_factors.append(sf)
+                res_right[mask_margin] = update / sf[mask_margin].unsqueeze(-1).clamp(
+                    min=eps
+                )
+                right_cache[mask_margin, t] = res_right[mask_margin].clone()
+                diagnose(core_margins, "res_right")
 
     if not use_scale_factors:
         scale_factors = []
@@ -163,7 +181,7 @@ def select_margin_mps_tensor_batched(
     else:  # General case
         # NOTE: Backprop fails through this path
         result = torch.einsum("bi, bivj, bj -> bv", res_left, res_free, res_right)
-        return result, scale_factors
+        return result, scale_factors, left_cache, right_cache
 
 
 # def select_margin_mps_tensor_batched_v2(
