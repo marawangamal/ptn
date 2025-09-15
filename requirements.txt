@@ -4,10 +4,10 @@ wandb
 opt_einsum
 setuptools
 wheel
+seaborn
 # numpy
 # pandas
 # lightning
-# seaborn
 # tiktoken
 # datasets
 # transformers

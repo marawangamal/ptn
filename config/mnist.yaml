@@ -10,57 +10,38 @@ preambles:
     - "#SBATCH --mem=32G"
     - "#SBATCH --cpus-per-task=8"
     - "#SBATCH --nodes=1"
-    - "source /home/mila/m/marawan.gamal/scratch/mtp/.venv/bin/activate"
+    - "source /home/mila/m/marawan.gamal/scratch/ctn/.venv/bin/activate"
 
 group:
   name: "main"
   type: parallel
   jobs:
 
-    # - group:
-    #     name: "mnist::moe"
-    #     type: sweep
-    #     preamble: glong
-    #     sweep:
-    #       lr: [1e-3, 5e-4]
-    #       rank: [8, 32, 64]
-    #       model: ["moe"]
-    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --epochs 20"
-
-
-    # - group:
-    #     name: "mnist::cp"
-    #     type: sweep
-    #     preamble: glong
-    #     sweep:
-    #       lr: [5e-4]
-    #       rank: [8, 32, 64]
-    #       model: ["cp"]
-    #       pos_func: ["abs"]
-    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 10"
-
-
     - group:
-        name: "mnist::mps"
+        name: "ctn::mps"
         type: sweep
         preamble: glong
         sweep:
-          lr: [1e-3, 5e-4]
+          # so far tried from 1e-3 --  4e-3, 8e-3
+          lr: [8e-3]
           rank: [8]
           model: ["mps"]
-          pos_func: ["rbf"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50"
-
-
+          pos_func: ["exp", "abs"]
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50 --tags hpo lr pfunc"
 
     # - group:
-    #     name: "mnist::moe"
+    #     name: "ctn::mnist::mps"
     #     type: sweep
     #     preamble: glong
     #     sweep:
-    #       lr: [1e-3, 5e-4, 1e-4]
-    #       rank: [8, 32, 64, 128]
-    #       model: ["moe"]
-    #       lm_head_load_balance_lambda: [0.0, 0.1, 0.5, 1.0]
-    #     sweep_template: "python scripts/train_mnist.py --rank {rank} --model {model} --epochs 10"
+    #       lr: [1e-3]
+    #       rank: [8]
+    #       model: ["mps"]
+    #       pos_func: ["exp"]
+    #       lambda_ortho: [0.0]
+    #       init_method: ["ortho", "randn"]
+    #     sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50 --tags hpo ortho --lambda_ortho {lambda_ortho} --init_method {init_method}"
+
+
+
 

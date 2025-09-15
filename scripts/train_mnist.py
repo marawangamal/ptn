@@ -132,7 +132,7 @@ def generate_images(model, device, num_images=10, image_size=(28, 28)):
 
 
 def build_exp_name(args: argparse.Namespace):
-    ignore_keys = ["seed", "sample", "debug"]
+    ignore_keys = ["seed", "sample", "debug", "tags", "seed"]
     abbrev_map = {}
     parts = []
     for k, v in args.__dict__.items():
@@ -163,7 +163,6 @@ def main():
         "--init_method", type=str, default="randn", help="Initialization method"
     )
     parser.add_argument("--lambda_ortho", type=float, default=0.0)
-    parser.add_argument("--num_samples", type=int, default=None)
     parser.add_argument(
         "--num_gen_images",
         type=int,
@@ -179,17 +178,21 @@ def main():
     parser.add_argument(
         "--save_checkpoint", action="store_true", help="Save checkpoint"
     )
+    parser.add_argument("--tags", type=str, nargs="*", default=[])
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
 
     # Initialize wandb
-    wandb.init(project="ctn", name=build_exp_name(args), config=vars(args))
+    wandb.init(
+        project="ctn", name=build_exp_name(args), config=vars(args), tags=args.tags
+    )
 
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(f"checkpoints/{build_exp_name(args)}", exist_ok=True)
     print(f"Using device: {device}")
-    set_seed()
+    set_seed(args.seed)
 
     # Data
     train_loader, val_loader = get_data_loaders(args.batch_size, "./data")

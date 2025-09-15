@@ -52,9 +52,10 @@ class SyntheticDataset(data.Dataset):
 
 
 def get_grad_norm(params):
-    return torch.norm(
-        torch.cat([p.grad.view(-1) for p in params if p.grad is not None]), p=2
-    ).item()
+    grad_list = [p.grad.view(-1) for p in params if p.grad is not None]
+    if len(grad_list) == 0:
+        return float("inf")
+    return torch.norm(torch.cat(grad_list), p=2).item()
 
 
 def get_param_norm(params):
@@ -90,45 +91,60 @@ def run_train(
     model.to(device)
     start_time = time.time()
     iteration = 0
-    for epoch in range(epochs):
-        model.train()
+    total_steps = len(train_dataloader) * epochs
+    with tqdm(total=total_steps, desc="Training", unit="batch", leave=False) as pbar:
+        for epoch in range(epochs):
+            model.train()
 
-        for batch_idx, (x, y) in enumerate(train_dataloader):
-            optimizer.zero_grad()
+            for batch_idx, (x, y) in enumerate(train_dataloader):
+                optimizer.zero_grad()
 
-            x = x.to(device)
-            y = y[:, : model.config.horizon].to(device)
+                x = x.to(device)
+                y = y[:, : model.config.horizon].to(device)
 
-            out = model(x, y)
-            out.loss.backward()
-            optimizer.step()
+                try:
 
-            if out.loss_dict is not None and add_loss_dict:
-                for k, v in out.loss_dict.items():
-                    # Add or create new key if not exists
-                    if k not in log_dict:
-                        log_dict[k] = []
-                    log_dict[k].append(v)
+                    out = model(x, y)
+                    out.loss.backward()
+                    optimizer.step()
 
-            # also add grad_norm and loss to log_dict
-            log_dict["loss"].append(
-                out.loss.item() if not torch.isnan(out.loss) else float("inf")
-            )
-            log_dict["grad_norm"].append(get_grad_norm(model.parameters()))
-            log_dict["param_norm"].append(get_param_norm(model.parameters()))
-            log_dict["logits_norm"].append(out.logits.norm().item())
-            log_dict["epoch"].append(epoch)
-            log_dict["batch"].append(batch_idx)
+                    if out.loss_dict is not None and add_loss_dict:
+                        for k, v in out.loss_dict.items():
+                            # Add or create new key if not exists
+                            if k not in log_dict:
+                                log_dict[k] = []
+                            log_dict[k].append(v)
 
-            iteration += 1
+                    # also add grad_norm and loss to log_dict
+                    log_dict["loss"].append(
+                        out.loss.item() if not torch.isnan(out.loss) else float("inf")
+                    )
+                    log_dict["grad_norm"].append(get_grad_norm(model.parameters()))
+                    log_dict["param_norm"].append(get_param_norm(model.parameters()))
+                    log_dict["logits_norm"].append(out.logits.norm().item())
+                    log_dict["epoch"].append(epoch)
+                    log_dict["batch"].append(batch_idx)
 
-            if out.loss.isnan():
-                print(f"Loss is NaN at epoch {epoch}, batch {batch_idx}!")
-                break
+                    if out.loss.isnan():
+                        print(f"Loss is NaN at epoch {epoch}, batch {batch_idx}!")
+                        break
 
-        # Print epoch summary
-        if epoch % 1 == 0:
-            evaluate(model, val_dataloader)
+                except Exception as e:
+                    # also add grad_norm and loss to log_dict
+                    if "NaN" in str(e):
+                        log_dict["loss"].append(float("inf"))
+                        log_dict["grad_norm"].append(float("inf"))
+                        log_dict["param_norm"].append(float("inf"))
+                        log_dict["logits_norm"].append(float("inf"))
+                        log_dict["epoch"].append(epoch)
+                        log_dict["batch"].append(batch_idx)
+
+                iteration += 1
+                pbar.update(1)
+
+            # Print epoch summary
+            if epoch % 1 == 0:
+                evaluate(model, val_dataloader)
 
     # Add mt_name to log_dict for tracking
     log_dict["iteration"] = list(range(iteration))
@@ -226,15 +242,14 @@ if __name__ == "__main__":
 
     # Common HPs
     BATCH_SIZE = 8
-    LR = 1e-2
-    EPOCHS = 10
-    N_TRAIN = 100
+    LR = 5e-3
+    EPOCHS = 1
+    N_TRAIN = BATCH_SIZE * 32
     N_VAL = 10
 
     # Plot
     ranks = [2]
-    # horizons = [128, 512, 1024, 2048, 4096, 8192]
-    horizons = [2, 4, 8, 16]
+    horizons = [8192]
     seeds = [0]
     d_models = [10]
     d_outputs = [2]
@@ -250,27 +265,19 @@ if __name__ == "__main__":
 
     configs = [
         {
-            "name": n,
+            "name": f"MPS (init={im})",
             "mt_name": n,
             "mt_kwargs": {
                 "horizon": h,
                 "rank": r,
                 "d_model": dm,
                 "d_output": do,
+                "init_method": im,
             },
             "seed": s,
         }
-        for r, h, s, dm, do, n in itertools.product(
-            ranks,
-            horizons,
-            seeds,
-            d_models,
-            d_outputs,
-            [
-                "cp",
-                "mps",
-                "moe",
-            ],
+        for r, h, s, dm, do, n, im in itertools.product(
+            ranks, horizons, seeds, d_models, d_outputs, ["mps"], ["randn"]
         )
     ]
 
