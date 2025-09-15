@@ -96,16 +96,6 @@ def cluster(x: torch.Tensor, K: int, seed: int = 0) -> torch.Tensor:
     return centers
 
 
-# def collate_fn(batch):
-#     # For each point: (Li, 3) -> (1024, 3)
-#     B = len(batch)
-#     pts_clustered = [cluster(torch.tensor(x["inputs"]), K=1024) for x in batch]
-#     pts_clustered = torch.stack(pts_clustered)  # (B, 1024, 3)
-#     x = disc(pts_clustered).reshape(B, -1)  # (B, L, 3)
-#     y = torch.stack([torch.tensor(x["label"]) for x in batch])
-#     return x, y
-
-
 def collate_fn(batch):
     # x, y = batch["inputs"], batch["label"]
     x = torch.stack([torch.tensor(b["inputs"]) for b in batch])
@@ -115,7 +105,7 @@ def collate_fn(batch):
 
 def preprocess(example):
     # For each point: (Li, 3) -> (1024, 3)
-    pts_clustered = cluster(torch.tensor(example["inputs"]), K=1024)
+    pts_clustered = cluster(torch.tensor(example["inputs"]), K=2048)
     x = disc(pts_clustered).reshape(-1)  # (B, L, 3)
     y = torch.tensor(example["label"])
     return {"inputs": x, "label": y}
@@ -203,13 +193,19 @@ def evaluate(model, val_loader, device):
     return total_loss / num_batches
 
 
-def generate_images(model, device, num_images=8):
-    """
-    Render a few 3D samples from ModelNet40 'test' split as PNG arrays for W&B.
-    Returns: list[np.ndarray] where each item is an HxWx3 uint8 image.
-    """
-    ds = load_dataset("jxie/modelnet40")
-    test = ds["test"].select(range(min(num_images, len(ds["test"]))))
+def generate_images(model, device, num_images=8, image_size=(2048, 3)):
+    generated_images = []
+    with torch.no_grad():
+        for digit in range(min(num_images, 10)):
+            # Create one-hot encoding for the digit
+            z = F.one_hot(torch.tensor([digit], device=device), num_classes=10).float()
+
+            # Generate image
+            generated = model.generate(z)[0].detach().cpu().view(*image_size).numpy()
+
+            # Convert to 0-255 range for better visualization
+            generated = (generated * 255).astype(np.uint8)
+            generated_images.append(generated)
 
     images = []
     for i in range(len(test)):

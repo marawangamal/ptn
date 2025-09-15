@@ -248,11 +248,11 @@ if __name__ == "__main__":
     N_VAL = 10
 
     # Plot
-    ranks = [2]
-    horizons = [8192]
+    ranks = [4]
+    horizons = [512]
     seeds = [0]
-    d_models = [10]
-    d_outputs = [2]
+    d_models = [128]
+    d_outputs = [128]
     plot_kwargs = {
         "col": "horizon",
         "col_wrap": 3,
