@@ -81,7 +81,7 @@ class MPS(AbstractDisributionHead):
             torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
         )
 
-    def compute_orthogonal_reg(self):
+    def _compute_orthogonal_reg(self):
         H, R, Do, Di = (
             self.config.horizon,
             self.config.rank,
@@ -133,7 +133,7 @@ class MPS(AbstractDisributionHead):
                 self.beta.unsqueeze(0).expand(B, -1),
                 theta_mps,
                 y.reshape(B, H),
-                use_scale_factors=True,
+                use_scale_factors=self.config.use_scale_factors,
             )  # (B,), (B, H)
             z_tilde, gammas_z = select_margin_mps_tensor_batched(
                 self.alpha.unsqueeze(0).expand(B, -1),
@@ -145,8 +145,13 @@ class MPS(AbstractDisributionHead):
                     dtype=torch.long,
                     device=x.device,
                 ),
-                use_scale_factors=True,
+                use_scale_factors=self.config.use_scale_factors,
             )
+
+            if len(gammas_p) == 0:
+                gammas_p = [torch.ones(B)]
+            if len(gammas_z) == 0:
+                gammas_z = [torch.ones(B)]
 
             gammas_p = torch.stack(gammas_p, dim=-1)
             gammas_z = torch.stack(gammas_z, dim=-1)  # (B, H)
@@ -182,7 +187,7 @@ class MPS(AbstractDisributionHead):
                 raise ValueError("[MPS] Loss is NaN or negative")
 
             if self.config.lambda_ortho > 0:
-                loss += self.config.lambda_ortho * self.compute_orthogonal_reg()
+                loss += self.config.lambda_ortho * self._compute_orthogonal_reg()
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
