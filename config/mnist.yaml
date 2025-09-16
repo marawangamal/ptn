@@ -26,8 +26,8 @@ group:
           lr: [8e-3]
           rank: [8]
           model: ["mps"]
-          pos_func: ["exp", "abs"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50 --tags hpo lr pfunc"
+          pos_func: ["exp"]
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50 --tags fast_gen"
 
     # - group:
     #     name: "ctn::mnist::mps"
