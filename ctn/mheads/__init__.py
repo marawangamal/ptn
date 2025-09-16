@@ -1,4 +1,4 @@
-from ctn.mheads.born import BM
+from ctn.mheads.bm import BM
 from ctn.mheads.mps import MPS
 from ctn.mheads.moe import MoE
 from ctn.mheads.cp import CP
