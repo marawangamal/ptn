@@ -195,7 +195,7 @@ class MPS(AbstractDisributionHead):
             loss_dict=loss_dict,
         )
 
-    def generate(self, x: torch.Tensor, do_sample: bool = True):
+    def generate_v0(self, x: torch.Tensor, do_sample: bool = True):
         """Generate a sequence of length H from the model.
 
         Args:
@@ -250,7 +250,7 @@ class MPS(AbstractDisributionHead):
             return y_out
 
     # USED FOR DEBUGGING
-    def generate_fast(self, x: torch.Tensor, do_sample: bool = True):
+    def generate(self, x: torch.Tensor, do_sample: bool = True):
         """Generate a sequence of length H from the model.
 
         Args:
