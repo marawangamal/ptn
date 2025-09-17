@@ -91,8 +91,12 @@ def select_margin_bmnc_tensor_batched(
     bp_free, bp_margin = get_breakpoints(ops)  # (batch_size,), (batch_size,)
 
     # Detach the input tensors for intermediate calculations
-    res_left = alpha.detach().clone()
-    res_right = beta.detach().clone()
+    res_left = torch.einsum(
+        "bi, bj->bij", alpha.detach().clone(), beta.detach().clone()
+    )
+    res_right = torch.einsum(
+        "bi, bj->bij", beta.detach().clone(), alpha.detach().clone()
+    )
     res_free = (
         torch.eye(rank, rank, device=core.device)
         .reshape(1, rank, 1, rank)
