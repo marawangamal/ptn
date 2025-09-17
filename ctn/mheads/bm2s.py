@@ -1,9 +1,36 @@
 import torch
 from tqdm import tqdm
 from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
+import torch.nn.functional as F
 
 
-def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
+def pad_and_stack(seq, max_len):
+    """Pad and stack a sequence of tensors.
+
+    Args:
+        seq (list): Sequence of tensors. Shape: (Di,) x T
+        max_len (int): Maximum length of the sequence.
+
+    Returns:
+        torch.Tensor: Padded and stacked sequence.
+    """
+    padded = []
+    mask = []
+    for x in seq:
+        pad_len = max_len - x.size(0)
+        padded.append(F.pad(x, (0, pad_len)))
+        mask.append(
+            torch.cat(
+                [
+                    torch.ones_like(x),
+                    torch.zeros(pad_len, device=x.device, dtype=x.dtype),
+                ]
+            )
+        )
+    return torch.stack(padded), torch.stack(mask)
+
+
+def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True):
     """Compute the left and right marginalization caches for the Born machine.
 
     Args:
@@ -33,10 +60,23 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
         right.append(rh)
     right.reverse()
 
-    return torch.stack(left), torch.stack(right)  # (H, R)
+    if pad:
+        r_max = max([x.size(0) for x in left + right])
+        left_m, left_mask = pad_and_stack(left, max_len=r_max)
+        right_m, right_mask = pad_and_stack(right, max_len=r_max)
+
+        return (
+            left_m,
+            left_mask,
+            right_m,
+            right_mask,
+        )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
+    return torch.stack(left), torch.stack(right)
 
 
-def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
+def compute_lr_selection_cache(
+    g: torch.nn.ParameterList, y: torch.Tensor, pad: bool = True
+):
     """Compute the left and right selection caches for the Born machine.
 
     Args:
@@ -67,7 +107,18 @@ def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
         right.append(rh)
     right.reverse()
 
-    return torch.stack(left), torch.stack(right)  # (H, R)
+    if pad:
+        r_max = max([x.size(0) for x in left + right])
+        left_m, left_mask = pad_and_stack(left, max_len=r_max)
+        right_m, right_mask = pad_and_stack(right, max_len=r_max)
+
+        return (
+            left_m,
+            left_mask,
+            right_m,
+            right_mask,
+        )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
+    return torch.stack(left), torch.stack(right)
 
 
 batch_compute_lr_selection_terms = torch.vmap(
@@ -175,14 +226,21 @@ class BM(AbstractDisributionHead):
         g = self.g  # MPS cores list H x (R, Do, R)
 
         # Precomputes left/right selection and marginalization caches
-        sl, sr = batch_compute_lr_selection_terms(g, y)  # (B, H, R), (B, H, R)
-        ml, mr = compute_lr_marginalization_cache(g)  # (H, R), (H, R)
+        # NEW:
+        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
+            g, y
+        )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
+        ml, ml_mask, mr, mr_mask = compute_lr_marginalization_cache(g)  # (H, R), (H, R)
 
         # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
-        sl = [x for x in sl.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
-        sr = [x for x in sr.permute(1, 0, 2)]  # (H, B, R) -> H x (B, R)
-        ml = [x for x in ml]  # (H, R) -> H x (R,)
-        mr = [x for x in mr]  # (H, R) -> H x (R,)
+        sl = [
+            sl[:, h, : sl_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+        sr = [
+            sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+        ml = [ml[h, : ml_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
+        mr = [mr[h, : mr_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
 
         # Corrections:
         sl[0] = sl[0][:, :1]
