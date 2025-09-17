@@ -16,7 +16,7 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
 
     # Map: (1, Do, R) -> (R,)
     lh = g[0].sum(dim=1).squeeze(0)  # (R,)
-    left = [torch.zeros_like(lh), lh]
+    left = [torch.ones_like(lh), lh]
     for h in range(1, H - 1):
         # Map: (R, Do, R) -> (R, R)
         gh_y = g[h].sum(dim=1)  # (R, R)
@@ -25,7 +25,7 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
 
     # Map: (R, Do, 1) -> (R,)
     rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
-    right = [torch.zeros_like(rh), rh]
+    right = [torch.ones_like(rh), rh]
     for h in range(H - 2, 0, -1):
         gh_y = g[h].sum(dim=1)  # (R, R)
         rh = torch.einsum("ij,j->i", gh_y, rh)
@@ -51,7 +51,7 @@ def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     lh = g[0].gather(dim=1, index=y_slct[:1, :1]).squeeze(0, 1)  # (R,)
-    left = [torch.zeros_like(lh), lh]
+    left = [torch.ones_like(lh), lh]
     for h in range(1, H - 1):
         gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
         lh = torch.einsum("i,ij->j", lh, gh_y)
@@ -59,7 +59,7 @@ def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     rh = g[-1].gather(dim=1, index=y_slct[:, -1:, :1]).squeeze(1, 2)  # (R,)
-    right = [torch.zeros_like(rh), rh]
+    right = [torch.ones_like(rh), rh]
     for h in range(H - 2, 0, -1):
         gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
         rh = torch.einsum("ij,j->i", gh_y, rh)
@@ -186,7 +186,7 @@ class BM(AbstractDisributionHead):
 
         going_right = True
         for n_sweeps in range(n_sweeps):
-            for h in range(H) if going_right else range(H - 1, -1, -1):
+            for h in range(H - 1) if going_right else range(H - 1, -1, -1):
                 Rl, Rr = g[h].size(0), g[h].size(-1)
 
                 optimizer.zero_grad()
@@ -197,16 +197,8 @@ class BM(AbstractDisributionHead):
                 # Map: (R, D, R) -> (R, B, R)
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-
-                if h == 0:
-                    psi = torch.einsum("ibj,bj->b", gh_yh, sr[h])
-                    z = torch.einsum("ij,j->", self.g_dot(h), mr[h])
-                elif h == H - 1:
-                    psi = torch.einsum("bi,ibj->b", sl[h], gh_yh)
-                    z = torch.einsum("i,ij->", ml[h], self.g_dot(h))
-                else:
-                    psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-                    z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
+                psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
+                z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdj", g[h], g[h + 1])
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
@@ -247,11 +239,12 @@ class BM(AbstractDisributionHead):
                         # )[:Rr]
 
                         Rtrunc = (s / s.abs().max() > eps_trunc).sum()
-                        R_prime = s.size(-1)
-                        g[h] = u.reshape(Rl, Do, R_prime)[:, :, :Rtrunc]  # (R, Do, R)
+                        g[h] = u.reshape(Rl, Do, u.size(-1))[
+                            :, :, :Rtrunc
+                        ]  # (R, Do, R)
                         g[h + 1] = torch.einsum(
                             "ir,rvj->ivj",
-                            torch.diag(s),
+                            torch.diag(s[:Rtrunc]),
                             vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
                         )
 
