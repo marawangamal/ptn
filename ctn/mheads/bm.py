@@ -3,7 +3,7 @@ from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConf
 
 
 def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
-    """Compute the left and right terms for the Born machine loss.
+    """Compute the left and right marginalization caches for the Born machine.
 
     Args:
         g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
@@ -36,7 +36,7 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList):
 
 
 def compute_lr_selection_cache(g: torch.nn.ParameterList, y: torch.Tensor):
-    """Compute the left and right terms for the Born machine loss.
+    """Compute the left and right selection caches for the Born machine.
 
     Args:
         g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
@@ -75,7 +75,7 @@ batch_compute_lr_selection_terms = torch.vmap(
 
 
 class BM(AbstractDisributionHead):
-    """Unconditional Born Machine distribution.
+    """Born Machine (Canonical Form w/ DMRG).
 
     MPS based Born Machine probabilistic.
 
