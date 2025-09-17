@@ -165,7 +165,13 @@ class BM(AbstractDisributionHead):
             torch.Tensor: Loss.
         """
         # Precompute L and R
-        R, Do, H = self.config.rank, self.config.d_output, self.config.horizon
+        B, R, Do, H = (
+            x.shape[0],
+            self.config.rank,
+            self.config.d_output,
+            self.config.horizon,
+        )
+        dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
 
         # Precomputes left/right selection and marginalization caches
@@ -181,6 +187,8 @@ class BM(AbstractDisributionHead):
         going_right = True
         for n_sweeps in range(n_sweeps):
             for h in range(H) if going_right else range(H - 1, -1, -1):
+                Rl, Rr = g[h].size(0), g[h].size(-1)
+
                 optimizer.zero_grad()
                 # Freeze all cores except h
                 for k in range(H):
@@ -201,16 +209,28 @@ class BM(AbstractDisributionHead):
                     z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdj", g[h], g[h + 1])
 
-                z_prime = 2 * g_tilde
+                z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
                 i_h = torch.eye(self.config.d_output)[y[:, h]]  # (B,)
                 i_hp1 = torch.eye(self.config.d_output)[y[:, h + 1]]  # (B,)
-                psi_prime = torch.einsum(
-                    "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
-                )
+                if h == 0:
+                    psi_prime = torch.einsum(
+                        "bi, bd,bv,bj->bidvj",
+                        torch.ones(B, 1, dtype=dt, device=dv),
+                        i_h,
+                        i_hp1,
+                        sr[h + 1],
+                    )
+                else:
+                    psi_prime = torch.einsum(
+                        "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
+                    )  # (B, Rl, Do, Do, Rr)
 
-                dldg_tilde = z_prime / z - 2 * psi_prime / psi
-                g_tilde = g_tilde - dldg_tilde * step_size  # (R, Do, Do R)
-                u, s, vt = torch.linalg.svd(g_tilde.reshape(R * Do, Do * R))
+                # Shape:  (Rl, Do, Do, Rr)
+                dldg_tilde = (z_prime / z) - 2 * (psi_prime / psi).mean(dim=0)
+                g_tilde = g_tilde - dldg_tilde * step_size  # (Rl, Do, Do Rr)
+                u, s, vt = torch.linalg.svd(
+                    g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
+                )
 
                 # Now we need to re-canonicalize and update left / right caches
                 with torch.no_grad():
@@ -226,14 +246,13 @@ class BM(AbstractDisributionHead):
                         #     "ir,rp,pvj->ivj", torch.diag(s), Vt[: len(s)], g[h + 1]
                         # )[:Rr]
 
-                        Rl, Rr = g[h].size(0), g[h].size(-1)  # TODO: trunc using svals
                         Rtrunc = (s / s.abs().max() > eps_trunc).sum()
                         R_prime = s.size(-1)
                         g[h] = u.reshape(Rl, Do, R_prime)[:, :, :Rtrunc]  # (R, Do, R)
                         g[h + 1] = torch.einsum(
-                            "ir,rdj->ivj",
+                            "ir,rvj->ivj",
                             torch.diag(s),
-                            vt.reshape(R_prime, Do, Rr)[:Rtrunc],
+                            vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
                         )
 
                         # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
@@ -258,7 +277,7 @@ class BM(AbstractDisributionHead):
 
 
 def train_example():
-    B, H, D, V = 1, 28 * 28, 9, 2
+    B, H, D, V = 1, 5, 9, 2
     mt_head = BM(
         AbstractDisributionHeadConfig(
             d_model=D,
@@ -267,7 +286,7 @@ def train_example():
             rank=8,
         ),
     )
-    x = torch.randn(B, D, dtype=torch.float64)
+    x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
     optimizer = torch.optim.AdamW(mt_head.parameters(), lr=1e-3)
     mt_head.train_example(x, y, optimizer)
