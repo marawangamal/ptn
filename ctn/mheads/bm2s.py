@@ -46,8 +46,8 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True
     lh = g[0].sum(dim=1).squeeze(0)  # (R,)
     left = [torch.ones_like(lh), lh]
     for h in range(1, H - 1):
-        # Map: (R, Do, R) -> (R, R)
-        gh_y = g[h].sum(dim=1)  # (R, R)
+        # Map: (R, Do, R') -> (R, R')
+        gh_y = g[h].sum(dim=1)  # (R, R')
         lh = torch.einsum("i,ij->j", lh, gh_y)
         left.append(lh)
 
@@ -55,7 +55,7 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True
     rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
     right = [torch.ones_like(rh), rh]
     for h in range(H - 2, 0, -1):
-        gh_y = g[h].sum(dim=1)  # (R, R)
+        gh_y = g[h].sum(dim=1)  # (R, R')
         rh = torch.einsum("ij,j->i", gh_y, rh)
         right.append(rh)
     right.reverse()
@@ -87,22 +87,32 @@ def compute_lr_selection_cache(
         torch.Tensor: Left term. Shape: (H, R).
         torch.Tensor: Right term. Shape: (H, R).
     """
-    R, H = g[1].shape[0], len(g)
-    y_slct = y.reshape(1, -1, 1).expand(R, -1, R)  # (R, H, R)
+    R0, R1, H = g[0].shape[0], g[0].shape[-1], len(g)
+    y_slct = y.reshape(1, -1, 1).expand(R0, -1, R1)  # (1, H, R1)
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     lh = g[0].gather(dim=1, index=y_slct[:1, :1]).squeeze(0, 1)  # (R,)
     left = [torch.ones_like(lh), lh]
     for h in range(1, H - 1):
-        gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
-        lh = torch.einsum("i,ij->j", lh, gh_y)
+        Rh, Rhp1 = g[h].shape[0], g[h + 1].shape[0]
+        y_slct = y.reshape(1, -1, 1).expand(Rh, -1, Rhp1)  # (R, H, R)
+        gh_y = (
+            g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)
+        )  # (Rh, Rh+1)
+        lh = torch.einsum("i,ij->j", lh, gh_y)  # (Rh,)
         left.append(lh)
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
+    RHm1, RH = g[-1].shape[0], g[-1].shape[-1]
+    y_slct = y.reshape(1, -1, 1).expand(RHm1, -1, RH)  # (1, H, R1)
     rh = g[-1].gather(dim=1, index=y_slct[:, -1:, :1]).squeeze(1, 2)  # (R,)
     right = [torch.ones_like(rh), rh]
     for h in range(H - 2, 0, -1):
-        gh_y = g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)  # (R, R)
+        Rh, Rhp1 = g[h].shape[0], g[h + 1].shape[0]
+        y_slct = y.reshape(1, -1, 1).expand(Rh, -1, Rhp1)  # (1, H, R1)
+        gh_y = (
+            g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)
+        )  # (Rh, Rhp1)
         rh = torch.einsum("ij,j->i", gh_y, rh)
         right.append(rh)
     right.reverse()
@@ -265,7 +275,7 @@ class BM(AbstractDisributionHead):
                 z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
 
-                losses.append(z.log() - psi.log().mean())
+                losses.append(z.log() - (psi**2).log().mean())
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
                 i_h = torch.eye(self.config.d_output)[y[:, h]]  # (B,)
@@ -331,10 +341,13 @@ def train_example():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    for i in range(1):
+    for i in range(10):
         losses = mt_head.train_example(x, y, lr=1e-3)
         print(torch.stack(losses).mean())
 
 
 if __name__ == "__main__":
+    # set seed
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
     train_example()
