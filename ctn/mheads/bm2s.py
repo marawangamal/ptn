@@ -1,4 +1,5 @@
 import torch
+from tqdm import tqdm
 from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
 
 
@@ -145,10 +146,9 @@ class BM(AbstractDisributionHead):
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-        optimizer: torch.optim.Optimizer,
         n_sweeps: int = 1,
         eps: float = 1e-10,
-        step_size: float = 1e-3,
+        lr: float = 1e-3,
         eps_trunc: float = 1e-3,
     ):
         """Train the model for one step.
@@ -184,12 +184,18 @@ class BM(AbstractDisributionHead):
         ml = [x for x in ml]  # (H, R) -> H x (R,)
         mr = [x for x in mr]  # (H, R) -> H x (R,)
 
+        # Corrections:
+        sl[0] = sl[0][:, :1]
+        ml[0] = ml[0][:1]
+        sr[-1] = sr[-1][:, :1]
+        mr[-1] = mr[-1][:1]
+
         going_right = True
+        losses = []
         for n_sweeps in range(n_sweeps):
             for h in range(H - 1) if going_right else range(H - 1, -1, -1):
-                Rl, Rr = g[h].size(0), g[h].size(-1)
+                Rl, Rr = g[h].size(0), g[h + 1].size(-1)
 
-                optimizer.zero_grad()
                 # Freeze all cores except h
                 for k in range(H):
                     g[k].requires_grad = True if k == h else False
@@ -199,27 +205,20 @@ class BM(AbstractDisributionHead):
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
                 psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
                 z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
-                g_tilde = torch.einsum("ivj,jdk->ivdj", g[h], g[h + 1])
+                g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
+
+                losses.append(z.log() - psi.log().mean())
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
                 i_h = torch.eye(self.config.d_output)[y[:, h]]  # (B,)
                 i_hp1 = torch.eye(self.config.d_output)[y[:, h + 1]]  # (B,)
-                if h == 0:
-                    psi_prime = torch.einsum(
-                        "bi, bd,bv,bj->bidvj",
-                        torch.ones(B, 1, dtype=dt, device=dv),
-                        i_h,
-                        i_hp1,
-                        sr[h + 1],
-                    )
-                else:
-                    psi_prime = torch.einsum(
-                        "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
-                    )  # (B, Rl, Do, Do, Rr)
+                psi_prime = torch.einsum(
+                    "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
+                )  # (B, Rl, Do, Do, Rr)
 
                 # Shape:  (Rl, Do, Do, Rr)
                 dldg_tilde = (z_prime / z) - 2 * (psi_prime / psi).mean(dim=0)
-                g_tilde = g_tilde - dldg_tilde * step_size  # (Rl, Do, Do Rr)
+                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
                 u, s, vt = torch.linalg.svd(
                     g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
                 )
@@ -230,14 +229,6 @@ class BM(AbstractDisributionHead):
                     # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
                     # end of the rightwards sweep.
                     if going_right:
-                        # Rl, Rr = g[h].size(0), g[h].size(-1)
-                        # U, s, Vt = torch.linalg.svd(g[h].reshape(Rl * Do, Rr))
-                        # R_prime = U.size(-1)
-                        # g[h] = U.reshape(Rl, Do, R_prime)[:, :, :Rr]  # (R, Do, R)
-                        # g[h + 1] = torch.einsum(
-                        #     "ir,rp,pvj->ivj", torch.diag(s), Vt[: len(s)], g[h + 1]
-                        # )[:Rr]
-
                         Rtrunc = (s / s.abs().max() > eps_trunc).sum()
                         g[h] = u.reshape(Rl, Do, u.size(-1))[
                             :, :, :Rtrunc
@@ -247,7 +238,6 @@ class BM(AbstractDisributionHead):
                             torch.diag(s[:Rtrunc]),
                             vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
                         )
-
                         # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
                         # But, we only need to use h+1 in the next iteration.
                         # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
@@ -268,6 +258,8 @@ class BM(AbstractDisributionHead):
                     #     #     "i,ij->j", ml[h], self._g[h].sum(dim=1)
                     #     # )
 
+        return losses
+
 
 def train_example():
     B, H, D, V = 1, 5, 9, 2
@@ -281,8 +273,9 @@ def train_example():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    optimizer = torch.optim.AdamW(mt_head.parameters(), lr=1e-3)
-    mt_head.train_example(x, y, optimizer)
+    for i in range(1):
+        losses = mt_head.train_example(x, y, lr=1e-3)
+        print(torch.stack(losses).mean())
 
 
 if __name__ == "__main__":
