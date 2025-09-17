@@ -54,22 +54,30 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
         z, y = z.to(device), y.to(device)
 
         # Forward pass
-        output = model(z, y.reshape(B, -1))
-        loss = output.loss
+        if hasattr(model, "train_example"):
+            losses = model.train_example(
+                z, y.reshape(B, -1), lr=optimizer.param_groups[0]["lr"]
+            )
+            loss = torch.stack(losses).mean()
+        else:
+            output = model(z, y.reshape(B, -1))
+            loss = output.loss
 
-        if loss.isnan():
-            # Save model state, input, and output for debugging
-            debug_dir = "debug_nan"
-            os.makedirs(debug_dir, exist_ok=True)
-            torch.save(model.state_dict(), os.path.join(debug_dir, f"model_nan_{i}.pt"))
-            torch.save(z.cpu(), os.path.join(debug_dir, f"input_z_nan_{i}.pt"))
-            torch.save(y.cpu(), os.path.join(debug_dir, f"input_y_nan_{i}.pt"))
-            torch.save(output, os.path.join(debug_dir, f"output_nan_{i}.pt"))
-            raise ValueError(f"Loss is NaN! Saved model and inputs to {debug_dir}")
+            if loss.isnan():
+                # Save model state, input, and output for debugging
+                debug_dir = "debug_nan"
+                os.makedirs(debug_dir, exist_ok=True)
+                torch.save(
+                    model.state_dict(), os.path.join(debug_dir, f"model_nan_{i}.pt")
+                )
+                torch.save(z.cpu(), os.path.join(debug_dir, f"input_z_nan_{i}.pt"))
+                torch.save(y.cpu(), os.path.join(debug_dir, f"input_y_nan_{i}.pt"))
+                torch.save(output, os.path.join(debug_dir, f"output_nan_{i}.pt"))
+                raise ValueError(f"Loss is NaN! Saved model and inputs to {debug_dir}")
 
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
 
         g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         p = sum(torch.linalg.norm(p) for p in model.parameters())

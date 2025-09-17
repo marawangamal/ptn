@@ -252,7 +252,7 @@ class BM(AbstractDisributionHead):
         ml = [ml[h, : ml_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
         mr = [mr[h, : mr_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
 
-        # Corrections:
+        # Boundary Corrections:
         sl[0] = sl[0][:, :1]
         ml[0] = ml[0][:1]
         sr[-1] = sr[-1][:, :1]
@@ -285,7 +285,9 @@ class BM(AbstractDisributionHead):
                 )  # (B, Rl, Do, Do, Rr)
 
                 # Shape:  (Rl, Do, Do, Rr)
-                dldg_tilde = (z_prime / z) - 2 * (psi_prime / psi).mean(dim=0)
+                dldg_tilde = (z_prime / z) - 2 * (
+                    psi_prime / psi.view(-1, 1, 1, 1, 1)
+                ).mean(dim=0)
                 g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
                 u, s, vt = torch.linalg.svd(
                     g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
@@ -330,7 +332,7 @@ class BM(AbstractDisributionHead):
 
 
 def train_example():
-    B, H, D, V = 1, 5, 9, 2
+    B, H, D, V = 32, 5, 9, 2
     mt_head = BM(
         AbstractDisributionHeadConfig(
             d_model=D,
@@ -341,7 +343,7 @@ def train_example():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    for i in range(10):
+    for i in range(32):
         losses = mt_head.train_example(x, y, lr=1e-3)
         print(torch.stack(losses).mean())
 
