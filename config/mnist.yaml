@@ -35,8 +35,9 @@ group:
           rank: [8]
           model: ["bmnc", "mps"]
           pos_func: ["exp"]
-          mode: ["multitask", "single"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --rescale --mode {mode} --epochs 50 --tags rescale"
+          mode: ["single"]
+          scale: [28]
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --scale {scale} --mode {mode} --epochs 50 --tags single"
 
     # - group:
     # mmps_e50_l0004_b32_r8_pexp_irandn_l00_n10_mNone_sFalse

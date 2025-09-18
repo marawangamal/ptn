@@ -1,39 +1,44 @@
-import wandb, numpy as np, pandas as pd
-from tqdm import tqdm
+import torch
+from ctn.mheads import MHEADS
+from ctn.mheads._abc import AbstractDisributionHeadConfig
+import pandas as pd
 
-api = wandb.Api(timeout=299)
-PROJECT = "marawan-gamal/ctn-mnist"
+device = "cuda"
+print(f"Using device: {device}")
 
-
-def get_min_val(run, key="val/loss"):
-    vals = []
-    for row in run.scan_history(keys=[key], page_size=10000):
-        v = row.get(key)
-        if isinstance(v, (int, float)):
-            vals.append(float(v))
-        elif isinstance(v, str):
-            try:
-                vals.append(float(v))
-            except ValueError:
-                pass
-    return np.min(vals) if vals else float("nan")
-
-
+B, H, R, Di = 1, 5, 2, 1  # Config used for Fig. 1
 rows = []
-for run in api.runs(PROJECT):
-    min_val_loss = get_min_val(run, key="val/loss")
+for Do in [2, 64, 128, 256]:
+
+    x = torch.randn(B, Di, device=device)
+    y = torch.randint(0, Do, (B, H), device=device)
+
+    # # MPS_BM:
+    model = MHEADS["bm"](
+        config=AbstractDisributionHeadConfig(rank=R, d_model=Di, d_output=Do, horizon=H)
+    ).to(device)
+    model.to(device)
+
+    # MPS_sigma
+    # model = MHEADS["mps"](
+    #     config=AbstractDisributionHeadConfig(rank=R, d_model=Di, d_output=Do, horizon=H)
+    # ).to(device)
+    # model.to(device)
+
+    torch.cuda.reset_peak_memory_stats()
+    # MPS_BM
+    model.train_example(x, y)
+    # # MPS_sigma
+    # model(x, y)
+
+    mem_after = torch.cuda.max_memory_allocated()
+    print(f"[Do={Do}] Mem: {(mem_after) / (1024**2):.4f} MB")
     rows.append(
         {
-            "model": run.config["model"],
-            "pos_func": run.config["pos_func"],
-            "rank": run.config["rank"],
-            "val/loss": min_val_loss,
-            "horizon": 28 * 28,
-            "name": run.name,
+            "Do": Do,
+            "Mem": mem_after / (1024**2),
         }
     )
-    break
 
 df = pd.DataFrame(rows)
-df["val/loss"] = df["val/loss"] * df["horizon"]
-df
+df.to_csv("results/memory_mps_bm.csv", index=False)

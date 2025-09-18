@@ -1,0 +1,3 @@
+latency,peak_memory_MB,name,R,H,Do,Di,B,sweep_type,sweep_value
+0.12801830768585204,1.1229448318481445,mps_bm,2,32,8,1,32,Do,8
+0.2321902585029602,0.8806533813476562,mps_bm,2,32,16,1,32,Do,16

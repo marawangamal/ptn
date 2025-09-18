@@ -1,31 +1,3 @@
-"""
-profile_cp_reducers.py
-
-Script for profiling the latency and memory usage of CP reducers,
-including the log_prob_moe_batched function.
-
-Example results:
-
-B, T, Do, R, H, V = 32, 512, 1024, 32, 4, 30_000  (GPU)
-
-        latency  peak_memory_MB                             name
-0  0.001008      610.937988                  batch_cp_reduce
-1  0.005106      728.915527  select_margin_cp_tensor_batched
-2  0.000769      627.912598          batch_cp_reduce_decoder  <---- Fastest
-3  0.041925     1250.639160   batch_cp_reduce_decoder_einlse  <---- Slower than the decoder version
-4  0.040477      846.895508             log_prob_moe_batched
-
-B, T, Do, R, H, V = 32, 512, 4096, 32, 4, 50_000 (GPU)
-    latency  peak_memory_MB                                        name
-0  0.001608     1636.187988                             batch_cp_reduce
-1  0.007202     1832.165527             select_margin_cp_tensor_batched
-2  0.002333     1704.162598                     batch_cp_reduce_decoder
-3  0.264478     5659.725586              batch_cp_reduce_decoder_einlse
-4  0.001672     1718.637695  batch_cp_reduce_decoder_einlse_select_only
-5  0.015991     3200.130371  batch_cp_reduce_decoder_einlse_margin_only
-6  0.236357     2027.458008                        log_prob_moe_batched
-"""
-
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -37,18 +9,9 @@ from tqdm import tqdm
 import torch
 from ctn.mheads import MHEADS
 from ctn.mheads._abc import AbstractDisributionHeadConfig
-from ctn.mheads._tensorops import (
-    batch_cp_reduce_decoder_einlse_margin_only,
-    batch_cp_reduce,
-    batch_cp_reduce_decoder,
-    batch_cp_reduce_decoder_einlse,
-    batch_cp_reduce_decoder_einlse_select_only,
-    select_margin_cp_tensor_batched,
-)
-from ctn.mheads.moe import log_prob_moe_batched
 
 
-def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
+def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):
     results = {}
     # Warmup
     for _ in range(n_warmup):
@@ -59,8 +22,11 @@ def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
         # Simple memory tracking: just use peak memory before and after
         torch.cuda.reset_peak_memory_stats()
         start_time = time.time()
-        for _ in range(n_iters):
-            fn(*args, **kwargs)
+        try:
+            for _ in range(n_iters):
+                fn(*args, **kwargs)
+        except Exception as e:
+            print(e)
         torch.cuda.synchronize()
         end_time = time.time()
         peak_mem = torch.cuda.max_memory_allocated()
@@ -82,10 +48,10 @@ def test_latency(fn, n_warmup, n_iters, *args, **kwargs):
     return results
 
 
-if __name__ == "__main__":
+def profile_bm():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results = {}
-    B, H, R, Do, Di = 32, 128, 2, 2, 1
+    B, H, R, Do, Di = 32, 128, 2, 2, 1  # Config used for Fig. 1
 
     mps_sigma = MHEADS["mps"](
         config=AbstractDisributionHeadConfig(
@@ -141,9 +107,96 @@ if __name__ == "__main__":
         ]
     ):
 
-        r = test_latency(fn, 10, 100, *fn_args, **fn_kwargs)
+        r = test_latency(fn, 10, 100, device, *fn_args, **fn_kwargs)
         r["name"] = fn_name
         results.append(r)
 
     df = pd.DataFrame(results)
     print(df)
+
+
+def sweep():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # FIXED PARAMETERS (baseline config)
+    B, H0, R0, Do0, Di0 = 1, 8, 2, 2, 1
+
+    # SWEEP PARAMETERS
+    horizons = [8, 16, 32]
+    d_outputs = [8, 16, 32]
+    # DEBUG SWEEP PARAMETERS
+    # horizons = [10, 25, 50, 75, 100]
+    horizons = []
+    d_outputs = [50, 500]
+
+    results = []
+
+    # Helper to run one config
+    def run_config(R, H, Di, Do, sweep_type, sweep_value):
+        mps_sigma = (
+            MHEADS["mps"](
+                config=AbstractDisributionHeadConfig(
+                    rank=R, d_model=Di, d_output=Do, horizon=H
+                )
+            )
+            .to(device)
+            .eval()
+        )
+
+        mps_bm = (
+            MHEADS["bm"](
+                config=AbstractDisributionHeadConfig(
+                    rank=R, d_model=Di, d_output=Do, horizon=H
+                )
+            )
+            .to(device)
+            .eval()
+        )
+
+        x = torch.randn(B, Di, device=device)
+        y = torch.randint(0, Do, (B, H), device=device)
+
+        for fn_name, fn, fn_args, fn_kwargs in [
+            ("mps_sigma", mps_sigma, [x, y], {}),
+            ("mps_bm", mps_bm.train_example, [x, y], {}),
+        ]:
+            r = test_latency(fn, 10, 100, device, *fn_args, **fn_kwargs)
+            r.update(
+                dict(
+                    name=fn_name,
+                    R=R,
+                    H=H,
+                    Do=Do,
+                    Di=Di,
+                    B=B,
+                    sweep_type=sweep_type,
+                    sweep_value=sweep_value,
+                )
+            )
+            results.append(r)
+
+        if torch.cuda.is_available():
+            del mps_sigma, mps_bm, x, y
+            torch.cuda.empty_cache()
+
+    # --- Sweep rank ---
+    # for R in tqdm(ranks, desc="Sweep rank", leave=False):
+    #     run_config(R, H0, Di0, Do0, sweep_type="R", sweep_value=R)
+
+    # --- Sweep horizon ---
+    for H in tqdm(horizons, desc="Sweep horizon", leave=False):
+        run_config(R0, H, Di0, Do0, sweep_type="H", sweep_value=H)
+
+    # --- Sweep d_output ---
+    for Do in tqdm(d_outputs, desc="Sweep d_output", leave=False):
+        run_config(R0, H0, Di0, Do, sweep_type="Do", sweep_value=Do)
+
+    df = pd.DataFrame(results)
+    print(df)
+    df.to_csv("results/sweep.csv", index=False)
+    print("Saved to results/sweep.csv")
+
+
+if __name__ == "__main__":
+    sweep()

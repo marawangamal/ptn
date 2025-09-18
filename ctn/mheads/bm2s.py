@@ -191,7 +191,7 @@ class BM(AbstractDisributionHead):
         for h in range(len(self.g) - 1, 0, -1):
             w = self.g[h].reshape(self.g[h].size(0), -1)  # (R, Do*R)
             assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=1e-6)
-        print("[PASS] MPS is in right-canonical format")
+        # print("[PASS] MPS is in right-canonical format")
 
     def g_dot(self, h: int):
         return self.g[h].sum(dim=1)
@@ -278,8 +278,8 @@ class BM(AbstractDisributionHead):
                 losses.append(z.log() - (psi**2).log().mean())
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
-                i_h = torch.eye(self.config.d_output)[y[:, h]]  # (B,)
-                i_hp1 = torch.eye(self.config.d_output)[y[:, h + 1]]  # (B,)
+                i_h = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
+                i_hp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B,)
                 psi_prime = torch.einsum(
                     "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
                 )  # (B, Rl, Do, Do, Rr)
