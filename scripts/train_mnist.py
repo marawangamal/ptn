@@ -16,10 +16,19 @@ from ctn.mheads import MHEADS
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
-def get_data_loaders(batch_size=32, data_dir="./data"):
+def get_data_loaders(batch_size=32, data_dir="./data", scale=None):
     """Create MNIST data loaders with binary thresholding."""
     transform = transforms.Compose([transforms.ToTensor(), lambda x: (x > 0.5).long()])
-
+    if scale is not None:
+        transform = transforms.Compose(
+            [
+                transforms.Resize(
+                    (scale, scale)
+                ),  # rescale from 28x28 -> (scale, scale)
+                transforms.ToTensor(),
+                lambda x: (x > 0.5).long(),  # binarize
+            ]
+        )
     train_set = torchvision.datasets.MNIST(
         data_dir, train=True, transform=transform, download=True
     )
@@ -37,20 +46,24 @@ def get_data_loaders(batch_size=32, data_dir="./data"):
     return train_loader, val_loader
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger):
+def train_epoch(model, train_loader, optimizer, device, wandb_logger, multitask=False):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
     num_batches = 0
     pbar = tqdm(train_loader, desc="Training")
     for i, batch in enumerate(pbar):
-        # if i == 114:
-        #     print(f"Batch {i} is {batch}")
         y, x = batch  # for generative modeling, reverse x, y
         B = x.shape[0]
 
         # Convert to one-hot encoding
-        z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
+        z = (
+            F.one_hot(torch.zeros(B, device=device, dtype=torch.long), num_classes=10)
+            .reshape(B, -1)
+            .float()
+        )
+        if multitask:
+            z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
         z, y = z.to(device), y.to(device)
 
         # Forward pass
@@ -100,7 +113,7 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger):
     return total_loss / num_batches
 
 
-def evaluate(model, val_loader, device):
+def evaluate(model, val_loader, device, multitask=False):
     """Evaluate model on validation set."""
     model.eval()
     total_loss = 0
@@ -109,7 +122,15 @@ def evaluate(model, val_loader, device):
     with torch.no_grad():
         for y, x in val_loader:
             B = x.shape[0]
-            z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
+            z = (
+                F.one_hot(
+                    torch.zeros(B, device=device, dtype=torch.long), num_classes=10
+                )
+                .reshape(B, -1)
+                .float()
+            )
+            if multitask:
+                z = F.one_hot(x, num_classes=10).reshape(B, -1).float()
             z, y = z.to(device), y.to(device)
 
             output = model(z, y.reshape(B, -1))
@@ -119,7 +140,7 @@ def evaluate(model, val_loader, device):
     return total_loss / num_batches
 
 
-def generate_images(model, device, num_images=10, image_size=(28, 28)):
+def generate_images(model, device, num_images=10, image_size=(28, 28), multitask=False):
     """Generate images from the model and return as wandb-compatible format."""
     model.eval()
     generated_images = []
@@ -127,7 +148,11 @@ def generate_images(model, device, num_images=10, image_size=(28, 28)):
     with torch.no_grad():
         for digit in range(min(num_images, 10)):
             # Create one-hot encoding for the digit
-            z = F.one_hot(torch.tensor([digit], device=device), num_classes=10).float()
+            z = F.one_hot(torch.tensor([0], device=device), num_classes=10).float()
+            if multitask:
+                z = F.one_hot(
+                    torch.tensor([digit], device=device), num_classes=10
+                ).float()
 
             # Generate image
             generated = model.generate(z)[0].detach().cpu().view(*image_size).numpy()
@@ -188,6 +213,12 @@ def main():
     )
     parser.add_argument("--tags", type=str, nargs="*", default=[])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--scale", type=int, default=28, help="Rescale images to (scale, scale)"
+    )
+    parser.add_argument(
+        "--mode", type=str, default="single", choices=["multitask", "single"]
+    )  # multitask: separate dist for each digit
 
     args = parser.parse_args()
 
@@ -203,7 +234,7 @@ def main():
     set_seed(args.seed)
 
     # Data
-    train_loader, val_loader = get_data_loaders(args.batch_size, "./data")
+    train_loader, val_loader = get_data_loaders(args.batch_size, "./data", args.scale)
 
     # Limit training data for quick testing
     if args.max_samples is not None:
@@ -220,7 +251,7 @@ def main():
     # Model
     model = MHEADS[args.model](
         AbstractDisributionHeadConfig(
-            horizon=(28 * 28),  # 28x28 for MNIST
+            horizon=(args.scale * args.scale),  # 28x28 for MNIST
             d_model=10,
             d_output=2,
             rank=args.rank,
@@ -236,8 +267,17 @@ def main():
     best_val_loss = float("inf")
     wandb.watch(model, log="all", log_freq=20)  # log_freq = steps between logging
     for epoch in range(args.epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, device, wandb)
-        val_loss = evaluate(model, val_loader, device)
+        train_loss = train_epoch(
+            model,
+            train_loader,
+            optimizer,
+            device,
+            wandb,
+            multitask=args.mode == "multitask",
+        )
+        val_loss = evaluate(
+            model, val_loader, device, multitask=args.mode == "multitask"
+        )
 
         print(
             f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
@@ -245,7 +285,13 @@ def main():
 
         # Generate and log images
         try:
-            generated_images = generate_images(model, device, args.num_gen_images)
+            generated_images = generate_images(
+                model,
+                device,
+                args.num_gen_images,
+                multitask=args.mode == "multitask",
+                image_size=(args.scale, args.scale),
+            )
         except Exception as e:
             print(f"Error generating images: {e}")
             generated_images = []

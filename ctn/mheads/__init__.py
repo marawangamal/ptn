@@ -11,5 +11,5 @@ MHEADS = {
     "moe": MoE,  # Mixture of Experts
     "mps": MPS,  # Matrix Product State
     "bm": BM,  # Born Machine Canonical Form w/ DMRG)
-    "bmnc": BMNC,  # Born Machine (
+    "bmnc": BMNC,  # Born Machine (Born Machine Non-Canonical Form w/ LogSF algo)
 }

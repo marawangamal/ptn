@@ -249,8 +249,8 @@ def set_seeds(seed):
 
 def main():
     parser = argparse.ArgumentParser(description="Train MHEADS on ModelNet40")
-    parser.add_argument("--model", default="cp")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--model", default="mps")
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
