@@ -116,18 +116,19 @@ def profile_bm():
 
 
 def sweep():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
     print(f"Using device: {device}")
 
     # FIXED PARAMETERS (baseline config)
-    B, H0, R0, Do0, Di0 = 1, 8, 2, 2, 1
+    B, H0, R0, Do0, Di0 = 32, 8, 2, 2, 1
 
     # SWEEP PARAMETERS
     horizons = [8, 16, 32]
     d_outputs = [8, 16, 32]
     # DEBUG SWEEP PARAMETERS
-    horizons = [25, 50, 75, 100]
-    # d_outputs = [50, 500]
+    horizons = [1024]
+    d_outputs = []
 
     results = []
 

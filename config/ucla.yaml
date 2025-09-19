@@ -33,9 +33,9 @@ group:
         type: sweep
         preamble: clong
         sweep:
-          lr: [1e-3]
+          lr: [1e-3, 4e-3, 5e-3]
           rank: [8, 32, 64]
-          model: ["moe"]
+          model: ["mps"]
           dataset: [
               "nltcs",
               "msnbc",
