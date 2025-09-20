@@ -1,0 +1,17 @@
+program: scripts/train_ucla.py
+name: ctn-ucla--hpo
+method: bayes
+metric:
+  goal: minimize
+  name: val/loss
+parameters:
+  learning_rate:
+    min: 0.0001
+    max: 0.1
+  epochs:
+    values: [10]
+  rank:
+    values: [8, 16, 32, 64]
+  dataset:
+    values: ["nltcs"]
+

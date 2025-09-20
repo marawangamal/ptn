@@ -6,6 +6,7 @@ setuptools
 wheel
 seaborn
 numpy
+scikit-learn
 # pandas
 # lightning
 # tiktoken

@@ -32,12 +32,12 @@ group:
         sweep:
           # so far tried from 1e-3 --  4e-3, 8e-3
           lr: [4e-3]
-          rank: [8]
-          model: ["mps"]
+          rank: [64]
+          model: ["mps", "bmnc"]
           pos_func: ["exp"]
-          mode: ["multitask"]
+          mode: ["multitask", "single"]
           scale: [28]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --scale {scale} --mode {mode} --epochs 50 --tags final"
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --scale {scale} --mode {mode} --epochs 50"
 
     # - group:
     # mmps_e50_l0004_b32_r8_pexp_irandn_l00_n10_mNone_sFalse

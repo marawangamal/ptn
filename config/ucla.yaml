@@ -33,8 +33,8 @@ group:
         type: sweep
         preamble: clong
         sweep:
-          lr: [1e-3, 4e-3, 5e-3]
-          rank: [8, 32, 64]
+          lr: [5e-3]
+          rank: [32]
           model: ["mps"]
           dataset: [
               "nltcs",
@@ -58,5 +58,5 @@ group:
               # "bbc",
               # "ad",            # actually `adult` in repo
           ]
-        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 10"
+        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 20"
 

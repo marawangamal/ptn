@@ -40,7 +40,9 @@ def collate_fn(batch):
     return x, y
 
 
-def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
+def get_data_loaders(
+    batch_size=32, data_dir="./data", dataset="nltcs", conditional=False
+):
     """Create MNIST data loaders with binary thresholding."""
 
     URI = "https://raw.githubusercontent.com/UCLA-StarAI/Density-Estimation-Datasets/refs/heads/master/datasets/"
@@ -149,8 +151,14 @@ def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
 
     D = x_train.shape[1]
     cols = torch.randperm(D)
-    x_train, y_train = x_train[:, cols[: D // 2]], x_train[:, cols[D // 2 :]]
-    x_val, y_val = x_val[:, cols[: D // 2]], x_val[:, cols[D // 2 :]]
+    if conditional:
+        x_train, y_train = x_train[:, cols[: D // 2]], x_train[:, cols[D // 2 :]]
+        x_val, y_val = x_val[:, cols[: D // 2]], x_val[:, cols[D // 2 :]]
+    else:
+        y_train = x_train.clone()
+        y_val = x_val.clone()
+        x_train = torch.ones(x_train.shape[0], 1, device=x_train.device).float()
+        x_val = torch.ones(x_val.shape[0], 1, device=x_val.device).float()
 
     train_set = torch.utils.data.TensorDataset(x_train, y_train)
     val_set = torch.utils.data.TensorDataset(x_val, y_val)
@@ -272,6 +280,7 @@ def main():
     )
     parser.add_argument("--dataset", type=str, default="nltcs")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--conditional", action="store_true", help="Conditional model")
     args = parser.parse_args()
 
     # Initialize wandb
@@ -284,7 +293,9 @@ def main():
     print(f"Using device: {device}")
 
     # Data
-    train_loader, val_loader = get_data_loaders(args.batch_size, dataset=args.dataset)
+    train_loader, val_loader = get_data_loaders(
+        args.batch_size, dataset=args.dataset, conditional=args.conditional
+    )
 
     # Limit training data for quick testing
     if args.max_samples is not None:
@@ -297,12 +308,14 @@ def main():
 
     # Model
     test_batch = next(iter(train_loader))
-    horizon = test_batch[0].shape[1]
+    horizon = test_batch[1].shape[1]
     num_classes = 2
     model = MHEADS[args.model](
         AbstractDisributionHeadConfig(
             horizon=test_batch[1].shape[1],  # horizon is num bits to predict
-            d_model=test_batch[0].shape[1],  # input is bit-vector
+            d_model=(
+                1 if not args.conditional else test_batch[0].shape[1]
+            ),  # input is bit-vector for conditional model
             d_output=2,  # binary
             rank=args.rank,
             pos_func=args.pos_func,
