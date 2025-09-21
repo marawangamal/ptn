@@ -127,7 +127,7 @@ def sweep():
     horizons = [8, 16, 32]
     d_outputs = [8, 16, 32]
     # DEBUG SWEEP PARAMETERS
-    horizons = [1024]
+    horizons = [28 * 28]
     d_outputs = []
 
     results = []

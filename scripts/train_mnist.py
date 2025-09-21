@@ -219,6 +219,7 @@ def main():
     parser.add_argument(
         "--mode", type=str, default="single", choices=["multitask", "single"]
     )  # multitask: separate dist for each digit
+    parser.add_argument("--sample", action="store_true", help="Sample from the model")
 
     args = parser.parse_args()
 
@@ -284,14 +285,16 @@ def main():
         )
 
         # Generate and log images
+        generated_images = []
         try:
-            generated_images = generate_images(
-                model,
-                device,
-                args.num_gen_images,
-                multitask=args.mode == "multitask",
-                image_size=(args.scale, args.scale),
-            )
+            if args.sample:
+                generated_images = generate_images(
+                    model,
+                    device,
+                    args.num_gen_images,
+                    multitask=args.mode == "multitask",
+                    image_size=(args.scale, args.scale),
+                )
         except Exception as e:
             print(f"Error generating images: {e}")
             generated_images = []

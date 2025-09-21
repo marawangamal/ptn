@@ -29,21 +29,21 @@ group:
   jobs:
 
     - group:
-        name: "ucla::moe"
+        name: "ucla"
         type: sweep
         preamble: clong
         sweep:
           lr: [5e-3]
           rank: [32]
-          model: ["mps"]
+          model: ["mps",]
           dataset: [
-              "nltcs",
-              "msnbc",
-              "kdd",
-              "plants",
+              # "nltcs",
+              # "msnbc",
+              # "kdd",
+              # "plants",
               "baudio",
-              # "jester",
-              # "bnetflix",
+              "jester",
+              "bnetflix",
               # "accidents",
               # "retail",        # actually `tretail` in repo
               # "pumsb_star",
@@ -58,5 +58,5 @@ group:
               # "bbc",
               # "ad",            # actually `adult` in repo
           ]
-        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 20"
+        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 50"
 

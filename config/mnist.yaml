@@ -26,16 +26,16 @@ group:
   jobs:
 
     - group:
-        name: "ctn::mps"
+        name: "ctn"
         type: sweep
         preamble: glong
         sweep:
           # so far tried from 1e-3 --  4e-3, 8e-3
-          lr: [4e-3]
-          rank: [64]
-          model: ["mps", "bmnc"]
+          lr: [1e-3, 5e-4, 1e-4]
+          rank: [8, 32]
+          model: ["bmnc"]
           pos_func: ["exp"]
-          mode: ["multitask", "single"]
+          mode: ["multitask"]
           scale: [28]
         sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --scale {scale} --mode {mode} --epochs 50"
 

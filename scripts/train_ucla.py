@@ -262,7 +262,9 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
-    parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument(
+        "--pos_func", type=str, default="exp", help="exponential function"
+    )
     parser.add_argument(
         "--num_gen_images",
         type=int,
@@ -322,7 +324,7 @@ def main():
         )
     )
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # Training loop
     print(f"Training samples: {len(train_loader.dataset)}")

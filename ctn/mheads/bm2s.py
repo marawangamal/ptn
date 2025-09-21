@@ -208,7 +208,7 @@ class BM(AbstractDisributionHead):
         x: torch.Tensor,
         y: torch.Tensor,
         n_sweeps: int = 1,
-        eps: float = 1e-10,
+        eps_clamp: float = 1e-10,
         lr: float = 1e-3,
         eps_trunc: float = 1e-3,
     ):
@@ -285,8 +285,8 @@ class BM(AbstractDisributionHead):
                 )  # (B, Rl, Do, Do, Rr)
 
                 # Shape:  (Rl, Do, Do, Rr)
-                dldg_tilde = (z_prime / z) - 2 * (
-                    psi_prime / psi.view(-1, 1, 1, 1, 1)
+                dldg_tilde = (z_prime / z.clamp(min=eps_clamp)) - 2 * (
+                    psi_prime / psi.view(-1, 1, 1, 1, 1).clamp(min=eps_clamp)
                 ).mean(dim=0)
                 g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
                 u, s, vt = torch.linalg.svd(
@@ -299,7 +299,7 @@ class BM(AbstractDisributionHead):
                     # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
                     # end of the rightwards sweep.
                     if going_right:
-                        Rtrunc = (s / s.abs().max() > eps_trunc).sum()
+                        Rtrunc = (s / s.abs().max() > eps_trunc).sum() or 1
                         g[h] = u.reshape(Rl, Do, u.size(-1))[
                             :, :, :Rtrunc
                         ]  # (R, Do, R)
@@ -307,6 +307,10 @@ class BM(AbstractDisributionHead):
                             "ir,rvj->ivj",
                             torch.diag(s[:Rtrunc]),
                             vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
+                        )
+                        # normalize g[h+1]
+                        g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
+                            min=eps_clamp
                         )
                         # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
                         # But, we only need to use h+1 in the next iteration.
