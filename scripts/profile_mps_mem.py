@@ -8,7 +8,7 @@ print(f"Using device: {device}")
 
 B, H, R, Di = 1, 5, 2, 1  # Config used for Fig. 1
 rows = []
-for Do in [1024]:
+for Do in [64, 128, 256, 512, 1024]:
 
     torch.cuda.reset_peak_memory_stats()
 
@@ -23,13 +23,20 @@ for Do in [1024]:
     # model.to(device)  # 15.2329 MB
     # model(x, y)
     # ================================
-    # MPS_BM
-    model = MHEADS["bm"](
+    # # MPS_BMNC
+    model = MHEADS["bmnc"](
         config=AbstractDisributionHeadConfig(rank=R, d_model=Di, d_output=Do, horizon=H)
     ).to(device)
     model.to(device)
-    model.train_example(x, y)
-    # <<<<<<<<<<<<>>>>>>>>>>>>>>>>
+    model(x, y)
+    # # <<<<<<<<<<<<>>>>>>>>>>>>>>>>
+    # # MPS_BM
+    # model = MHEADS["bm"](
+    #     config=AbstractDisributionHeadConfig(rank=R, d_model=Di, d_output=Do, horizon=H)
+    # ).to(device)
+    # model.to(device)
+    # model.train_example(x, y)
+    # # <<<<<<<<<<<<>>>>>>>>>>>>>>>>
 
     mem_after = torch.cuda.max_memory_allocated()
     print(f"[Do={Do}] Mem: {(mem_after) / (1024**2):.4f} MB")
@@ -41,4 +48,4 @@ for Do in [1024]:
     )
 
 df = pd.DataFrame(rows)
-df.to_csv("results/memory_mps_sigma.csv", index=False)
+df.to_csv("results/memory_mps_bmnc.csv", index=False)

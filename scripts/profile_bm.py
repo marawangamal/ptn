@@ -116,8 +116,8 @@ def profile_bm():
 
 
 def sweep():
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     print(f"Using device: {device}")
 
     # FIXED PARAMETERS (baseline config)
@@ -127,7 +127,7 @@ def sweep():
     horizons = [8, 16, 32]
     d_outputs = [8, 16, 32]
     # DEBUG SWEEP PARAMETERS
-    horizons = [28 * 28]
+    horizons = [25, 50, 75, 100]
     d_outputs = []
 
     results = []
@@ -154,11 +154,22 @@ def sweep():
             .eval()
         )
 
+        mps_bmnc = (
+            MHEADS["bmnc"](
+                config=AbstractDisributionHeadConfig(
+                    rank=R, d_model=Di, d_output=Do, horizon=H
+                )
+            )
+            .to(device)
+            .eval()
+        )
+
         x = torch.randn(B, Di, device=device)
         y = torch.randint(0, Do, (B, H), device=device)
 
         for fn_name, fn, fn_args, fn_kwargs in [
             ("mps_sigma", mps_sigma, [x, y], {}),
+            ("mps_bmnc", mps_bmnc, [x, y], {}),
             ("mps_bm", mps_bm.train_example, [x, y], {}),
         ]:
             r = test_latency(fn, 10, 100, device, *fn_args, **fn_kwargs)
