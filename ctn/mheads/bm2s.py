@@ -1,6 +1,10 @@
 import torch
 from tqdm import tqdm
-from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
+from ctn.mheads._abc import (
+    AbstractDisributionHead,
+    AbstractDisributionHeadConfig,
+    AbstractDisributionHeadOutput,
+)
 import torch.nn.functional as F
 
 from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
@@ -297,6 +301,7 @@ class BM(AbstractDisributionHead):
         y=None,
         ignore_index: int = -100,
         return_logits: bool = False,
+        eps_clamp: float = 1e-10,
     ):
         # Input validation
         assert x.ndim == 2, "x must be 2D (B, D)"
@@ -316,15 +321,30 @@ class BM(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
-        sl, sl_mask, sr, sr_mask, ml, ml_mask, mr, mr_mask = self.build_cache(x, y)
+        sl, sr, ml, mr = self.build_cache(x, y)
         g = self.g
 
         if y is not None:
-            g_yH = self.g[-1].gather(dim=1, index=y[:, -1:])  # (B, R, Do, R)
-            psi = torch.einsum("bi,ibj->b", sl[H - 1], g_yH)
-            z = torch.einsum(
-                "ip,idj,pdq,jq->", ml[H - 1], g[H - 1], g[H - 1], mr[H - 1]
+            h = H - 1
+
+            # Map: (R, D, R) -> (R, B, R)
+            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+            psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
+            z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
+
+            # if ((psi**2) > z).any():
+            #     print("WARNING: psi > z")
+            #     print(f"psi > z: {psi} > {z}")
+
+            loss = (
+                z.clamp(min=eps_clamp).log()
+                - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
             )
+
+            return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
+
+        return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
 
     def build_cache(self, x, y):
         # Precompute L and R

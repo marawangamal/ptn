@@ -120,7 +120,8 @@ def evaluate(model, val_loader, device, multitask=False):
     num_batches = 0
 
     with torch.no_grad():
-        for y, x in val_loader:
+        pbar = tqdm(val_loader, desc="Evaluating", leave=False)
+        for y, x in pbar:
             B = x.shape[0]
             z = (
                 F.one_hot(
@@ -136,6 +137,7 @@ def evaluate(model, val_loader, device, multitask=False):
             output = model(z, y.reshape(B, -1))
             total_loss += output.loss.item()
             num_batches += 1
+            pbar.set_postfix({"eval/loss": total_loss / num_batches})
 
     return total_loss / num_batches
 
