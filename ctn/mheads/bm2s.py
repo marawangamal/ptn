@@ -3,6 +3,8 @@ from tqdm import tqdm
 from ctn.mheads._abc import AbstractDisributionHead, AbstractDisributionHeadConfig
 import torch.nn.functional as F
 
+from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
+
 
 def pad_and_stack(seq, max_len):
     """Pad and stack a sequence of tensors.
@@ -28,6 +30,44 @@ def pad_and_stack(seq, max_len):
             )
         )
     return torch.stack(padded), torch.stack(mask)
+
+
+import torch
+import torch.nn.functional as F
+
+
+def pad_and_stack2d(seq, max_len=None, pad_value=0.0):
+    """Pad and stack a list of 2D (Di x Di) tensors.
+
+    Args:
+        seq: list[Tensor], each (Di, Di)
+        max_len: int or None — if None, inferred from seq
+        pad_value: scalar fill value for padding
+
+    Returns:
+        padded: (T, max_len, max_len)
+        mask:   (T, max_len, max_len) bool (True=valid)
+    """
+    if not seq:
+        raise ValueError("seq must be non-empty.")
+
+    if max_len is None:
+        max_len = max(x.size(0) for x in seq)
+
+    padded, masks = [], []
+    for x in seq:
+        h, w = x.shape
+        if h > max_len or w > max_len:
+            raise ValueError(f"item {h}x{w} exceeds max_len={max_len}")
+        pad_h, pad_w = max_len - h, max_len - w
+
+        # data
+        padded.append(F.pad(x, (0, pad_w, 0, pad_h), value=pad_value))
+        # mask: ones on data region, zeros on padding
+        m = torch.ones_like(x, dtype=torch.bool)
+        masks.append(F.pad(m, (0, pad_w, 0, pad_h), value=False))
+
+    return torch.stack(padded), torch.stack(masks)
 
 
 def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True):
@@ -71,6 +111,64 @@ def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True
             right_m,
             right_mask,
         )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
+    return torch.stack(left), torch.stack(right)
+
+
+def compute_lr_marginalization_cache_bm(g: torch.nn.ParameterList, pad: bool = True):
+    """Compute the left and right marginalization caches for the Born machine.
+
+    Args:
+        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
+
+    Returns:
+        torch.Tensor: Left term. Shape: (H, R).
+        torch.Tensor: Right term. Shape: (H, R).
+    """
+    _, H = g[1].shape[0], len(g)
+    dt, dv = g[0].dtype, g[0].device
+
+    # Map: (1, Do, R) -> (R,)
+    lh = torch.einsum("idj,pdq->jq", g[0], g[0])
+    R0 = g[0].shape[0]
+    left = [
+        torch.einsum(
+            "i,j->ij",
+            torch.ones(R0, dtype=dt, device=dv),
+            torch.ones(R0, dtype=dt, device=dv),
+        ),
+        lh,
+    ]
+    for h in range(1, H - 1):
+        lh = torch.einsum("ip,idj,pdq->jq", lh, g[h], g[h])
+        left.append(lh)
+
+    # Map: (R, Do, 1) -> (R,)
+    rh = torch.einsum("idj,pdq->ip", g[-1], g[-1])
+    RH = g[-1].shape[0]
+    right = [
+        torch.einsum(
+            "i,j->ij",
+            torch.ones(RH, dtype=dt, device=dv),
+            torch.ones(RH, dtype=dt, device=dv),
+        ),
+        rh,
+    ]
+    for h in range(H - 2, 0, -1):
+        rh = torch.einsum("idj,pdq,jq->ip", g[h], g[h], rh)
+        right.append(rh)
+    right.reverse()
+
+    if pad:
+        r_max = max([x.size(0) for x in left + right])
+        left_m, left_mask = pad_and_stack2d(left, max_len=r_max)
+        right_m, right_mask = pad_and_stack2d(right, max_len=r_max)
+
+        return (
+            left_m,
+            left_mask,
+            right_m,
+            right_mask,
+        )  # (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax)
     return torch.stack(left), torch.stack(right)
 
 
@@ -193,15 +291,84 @@ class BM(AbstractDisributionHead):
             assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=1e-6)
         # print("[PASS] MPS is in right-canonical format")
 
-    def g_dot(self, h: int):
-        return self.g[h].sum(dim=1)
-
     def forward(
         self,
-        x: torch.Tensor,
-        y: torch.Tensor,
+        x,
+        y=None,
+        ignore_index: int = -100,
+        return_logits: bool = False,
     ):
-        raise NotImplementedError("Forward does not exist for BornMachineUnconditional")
+        # Input validation
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
+        assert (
+            y is None or y.size(1) == self.config.horizon
+        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
+        dt, dv = x.dtype, x.device
+
+        B, R, H, V = (
+            x.size(0),
+            self.config.rank,
+            self.config.horizon,
+            self.config.d_output,
+        )
+        loss = None
+        self.sig = (
+            lambda x: x
+        )  # left for user to override (i.e. when using born machine)
+        sl, sl_mask, sr, sr_mask, ml, ml_mask, mr, mr_mask = self.build_cache(x, y)
+        g = self.g
+
+        if y is not None:
+            g_yH = self.g[-1].gather(dim=1, index=y[:, -1:])  # (B, R, Do, R)
+            psi = torch.einsum("bi,ibj->b", sl[H - 1], g_yH)
+            z = torch.einsum(
+                "ip,idj,pdq,jq->", ml[H - 1], g[H - 1], g[H - 1], mr[H - 1]
+            )
+
+    def build_cache(self, x, y):
+        # Precompute L and R
+        B, R, Do, H = (
+            x.shape[0],
+            self.config.rank,
+            self.config.d_output,
+            self.config.horizon,
+        )
+        dt, dv = x.dtype, x.device
+        g = self.g  # MPS cores list H x (R, Do, R)
+
+        # Precomputes left/right selection and marginalization caches
+        # NEW:
+        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
+            g, y
+        )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
+        ml, ml_mask, mr, mr_mask = compute_lr_marginalization_cache_bm(
+            g
+        )  # (H, R', R'), (H, R', R'), (H, R', R'), (H, R', R')
+
+        # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
+        sl = [
+            sl[:, h, : sl_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+        sr = [
+            sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+        ml = [
+            ml[h, : ml_mask[h][:, 0].sum().long(), : ml_mask[h][:, 0].sum().long()]
+            for h in range(H)
+        ]  # (H, R) -> H x (R,)
+        mr = [
+            mr[h, : mr_mask[h][:, 0].sum().long(), : mr_mask[h][:, 0].sum().long()]
+            for h in range(H)
+        ]  # (H, R) -> H x (R,)
+
+        # Boundary Corrections:
+        sl[0] = sl[0][:, :1]
+        ml[0] = ml[0][:1]
+        sr[-1] = sr[-1][:, :1]
+        mr[-1] = mr[-1][:1]
+
+        return sl, sr, ml, mr
 
     def train_example(
         self,
@@ -210,7 +377,7 @@ class BM(AbstractDisributionHead):
         n_sweeps: int = 1,
         eps_clamp: float = 1e-10,
         lr: float = 1e-3,
-        eps_trunc: float = 1e-3,
+        eps_trunc: float = 1e-10,
     ):
         """Train the model for one step.
 
@@ -234,32 +401,11 @@ class BM(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-
-        # Precomputes left/right selection and marginalization caches
-        # NEW:
-        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
-            g, y
-        )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
-        ml, ml_mask, mr, mr_mask = compute_lr_marginalization_cache(g)  # (H, R), (H, R)
-
-        # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
-        sl = [
-            sl[:, h, : sl_mask[0, h].sum().long()] for h in range(H)
-        ]  # (H, B, R) -> H x (B, R)
-        sr = [
-            sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
-        ]  # (H, B, R) -> H x (B, R)
-        ml = [ml[h, : ml_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
-        mr = [mr[h, : mr_mask[h].sum().long()] for h in range(H)]  # (H, R) -> H x (R,)
-
-        # Boundary Corrections:
-        sl[0] = sl[0][:, :1]
-        ml[0] = ml[0][:1]
-        sr[-1] = sr[-1][:, :1]
-        mr[-1] = mr[-1][:1]
+        sl, sr, ml, mr = self.build_cache(x, y)
 
         going_right = True
         losses = []
+        # BUG: m[k] = 0 for all k, m[0] should never be 0 and always be 1
         for n_sweeps in range(n_sweeps):
             for h in range(H - 1) if going_right else range(H - 1, -1, -1):
                 Rl, Rr = g[h].size(0), g[h + 1].size(-1)
@@ -272,10 +418,27 @@ class BM(AbstractDisributionHead):
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
                 psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-                z = torch.einsum("i,ij,j->", ml[h], self.g_dot(h), mr[h])
+                z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
 
-                losses.append(z.log() - (psi**2).log().mean())
+                # if ((psi**2) > z).any():
+                #     print("WARNING: psi > z")
+                #     print(f"psi > z: {psi} > {z}")
+
+                loss = (
+                    z.clamp(min=eps_clamp).log()
+                    - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
+                )
+                losses.append(loss)
+                # if loss < 0:
+                #     print(f"Loss is negative: {loss}")
+                #     print(f"z: {z}")
+                #     print(f"psi: {psi}")
+                #     print(f"g_tilde: {g_tilde}")
+                #     print(f"sl: {sl}")
+                #     print(f"sr: {sr}")
+                #     print(f"ml: {ml}")
+                #     print(f"mr: {mr}")
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
                 i_h = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
@@ -317,7 +480,7 @@ class BM(AbstractDisributionHead):
                         # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
                         # But sr, mr will be invalid everywhere. Thankfully we wont need sr, mr on initial leftwards sweep.
                         sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
-                        ml[h + 1] = torch.einsum("i,ij->j", ml[h], g[h].sum(dim=1))
+                        ml[h + 1] = torch.einsum("ip,idj,pdq->jq", ml[h], g[h], g[h])
 
                     # TODO: left sweep
                     # else:  # going left

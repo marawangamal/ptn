@@ -117,7 +117,7 @@ def profile_bm():
 
 def sweep():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
+    device = torch.device("cpu")
     print(f"Using device: {device}")
 
     # FIXED PARAMETERS (baseline config)
@@ -127,22 +127,22 @@ def sweep():
     horizons = [8, 16, 32]
     d_outputs = [8, 16, 32]
     # DEBUG SWEEP PARAMETERS
-    horizons = [25, 50, 75, 100]
+    horizons = [128]
     d_outputs = []
 
     results = []
 
     # Helper to run one config
     def run_config(R, H, Di, Do, sweep_type, sweep_value):
-        mps_sigma = (
-            MHEADS["mps"](
-                config=AbstractDisributionHeadConfig(
-                    rank=R, d_model=Di, d_output=Do, horizon=H
-                )
-            )
-            .to(device)
-            .eval()
-        )
+        # mps_sigma = (
+        #     MHEADS["mps"](
+        #         config=AbstractDisributionHeadConfig(
+        #             rank=R, d_model=Di, d_output=Do, horizon=H
+        #         )
+        #     )
+        #     .to(device)
+        #     .eval()
+        # )
 
         mps_bm = (
             MHEADS["bm"](
@@ -168,7 +168,7 @@ def sweep():
         y = torch.randint(0, Do, (B, H), device=device)
 
         for fn_name, fn, fn_args, fn_kwargs in [
-            ("mps_sigma", mps_sigma, [x, y], {}),
+            # ("mps_sigma", mps_sigma, [x, y], {}),
             ("mps_bmnc", mps_bmnc, [x, y], {}),
             ("mps_bm", mps_bm.train_example, [x, y], {}),
         ]:
