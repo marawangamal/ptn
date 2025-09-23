@@ -398,6 +398,7 @@ class BM(AbstractDisributionHead):
         eps_clamp: float = 1e-10,
         lr: float = 1e-3,
         eps_trunc: float = 1e-10,
+        max_bond_dim: int = 32,
     ):
         """Train the model for one step.
 
@@ -482,7 +483,9 @@ class BM(AbstractDisributionHead):
                     # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
                     # end of the rightwards sweep.
                     if going_right:
-                        Rtrunc = (s / s.abs().max() > eps_trunc).sum() or 1
+                        Rtrunc = min(
+                            max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1
+                        )
                         g[h] = u.reshape(Rl, Do, u.size(-1))[
                             :, :, :Rtrunc
                         ]  # (R, Do, R)
