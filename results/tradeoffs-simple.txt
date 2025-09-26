@@ -1,7 +1,0 @@
-Optimization	Model	Adaptive	Fast	ME	PLL	Stable
-2-DMRG	$\mathrm{MPS}_\mathrm{BM}$	\checkmark	x	x	x	\checkmark
-1-DMRG	$\mathrm{MPS}_\mathrm{BM}$	x	x	x	\checkmark	\checkmark
-GD	$\mathrm{MPS}_\mathrm{BM}$	x	\checkmark	\checkmark	\checkmark	x
-GD	$\mathrm{MPS}_\sigma$	x	\checkmark	\checkmark	\checkmark	x
-LSF (ours)	$\mathrm{MPS}_\mathrm{BM}$	x	\checkmark	\checkmark	\checkmark	\checkmark
-LSF (ours)	$\mathrm{MPS}_\sigma$	x	\checkmark	\checkmark	\checkmark	\checkmark
