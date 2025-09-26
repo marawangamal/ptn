@@ -1,4 +1,4 @@
-from ctn.mheads.bm import BM
+from ctn.mheads.bm2s import BM
 from ctn.mheads.mps import MPS
 from ctn.mheads.moe import MoE
 from ctn.mheads.cp import CP
@@ -11,5 +11,5 @@ MHEADS = {
     "moe": MoE,  # Mixture of Experts
     "mps": MPS,  # Matrix Product State
     "bm": BM,  # Born Machine Canonical Form w/ DMRG)
-    "bmnc": BMNC,  # Born Machine (
+    "bmnc": BMNC,  # Born Machine (Born Machine Non-Canonical Form w/ LogSF algo)
 }

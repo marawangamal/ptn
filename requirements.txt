@@ -5,7 +5,8 @@ opt_einsum
 setuptools
 wheel
 seaborn
-# numpy
+numpy
+scikit-learn
 # pandas
 # lightning
 # tiktoken

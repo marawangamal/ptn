@@ -149,9 +149,9 @@ class MPS(AbstractDisributionHead):
             )
 
             if len(gammas_p) == 0:
-                gammas_p = [torch.ones(B)]
+                gammas_p = [torch.ones(B, dtype=x.dtype, device=x.device)]
             if len(gammas_z) == 0:
-                gammas_z = [torch.ones(B)]
+                gammas_z = [torch.ones(B, dtype=x.dtype, device=x.device)]
 
             gammas_p = torch.stack(gammas_p, dim=-1)
             gammas_z = torch.stack(gammas_z, dim=-1)  # (B, H)

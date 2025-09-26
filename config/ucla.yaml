@@ -10,7 +10,7 @@ preambles:
     - "#SBATCH --mem=32G"
     - "#SBATCH --cpus-per-task=8"
     - "#SBATCH --nodes=1"
-    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+    - "source /home/mila/m/marawan.gamal/scratch/ctn/.venv/bin/activate"
 
 
   clong:   
@@ -21,7 +21,7 @@ preambles:
     - "#SBATCH --mem=32G"
     - "#SBATCH --cpus-per-task=8"
     - "#SBATCH --nodes=1"
-    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+    - "source /home/mila/m/marawan.gamal/scratch/ctn/.venv/bin/activate"
 
 group:
   name: "main"
@@ -29,34 +29,54 @@ group:
   jobs:
 
     - group:
-        name: "ucla::moe"
+        name: "ucla::mps"
         type: sweep
-        preamble: clong
+        preamble: glong
         sweep:
-          lr: [1e-3]
-          rank: [8, 32, 64]
-          model: ["moe"]
+          lr: [5e-3]
+          rank: [32]
+          model: ["mps"]
+          sf: [1]
           dataset: [
-              "nltcs",
-              "msnbc",
-              "kdd",
-              "plants",
-              "baudio",
+              # "nltcs",
+              # "msnbc",
+              # "kdd",
+              # "plants",
+              # "baudio",
               # "jester",
               # "bnetflix",
               # "accidents",
-              # "retail",        # actually `tretail` in repo
+              # "mushrooms",
+              # "adult",
+              # "connect4",
+              # "ocr_letters",
+              # "rcv1",
+              # "tretail",
               # "pumsb_star",
               # "dna",
               # "kosarek",
-              # "msweb",         # actually `MSWeb` in repo
+              "msweb",
+              # "nips",
               # "book",
-              # "eachmovie",     # actually `tmovie` in repo
-              # "webkb",         # actually `cwebkb` in repo
-              # "reuters_52",    # actually `cr52` in repo
-              # "20news",        # actually `c20ng` in repo
+              # "tmovie",
+              # "cwebkb",
+              # "cr52",
+              "c20ng",
+              # "moviereview",
               # "bbc",
-              # "ad",            # actually `adult` in repo
+              # "voting",
+              # "ad",
+              # "binarized_mnist",
+      
           ]
-        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --epochs 10"
+        sweep_template: "python scripts/train_ucla.py --lr {lr} --rank {rank} --model {model} --dataset {dataset} --sf {sf} --epochs 50 --tags scale_factor v2"
 
+
+    # - group:
+    #     name: "ucla::mps::sf0"
+    #     type: parallel
+    #     jobs:
+    #       - job:
+    #           preamble: glong
+    #           command: "python scripts/train_ucla.py --lr 5e-3 --rank 32 --model mps --dataset nltcs --sf 0 --epochs 50 --tags scale_factors v2"
+              

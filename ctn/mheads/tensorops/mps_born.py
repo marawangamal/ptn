@@ -3,7 +3,7 @@ import torch
 
 
 def born_mps_marginalize(
-    g: torch.Tensor, a: torch.Tensor, b: torch.Tensor, use_scale_factors: bool = False
+    g: torch.Tensor, a: torch.Tensor, b: torch.Tensor, use_scale_factors: bool = True
 ):
     """Marginalize a Born MPS tensor.
 
@@ -14,16 +14,16 @@ def born_mps_marginalize(
         torch.Tensor: Marginalized tensor. Shape: (1,)
     """
     H, _, _, _ = g.shape
-    scale_factors = [torch.tensor(1.0)]
+    scale_factors = []
     L = torch.einsum("p,pdq,r,rds->qs", a, g[0], a, g[0])
     for h in range(1, H):
-        L = torch.einsum("pdq,qr,rds ->ps", g[h], L, g[h])
+        L = torch.einsum("pdq,pr,rds ->qs", g[h], L, g[h])
         if use_scale_factors:
             sf = L.abs().max()
             scale_factors.append(sf)
-            L /= sf
+            L = L / sf
     L = torch.einsum("pq,p,q->", L, b, b)
-    return L, torch.stack(scale_factors)
+    return L, torch.stack(scale_factors)  # (1,), (H,)
 
 
 def born_mps_select(

@@ -40,7 +40,13 @@ def collate_fn(batch):
     return x, y
 
 
-def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
+def get_data_loaders(
+    batch_size=32,
+    data_dir="./data",
+    dataset="nltcs",
+    conditional=False,
+    max_samples=None,
+):
     """Create MNIST data loaders with binary thresholding."""
 
     URI = "https://raw.githubusercontent.com/UCLA-StarAI/Density-Estimation-Datasets/refs/heads/master/datasets/"
@@ -114,7 +120,7 @@ def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
             "train": URI + "reuters_52/reuters_52.train.data",
             "val": URI + "reuters_52/reuters_52.test.data",
         },
-        "20news": {
+        "c20ng": {
             "train": URI + "c20ng/c20ng.train.data",
             "val": URI + "c20ng/c20ng.test.data",
         },
@@ -125,6 +131,54 @@ def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
         "ad": {
             "train": URI + "ad/ad.train.data",
             "val": URI + "ad/ad.test.data",
+        },
+        "nips": {
+            "train": URI + "nips/nips.train.data",
+            "val": URI + "nips/nips.test.data",
+        },
+        "voting": {
+            "train": URI + "voting/voting.train.data",
+            "val": URI + "voting/voting.test.data",
+        },
+        "moviereview": {
+            "train": URI + "moviereview/moviereview.train.data",
+            "val": URI + "moviereview/moviereview.test.data",
+        },
+        "mushrooms": {
+            "train": URI + "mushrooms/mushrooms.train.data",
+            "val": URI + "mushrooms/mushrooms.test.data",
+        },
+        "cwebkb": {
+            "train": URI + "cwebkb/cwebkb.train.data",
+            "val": URI + "cwebkb/cwebkb.test.data",
+        },
+        "tmovie": {
+            "train": URI + "tmovie/tmovie.train.data",
+            "val": URI + "tmovie/tmovie.test.data",
+        },
+        "adult": {
+            "train": URI + "adult/adult.train.data",
+            "val": URI + "adult/adult.test.data",
+        },
+        "cr52": {
+            "train": URI + "cr52/cr52.train.data",
+            "val": URI + "cr52/cr52.test.data",
+        },
+        "connect4": {
+            "train": URI + "connect4/connect4.train.data",
+            "val": URI + "connect4/connect4.test.data",
+        },
+        "ocr_letters": {
+            "train": URI + "ocr_letters/ocr_letters.train.data",
+            "val": URI + "ocr_letters/ocr_letters.test.data",
+        },
+        "rcv1": {
+            "train": URI + "rcv1/rcv1.train.data",
+            "val": URI + "rcv1/rcv1.test.data",
+        },
+        "tretail": {
+            "train": URI + "tretail/tretail.train.data",
+            "val": URI + "tretail/tretail.test.data",
         },
     }
 
@@ -147,10 +201,19 @@ def get_data_loaders(batch_size=32, data_dir="./data", dataset="nltcs"):
     x_train = torch.from_numpy(x_train)
     x_val = torch.from_numpy(x_val)
 
+    if max_samples is not None:
+        x_train = x_train[:max_samples]
+
     D = x_train.shape[1]
     cols = torch.randperm(D)
-    x_train, y_train = x_train[:, cols[: D // 2]], x_train[:, cols[D // 2 :]]
-    x_val, y_val = x_val[:, cols[: D // 2]], x_val[:, cols[D // 2 :]]
+    if conditional:
+        x_train, y_train = x_train[:, cols[: D // 2]], x_train[:, cols[D // 2 :]]
+        x_val, y_val = x_val[:, cols[: D // 2]], x_val[:, cols[D // 2 :]]
+    else:
+        y_train = x_train.clone()
+        y_val = x_val.clone()
+        x_train = torch.ones(x_train.shape[0], 1, device=x_train.device).float()
+        x_val = torch.ones(x_val.shape[0], 1, device=x_val.device).float()
 
     train_set = torch.utils.data.TensorDataset(x_train, y_train)
     val_set = torch.utils.data.TensorDataset(x_val, y_val)
@@ -229,7 +292,7 @@ def evaluate(model, val_loader, device, num_classes):
 
 
 def build_exp_name(args: argparse.Namespace):
-    ignore_keys = ["seed", "sample", "debug"]
+    ignore_keys = ["seed", "sample", "debug", "tags"]
     abbrev_map = {}
     parts = []
     for k, v in args.__dict__.items():
@@ -249,12 +312,15 @@ def set_seeds(seed):
 
 def main():
     parser = argparse.ArgumentParser(description="Train MHEADS on ModelNet40")
-    parser.add_argument("--model", default="cp")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--model", default="mps")
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
-    parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument("--sf", type=int, default=1, help="Scale factor")
+    parser.add_argument(
+        "--pos_func", type=str, default="exp", help="exponential function"
+    )
     parser.add_argument(
         "--num_gen_images",
         type=int,
@@ -272,10 +338,14 @@ def main():
     )
     parser.add_argument("--dataset", type=str, default="nltcs")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--conditional", action="store_true", help="Conditional model")
+    parser.add_argument("--tags", type=str, nargs="*", default=[])
     args = parser.parse_args()
 
     # Initialize wandb
-    wandb.init(project="ctn-ucla", name=build_exp_name(args), config=vars(args))
+    wandb.init(
+        project="ctn-ucla", name=build_exp_name(args), config=vars(args), tags=args.tags
+    )
     set_seeds(args.seed)
 
     # Setup
@@ -284,32 +354,40 @@ def main():
     print(f"Using device: {device}")
 
     # Data
-    train_loader, val_loader = get_data_loaders(args.batch_size, dataset=args.dataset)
+    train_loader, val_loader = get_data_loaders(
+        args.batch_size,
+        dataset=args.dataset,
+        conditional=args.conditional,
+        max_samples=args.max_samples,
+    )
 
-    # Limit training data for quick testing
-    if args.max_samples is not None:
-        train_dataset = train_loader.dataset
-        train_dataset.data = train_dataset.data[: args.max_samples]
-        train_dataset.targets = train_dataset.targets[: args.max_samples]
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=args.batch_size, shuffle=True
-        )
+    # # Limit training data for quick testing
+    # if args.max_samples is not None:
+    #     train_dataset = train_loader.dataset
+    #     train_dataset.data = train_dataset.data[: args.max_samples]
+    #     train_dataset.targets = train_dataset.targets[: args.max_samples]
+    #     train_loader = torch.utils.data.DataLoader(
+    #         train_dataset, batch_size=args.batch_size, shuffle=True
+    #     )
 
     # Model
     test_batch = next(iter(train_loader))
-    horizon = test_batch[0].shape[1]
+    horizon = test_batch[1].shape[1]
     num_classes = 2
     model = MHEADS[args.model](
         AbstractDisributionHeadConfig(
             horizon=test_batch[1].shape[1],  # horizon is num bits to predict
-            d_model=test_batch[0].shape[1],  # input is bit-vector
+            d_model=(
+                1 if not args.conditional else test_batch[0].shape[1]
+            ),  # input is bit-vector for conditional model
             d_output=2,  # binary
             rank=args.rank,
             pos_func=args.pos_func,
+            use_scale_factors=args.sf >= 1,
         )
     )
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # Training loop
     print(f"Training samples: {len(train_loader.dataset)}")

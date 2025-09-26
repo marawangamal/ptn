@@ -1,0 +1,12 @@
+Optimization	Model	Cano	Adaptive	Fast	ME	PLL	Stable 
+2-DMRG	$\mathrm{MPS}_\mathrm{BM}$	Yes	\checkmark	x	x	x	\checkmark 
+2-DMRG	$\mathrm{MPS}_\mathrm{BM}$	No	\checkmark	x	x	\checkmark	\checkmark 
+2-DMRG	$\mathrm{MPS}_\sigma$	Yes	\checkmark	x	x	x	x 
+2-DMRG	$\mathrm{MPS}_\sigma$	No	\checkmark	x	x	x	x 
+1-DMRG	$\mathrm{MPS}_\mathrm{BM}$	Yes	x	x	x	\checkmark	\checkmark 
+1-DMRG	$\mathrm{MPS}_\sigma$	Yes	x	x	x	x	x 
+1-DMRG	$\mathrm{MPS}_\sigma$	No	x	x	x	x	x 
+GD	$\mathrm{MPS}_\mathrm{BM}$	No	x	\checkmark	\checkmark	\checkmark	x 
+GD	$\mathrm{MPS}_\sigma$	No	x	\checkmark	\checkmark	\checkmark	x 
+LSF	$\mathrm{MPS}_\mathrm{BM}$	No	x	\checkmark	\checkmark	\checkmark	\checkmark 
+LSF	$\mathrm{MPS}_\sigma$	No	x	\checkmark	\checkmark	\checkmark	\checkmark 

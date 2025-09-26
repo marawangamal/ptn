@@ -12,24 +12,35 @@ preambles:
     - "#SBATCH --nodes=1"
     - "source /home/mila/m/marawan.gamal/scratch/ctn/.venv/bin/activate"
 
+  glongTamia:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --gres=gpu:4"
+    - "#SBATCH --mem=32G"
+    - "source /scratch/m/mgamal/ctn/.venv/bin/activate"
+
 group:
   name: "main"
   type: parallel
   jobs:
 
     - group:
-        name: "ctn::mps"
+        name: "ctn"
         type: sweep
         preamble: glong
         sweep:
           # so far tried from 1e-3 --  4e-3, 8e-3
-          lr: [8e-3]
-          rank: [8]
-          model: ["mps"]
+          lr: [1e-3, 5e-4, 1e-4]
+          rank: [8, 32]
+          model: ["bmnc"]
           pos_func: ["exp"]
-        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --epochs 50 --tags fast_gen"
+          mode: ["multitask"]
+          scale: [28]
+        sweep_template: "python scripts/train_mnist.py --lr {lr} --rank {rank} --model {model} --pos_func {pos_func} --scale {scale} --mode {mode} --epochs 50"
 
     # - group:
+    # mmps_e50_l0004_b32_r8_pexp_irandn_l00_n10_mNone_sFalse
     #     name: "ctn::mnist::mps"
     #     type: sweep
     #     preamble: glong
