@@ -8,7 +8,7 @@
 
 
 <div align="center" style="display:flex; justify-content:center; gap:32px; align-items:center;">
-  <img src="images/untitled.png"    alt="Model Overview" style="width:40%; height:auto; max-width:100%; display:block;">
+  <img src="images/mps-ptn.png"    alt="Model Overview" style="width:40%; height:auto; max-width:100%; display:block;">
   <img src="images/mps-profile.png"  alt="MPS Profile"   style="width:20%; height:auto; max-width:100%; display:block;">
 </div>
 
