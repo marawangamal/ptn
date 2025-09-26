@@ -477,6 +477,10 @@ class BM(AbstractDisributionHead):
                     g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
                 )
 
+                if not g_tilde.isfinite().all():
+                    print(f"NaN in g_tilde")
+                    raise ValueError("NaN in g_tilde")
+
                 # Now we need to re-canonicalize and update left / right caches
                 with torch.no_grad():
                     # NOTE: We are going right, so everything in front is right canonicalized. However, we need to

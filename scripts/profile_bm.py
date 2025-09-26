@@ -134,20 +134,33 @@ def sweep():
 
     # Helper to run one config
     def run_config(R, H, Di, Do, sweep_type, sweep_value):
-        # mps_sigma = (
-        #     MHEADS["mps"](
-        #         config=AbstractDisributionHeadConfig(
-        #             rank=R, d_model=Di, d_output=Do, horizon=H
-        #         )
-        #     )
-        #     .to(device)
-        #     .eval()
-        # )
+        mps_sigma = (
+            MHEADS["mps"](
+                config=AbstractDisributionHeadConfig(
+                    rank=R, d_model=Di, d_output=Do, horizon=H
+                )
+            )
+            .to(device)
+            .eval()
+        )
+
+        mps_sigma_sf = (
+            MHEADS["mps"](
+                config=AbstractDisributionHeadConfig(
+                    rank=R, d_model=Di, d_output=Do, horizon=H
+                )
+            )
+            .to(device)
+            .eval()
+        )
 
         mps_bm = (
             MHEADS["bm"](
                 config=AbstractDisributionHeadConfig(
-                    rank=R, d_model=Di, d_output=Do, horizon=H
+                    rank=R,
+                    d_model=Di,
+                    d_output=Do,
+                    horizon=H,
                 )
             )
             .to(device)
@@ -168,8 +181,9 @@ def sweep():
         y = torch.randint(0, Do, (B, H), device=device)
 
         for fn_name, fn, fn_args, fn_kwargs in [
-            # ("mps_sigma", mps_sigma, [x, y], {}),
-            ("mps_bmnc", mps_bmnc, [x, y], {}),
+            ("mps_sigma", mps_sigma, [x, y], {}),
+            ("mps_sigma_sf", mps_sigma_sf, [x, y], {}),
+            # ("mps_bmnc", mps_bmnc, [x, y], {}),
             ("mps_bm", mps_bm.train_example, [x, y], {}),
         ]:
             r = test_latency(fn, 10, 100, device, *fn_args, **fn_kwargs)

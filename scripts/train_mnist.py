@@ -194,6 +194,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument("--sf", type=int, default=1, help="Scale factor")
     parser.add_argument(
         "--init_method", type=str, default="randn", help="Initialization method"
     )
@@ -261,6 +262,7 @@ def main():
             pos_func=args.pos_func,
             lambda_ortho=args.lambda_ortho,
             init_method=args.init_method,
+            use_scale_factors=args.sf >= 1,
         )
     )
     model.to(device)
