@@ -3,7 +3,6 @@ import torch
 import pandas as pd
 from tqdm import tqdm
 
-
 import time
 import pandas as pd
 from tqdm import tqdm
@@ -20,8 +19,6 @@ def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):
 
     if device is not None and device.type == "cuda":
         torch.cuda.synchronize()
-        # Simple memory tracking: just use peak memory before and after
-        torch.cuda.reset_peak_memory_stats()
         start_time = time.time()
         try:
             for _ in range(n_iters):
@@ -34,13 +31,8 @@ def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):
             print(e)
         torch.cuda.synchronize()
         end_time = time.time()
-        peak_mem = torch.cuda.max_memory_allocated()
         results["latency"] = (end_time - start_time) / n_iters  # seconds
-        results["peak_memory_MB"] = peak_mem / (1024**2)
     else:
-        import tracemalloc
-
-        tracemalloc.start()
         start_time = time.time()
         for _ in range(n_iters):
             if hasattr(fn, "train_example"):
@@ -48,10 +40,7 @@ def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):
             else:
                 fn(*args, **kwargs)
         end_time = time.time()
-        current, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
         results["latency"] = (end_time - start_time) / n_iters  # seconds
-        results["peak_memory_MB"] = peak / (1024**2)
 
     return results
 
@@ -92,6 +81,7 @@ def sweep(
                     d_output=Do,
                     horizon=H,
                     ignore_canonical=True,
+                    use_scale_factors=False,
                 )
             ).to(device)
             r = test_latency(model, n_warmup, n_iters, device, x, y)
@@ -132,10 +122,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["mps", "bmnc", "bm"],
+        default=["mps", "bm"],
     )
-    parser.add_argument("--horizons", nargs="+", default=[8, 16, 32], type=int)
-    parser.add_argument("--d_outputs", nargs="+", default=[8, 16, 32], type=int)
+    parser.add_argument("--horizons", nargs="+", default=[], type=int)
+    parser.add_argument("--d_outputs", nargs="+", default=[], type=int)
     parser.add_argument("--device", type=str, default=None)
     args = parser.parse_args()
     sweep(**args.__dict__)
