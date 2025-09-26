@@ -265,7 +265,8 @@ class BM(AbstractDisributionHead):
 
     def __init__(self, config: AbstractDisributionHeadConfig):
         super().__init__(config)
-        config.rank = 2  # initially set to rank 2
+        if not config.ignore_canonical:
+            config.rank = 2  # initially set to rank 2
         H, R, Di, Do = (
             config.horizon,
             config.rank,
@@ -290,6 +291,8 @@ class BM(AbstractDisributionHead):
         self.assert_right_canonical()
 
     def assert_right_canonical(self):
+        if self.config.ignore_canonical:
+            return
         for h in range(len(self.g) - 1, 0, -1):
             w = self.g[h].reshape(self.g[h].size(0), -1)  # (R, Do*R)
             assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=1e-6)
@@ -428,7 +431,7 @@ class BM(AbstractDisributionHead):
         losses = []
         # BUG: m[k] = 0 for all k, m[0] should never be 0 and always be 1
         for n_sweeps in range(n_sweeps):
-            for h in range(H - 1) if going_right else range(H - 1, -1, -1):
+            for h in range(1, H - 1) if going_right else range(H - 1, -1, -1):
                 Rl, Rr = g[h].size(0), g[h + 1].size(-1)
 
                 # Freeze all cores except h
