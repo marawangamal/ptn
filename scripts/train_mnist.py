@@ -189,11 +189,13 @@ def set_seed(seed=42):
 def main():
     parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
     parser.add_argument("--model", default="mps")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
-    parser.add_argument("--pos_func", type=str, default="abs", help="Position function")
+    parser.add_argument(
+        "--pos_func", type=str, default="exp", help="Positivity function"
+    )
     parser.add_argument("--sf", type=int, default=1, help="Scale factor")
     parser.add_argument(
         "--init_method", type=str, default="randn", help="Initialization method"
@@ -220,8 +222,8 @@ def main():
         "--scale", type=int, default=28, help="Rescale images to (scale, scale)"
     )
     parser.add_argument(
-        "--mode", type=str, default="single", choices=["multitask", "single"]
-    )  # multitask: separate dist for each digit
+        "--mode", type=str, default="multitask", choices=["multitask", "single"]
+    )
     parser.add_argument("--sample", action="store_true", help="Sample from the model")
 
     args = parser.parse_args()

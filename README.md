@@ -1,35 +1,53 @@
-# Conditional Tensor Networks
+<h1 align="center">Efficient Probabilistic Tensor Networks</h1>
 
-Modelling high dimensional conditional distributions using tensor networks.
+<p align="center">
+  Train <strong>probabilistic tensor networks (PTNs)</strong> with
+  <strong>logarithmic scale factors (LSF)</strong> for
+  <strong>stable</strong> and <strong>fast</strong> learning.
+</p>
 
-## Quick Start
+
+<div align="center" style="display:flex; justify-content:center; gap:32px; align-items:center;">
+  <img src="images/untitled.png"    alt="Model Overview" style="width:40%; height:auto; max-width:100%; display:block;">
+  <img src="images/mps-profile.png"  alt="MPS Profile"   style="width:20%; height:auto; max-width:100%; display:block;">
+</div>
+
+
+## Installation
 
 **Requirements:** Python 3.10+
 
 ```bash
 # Install dependencies
+# (optional) python -m venv .venv
 pip install --upgrade pip
 pip install -r requirements.txt
 pip install -e .
-
-# Train MNIST model with MPS architecture
-python scripts/train_mnist.py --model mps --rank 32 --pos_func eps
+# optional logging
+pip install wandb && wandb login
 ```
 
-Results will be logged to wandb.
-
-## Available Models
-
-The framework supports various tensor network architectures including:
-- MPS (Matrix Product States)
-- CP (Canonical Polyadic)
-
-## Example Usage
-
-Train a model on MNIST dataset with MPS architecture:
+## Training
+Train $\mathrm{MPS}_{\sigma+\mathrm{LSF}}$
 ```bash
-python scripts/train_mnist.py --model mps --rank 32 --pos_func exp
+
+# Train on MNIST
+python scripts/train_mnist.py --model mps --rank 8 --pos_func exp
+
+# Train on UCLA datasets
+python scripts/train_ucla.py --dataset nltcs --model mps --lr 5e-3  --rank 32 --pos_func abs
 ```
 
-This command trains a Matrix Product State model with rank 32 using the exponential function for positivity on the MNIST dataset.
+Train $\mathrm{MPS}_{\mathrm{BM+LSF}}$ models
+```bash
 
+# Train on MNIST
+python scripts/train_mnist.py --model bmnc --rank 8
+
+# Train on UCLA datasets
+python scripts/train_ucla.py --dataset nltcs --model bmnc --lr 5e-3  --rank 32
+```
+
+## Evaluation
+
+All training and validation metrics are automatically tracked and logged to [Weights & Biases (Wandb)](https://wandb.ai/).
