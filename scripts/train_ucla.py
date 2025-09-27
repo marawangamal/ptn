@@ -12,8 +12,8 @@ import wandb
 import numpy as np
 from urllib.request import urlretrieve, urlopen
 
-from ctn.mheads._abc import AbstractDisributionHeadConfig
-from ctn.mheads import MHEADS
+from ptn.dists._abc import AbstractDisributionHeadConfig
+from ptn.dists import dists
 
 
 import numpy as np
@@ -311,7 +311,7 @@ def set_seeds(seed):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train MHEADS on ModelNet40")
+    parser = argparse.ArgumentParser(description="Train dists on ModelNet40")
     parser.add_argument("--model", default="mps")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -344,7 +344,7 @@ def main():
 
     # Initialize wandb
     wandb.init(
-        project="ctn-ucla", name=build_exp_name(args), config=vars(args), tags=args.tags
+        project="ptn-ucla", name=build_exp_name(args), config=vars(args), tags=args.tags
     )
     set_seeds(args.seed)
 
@@ -374,7 +374,7 @@ def main():
     test_batch = next(iter(train_loader))
     horizon = test_batch[1].shape[1]
     num_classes = 2
-    model = MHEADS[args.model](
+    model = dists[args.model](
         AbstractDisributionHeadConfig(
             horizon=test_batch[1].shape[1],  # horizon is num bits to predict
             d_model=(

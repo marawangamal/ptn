@@ -10,8 +10,8 @@ from tqdm import tqdm
 import wandb
 import numpy as np
 
-from ctn.mheads._abc import AbstractDisributionHeadConfig
-from ctn.mheads import MHEADS
+from ptn.dists._abc import AbstractDisributionHeadConfig
+from ptn.dists import dists
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
@@ -187,7 +187,7 @@ def set_seed(seed=42):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train MNIST model with MHEADS")
+    parser = argparse.ArgumentParser(description="Train MNIST model with dists")
     parser.add_argument("--model", default="mps")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -230,7 +230,7 @@ def main():
 
     # Initialize wandb
     wandb.init(
-        project="ctn", name=build_exp_name(args), config=vars(args), tags=args.tags
+        project="ptn", name=build_exp_name(args), config=vars(args), tags=args.tags
     )
 
     # Setup
@@ -255,7 +255,7 @@ def main():
     print(f"Validation samples: {len(val_loader.dataset)}")
 
     # Model
-    model = MHEADS[args.model](
+    model = dists[args.model](
         AbstractDisributionHeadConfig(
             horizon=(args.scale * args.scale),  # 28x28 for MNIST
             d_model=10,
