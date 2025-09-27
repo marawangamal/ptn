@@ -2,7 +2,7 @@ from typing import Callable, Optional
 
 import torch
 
-from ptn.mheads._abc import (
+from ptn.dists._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,

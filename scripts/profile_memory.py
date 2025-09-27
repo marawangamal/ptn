@@ -1,7 +1,7 @@
 import argparse
 import torch
-from ptn.mheads import MHEADS
-from ptn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.dists import dists
+from ptn.dists._abc import AbstractDisributionHeadConfig
 import pandas as pd
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -15,7 +15,7 @@ def main(models, d_outputs, out_file="results/memory_sweep.csv"):
         for Do in d_outputs:
             x = torch.randn(B, Di, device=device)
             y = torch.randint(0, Do, (B, H), device=device)
-            model = MHEADS[m](
+            model = dists[m](
                 config=AbstractDisributionHeadConfig(
                     rank=R, d_model=Di, d_output=Do, horizon=H
                 )

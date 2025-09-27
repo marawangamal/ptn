@@ -2,8 +2,8 @@
 import argparse
 import torch
 from tqdm import tqdm
-from ptn.mheads import MHEADS
-from ptn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.dists import dists
+from ptn.dists._abc import AbstractDisributionHeadConfig
 import pandas as pd
 
 
@@ -22,7 +22,7 @@ def main(horizons):
         ["LSF", "SGD"], ["mps", "mps"], [{}, {"use_scale_factors": False}]
     ):
         for H in horizons:
-            model = MHEADS[m](
+            model = dists[m](
                 config=AbstractDisributionHeadConfig(
                     rank=R, d_model=1, d_output=Do, horizon=H, **kwargs
                 )

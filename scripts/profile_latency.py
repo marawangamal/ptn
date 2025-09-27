@@ -7,8 +7,8 @@ import time
 import pandas as pd
 from tqdm import tqdm
 import torch
-from ptn.mheads import MHEADS
-from ptn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.dists import dists
+from ptn.dists._abc import AbstractDisributionHeadConfig
 
 
 def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):
@@ -75,7 +75,7 @@ def sweep(
 
         # Measure latency
         for m in models:
-            model = MHEADS[m](
+            model = dists[m](
                 config=AbstractDisributionHeadConfig(
                     rank=R,
                     d_model=Di,
