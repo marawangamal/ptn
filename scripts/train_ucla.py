@@ -311,8 +311,10 @@ def set_seeds(seed):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train dists on ModelNet40")
-    parser.add_argument("--model", default="mps")
+    parser = argparse.ArgumentParser(
+        description="Train dists on UCLA density estimation datasets"
+    )
+    parser.add_argument("--model", default="mps_sigma_lsf")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=32)

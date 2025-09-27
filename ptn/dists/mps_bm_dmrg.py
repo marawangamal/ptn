@@ -244,7 +244,7 @@ def rando(d, num):
     return q[:, :num]
 
 
-class BM(AbstractDisributionHead):
+class MPS_BM_DMRG(AbstractDisributionHead):
     """Born Machine (Canonical Form w/ DMRG).
 
     MPS based Born Machine probabilistic.

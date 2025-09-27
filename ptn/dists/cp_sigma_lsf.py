@@ -25,7 +25,7 @@ POS_FUNC_MAP = {
 }
 
 
-class CP(AbstractDisributionHead):
+class CP_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -175,7 +175,7 @@ class CP(AbstractDisributionHead):
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
-    mt_head = CP(
+    mt_head = CP_SIGMA_LSF(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
