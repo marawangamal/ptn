@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 import warnings
 
-from ctn.mheads._utils import window_input_ids
+from ptn.mheads._utils import window_input_ids
 
 
 @dataclass

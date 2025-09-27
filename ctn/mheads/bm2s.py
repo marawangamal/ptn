@@ -1,13 +1,13 @@
 import torch
 from tqdm import tqdm
-from ctn.mheads._abc import (
+from ptn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
 import torch.nn.functional as F
 
-from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
+from ptn.mheads.tensorops.mps import select_margin_mps_tensor_batched
 
 
 def pad_and_stack(seq, max_len):

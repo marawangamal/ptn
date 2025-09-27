@@ -7,8 +7,8 @@ import time
 import pandas as pd
 from tqdm import tqdm
 import torch
-from ctn.mheads import MHEADS
-from ctn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.mheads import MHEADS
+from ptn.mheads._abc import AbstractDisributionHeadConfig
 
 
 def test_latency(fn, n_warmup, n_iters, device, *args, **kwargs):

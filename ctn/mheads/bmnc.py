@@ -1,12 +1,12 @@
 import torch
 
-from ctn.mheads._abc import (
+from ptn.mheads._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from ctn.mheads.tensorops.mps import select_margin_mps_tensor_batched
-from ctn.mheads.tensorops.mps_born import batch_born_mps_marginalize
+from ptn.mheads.tensorops.mps import select_margin_mps_tensor_batched
+from ptn.mheads.tensorops.mps_born import batch_born_mps_marginalize
 
 
 def print_tens_stats(t: torch.Tensor, name: str):

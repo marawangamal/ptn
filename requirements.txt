@@ -7,9 +7,5 @@ wheel
 seaborn
 numpy
 scikit-learn
-# pandas
-# lightning
-# tiktoken
-# datasets
-# transformers
-# matplotlib
+pandas
+matplotlib

@@ -10,8 +10,8 @@ from tqdm import tqdm
 import wandb
 import numpy as np
 
-from ctn.mheads._abc import AbstractDisributionHeadConfig
-from ctn.mheads import MHEADS
+from ptn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.mheads import MHEADS
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
@@ -230,7 +230,7 @@ def main():
 
     # Initialize wandb
     wandb.init(
-        project="ctn", name=build_exp_name(args), config=vars(args), tags=args.tags
+        project="ptn", name=build_exp_name(args), config=vars(args), tags=args.tags
     )
 
     # Setup

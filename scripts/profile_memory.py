@@ -1,7 +1,7 @@
 import argparse
 import torch
-from ctn.mheads import MHEADS
-from ctn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.mheads import MHEADS
+from ptn.mheads._abc import AbstractDisributionHeadConfig
 import pandas as pd
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

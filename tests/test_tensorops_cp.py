@@ -3,7 +3,7 @@ import unittest
 import math
 import torch
 
-from ctn.mheads._tensorops import (
+from ptn.mheads._tensorops import (
     cp_reduce_decoder_einlse_margin_only,
     cp_reduce_decoder,
     cp_reduce_decoder_einlse,

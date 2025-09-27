@@ -12,8 +12,8 @@ import wandb
 import numpy as np
 from urllib.request import urlretrieve, urlopen
 
-from ctn.mheads._abc import AbstractDisributionHeadConfig
-from ctn.mheads import MHEADS
+from ptn.mheads._abc import AbstractDisributionHeadConfig
+from ptn.mheads import MHEADS
 
 
 import numpy as np
@@ -344,7 +344,7 @@ def main():
 
     # Initialize wandb
     wandb.init(
-        project="ctn-ucla", name=build_exp_name(args), config=vars(args), tags=args.tags
+        project="ptn-ucla", name=build_exp_name(args), config=vars(args), tags=args.tags
     )
     set_seeds(args.seed)
 
