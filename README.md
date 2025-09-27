@@ -51,3 +51,8 @@ python scripts/train_ucla.py --dataset nltcs --model bmnc --lr 5e-3  --rank 32
 ## Evaluation
 
 All training and validation metrics are automatically tracked and logged to [Weights & Biases (Wandb)](https://wandb.ai/).
+
+
+## Reproducing Figures
+
+The figures from the paper can be reproduced using the Jupyter notebook in `scripts/results.ipynb`. 
