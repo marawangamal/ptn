@@ -8,7 +8,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
-def main(models, d_outputs):
+def main(models, d_outputs, out_file="results/memory_sweep.csv"):
     B, H, R, Di = 1, 5, 2, 1
     rows = []
     for m in models:
@@ -38,7 +38,10 @@ def main(models, d_outputs):
                 }
             )
 
-    print(pd.DataFrame(rows))
+    df = pd.DataFrame(rows)
+    df.to_csv(out_file, index=False)
+    print(df)
+    print(f"Results saved to {out_file}")
 
 
 if __name__ == "__main__":
