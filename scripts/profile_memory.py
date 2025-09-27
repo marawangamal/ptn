@@ -46,7 +46,7 @@ def main(models, d_outputs, out_file="results/memory_sweep.csv"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--models", nargs="+", default=["mps", "bm"])
+    parser.add_argument("--models", nargs="+", default=["mps_lsf_sigma", "mps_dmrg_bm"])
     parser.add_argument("--d_outputs", nargs="+", default=[1024], type=int)
     args = parser.parse_args()
     main(**args.__dict__)

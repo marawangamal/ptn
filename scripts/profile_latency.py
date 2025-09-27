@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["mps", "bm"],
+        default=["mps_lsf_sigma", "mps_dmrg_bm"],
     )
     parser.add_argument("--horizons", nargs="+", default=[], type=int)
     parser.add_argument("--d_outputs", nargs="+", default=[], type=int)

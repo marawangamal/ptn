@@ -32,7 +32,7 @@ POS_FUNC_MAP = {
 
 
 # TODO: instead of a separate generate, maybe handle the case when y is not given as generate
-class BMNC(AbstractDisributionHead):
+class MPS_BM_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -240,7 +240,7 @@ class BMNC(AbstractDisributionHead):
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
-    mt_head = BMNC(
+    mt_head = MPS_BM_LSF(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,

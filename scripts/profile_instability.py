@@ -19,7 +19,9 @@ def main(horizons):
 
     rows = []
     for name, m, kwargs in zip(
-        ["LSF", "SGD"], ["mps", "mps"], [{}, {"use_scale_factors": False}]
+        ["mps_lsf_sigma", "mps_sgd_sigma"],
+        ["mps_lsf_sigma", "mps_lsf_sigma"],
+        [{}, {"use_scale_factors": False}],
     ):
         for H in horizons:
             model = dists[m](

@@ -1,15 +1,20 @@
-from ptn.dists.bm2s import BM
-from ptn.dists.mps import MPS
-from ptn.dists.moe import MoE
-from ptn.dists.cp import CP
-from ptn.dists.bmnc import BMNC
+from ptn.dists.cp_moe import CP_MOE
+from ptn.dists.cp_sigma_lsf import CP_SIGMA_LSF
+from ptn.dists.mps_bm_dmrg import MPS_BM_DMRG
+from ptn.dists.mps_bm_lsf import MPS_BM_LSF
+from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
-# !! IMPORTANT !! ::  Keep in sync with ptn.dists.types
 dists = {
-    "cp": CP,  # Canonical Polyadic
-    "moe": MoE,  # Mixture of Experts
-    "mps": MPS,  # Matrix Product State
-    "bm": BM,  # Born Machine Canonical Form w/ DMRG)
-    "bmnc": BMNC,  # Born Machine (Born Machine Non-Canonical Form w/ LogSF algo)
+    # ----------------------------------
+    # CP Dists
+    # ----------------------------------
+    "cp_lsf_sigma": CP_SIGMA_LSF,  # Non-Negative Canonical Polyadic w/ LSF
+    "cp_moe": CP_MOE,  # Mixture of Experts
+    # ----------------------------------
+    # MPS Dists
+    # ----------------------------------
+    "mps_lsf_sigma": MPS_SIGMA_LSF,  # Non-Negative MPS w/ LSF
+    "mps_lsf_bm": MPS_BM_LSF,  # Born Machine w/ LSF
+    "mps_dmrg_bm": MPS_BM_DMRG,  # Born Machine w/ DMRG)
 }

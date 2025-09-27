@@ -31,7 +31,7 @@ POS_FUNC_MAP = {
 
 
 # TODO: instead of a separate generate, maybe handle the case when y is not given as generate
-class MPS(AbstractDisributionHead):
+class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -485,7 +485,7 @@ class MPS(AbstractDisributionHead):
 
 def test_generate():
     B, H, D, V = 8, 32, 9, 2
-    mt_head = MPS(
+    mt_head = MPS_SIGMA_LSF(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
@@ -503,7 +503,7 @@ def test_generate():
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
-    mt_head = MPS(
+    mt_head = MPS_SIGMA_LSF(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
