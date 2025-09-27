@@ -53,6 +53,7 @@ def sweep(
     n_warmup=10,
     n_iters=100,
     output_file="results/sweep.csv",
+    d_output=2,
 ):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,7 +62,7 @@ def sweep(
     print(f"Using device: {device}")
 
     # FIXED PARAMETERS (baseline config)
-    B, H0, R0, Do0, Di0 = 32, 8, 32, 2, 1
+    B, H0, R0, Do0, Di0 = 32, 8, 32, d_output, 1
 
     results = []
 
@@ -81,7 +82,6 @@ def sweep(
                     d_output=Do,
                     horizon=H,
                     ignore_canonical=True,
-                    use_scale_factors=False,
                 )
             ).to(device)
             r = test_latency(model, n_warmup, n_iters, device, x, y)
@@ -126,6 +126,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--horizons", nargs="+", default=[], type=int)
     parser.add_argument("--d_outputs", nargs="+", default=[], type=int)
+    parser.add_argument("--d_output", type=int, default=2)
     parser.add_argument("--device", type=str, default=None)
     args = parser.parse_args()
     sweep(**args.__dict__)
