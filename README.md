@@ -28,24 +28,21 @@ pip install wandb && wandb login
 ```
 
 ## Training
-Train $\mathrm{MPS}_{\sigma+\mathrm{LSF}}$
+
+### MNIST Dataset
+
+Train $\mathrm{MPS}_{\sigma+\mathrm{LSF}}$ and $\mathrm{MPS}_{\mathrm{BM+LSF}}$ on MNIST
 ```bash
-
-# Train on MNIST
-python scripts/train_mnist.py --model mps --rank 8 --pos_func exp
-
-# Train on UCLA datasets
-python scripts/train_ucla.py --dataset nltcs --model mps --lr 5e-3  --rank 32 --pos_func abs
+python scripts/train_mnist.py --model mps_sigma_lsf --rank 8 --pos_func exp
+python scripts/train_mnist.py --model mps_bm_lsf --rank 8
 ```
 
-Train $\mathrm{MPS}_{\mathrm{BM+LSF}}$ models
+### UCLA Datasets
+
+Train $\mathrm{MPS}_{\sigma+\mathrm{LSF}}$ and  $\mathrm{MPS}_{\mathrm{BM+LSF}}$ on UCLA density estimation benchmarks
 ```bash
-
-# Train on MNIST
-python scripts/train_mnist.py --model bmnc --rank 8
-
-# Train on UCLA datasets
-python scripts/train_ucla.py --dataset nltcs --model bmnc --lr 5e-3  --rank 32
+python scripts/train_ucla.py --dataset nltcs --model mps_sigma_lsf --lr 5e-3  --rank 32 --pos_func abs
+python scripts/train_ucla.py --dataset nltcs --model mps_bm_lsf --lr 5e-3  --rank 32
 ```
 
 ## Evaluation
@@ -54,5 +51,4 @@ All training and validation metrics are automatically tracked and logged to [Wei
 
 
 ## Reproducing Figures
-
-The figures from the paper can be reproduced using the Jupyter notebook in `scripts/results.ipynb`. 
+The figures from the paper can be reproduced using the Jupyter notebook in [`scripts/results.ipynb`](scripts/results.ipynb).

@@ -19,8 +19,11 @@ def main(horizons):
 
     rows = []
     for name, m, kwargs in zip(
-        ["mps_lsf_sigma", "mps_sgd_sigma"],
-        ["mps_lsf_sigma", "mps_lsf_sigma"],
+        [
+            "mps_bm_lsf",
+            "mps_bm_sgd",
+        ],  # NOTE: mps_sigma_sgd is mps_sigma_lsf w/o scale factors
+        ["mps_bm_lsf", "mps_bm_lsf"],
         [{}, {"use_scale_factors": False}],
     ):
         for H in horizons:

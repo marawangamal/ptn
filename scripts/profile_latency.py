@@ -49,11 +49,11 @@ def sweep(
     horizons=[8, 16, 32],
     d_outputs=[8, 16, 32],
     device=None,
-    models=["mps", "bmnc", "bm"],
+    models=["mps_bm_lsf", "mps_bm_dmrg"],
     n_warmup=10,
     n_iters=100,
-    output_file="results/sweep.csv",
-    d_output=2,
+    out="results/sweep.csv",
+    d_output=8,
 ):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,8 +113,8 @@ def sweep(
 
     df = pd.DataFrame(results)
     print(df)
-    df.to_csv(output_file, index=False)
-    print(f"Saved to {output_file}")
+    df.to_csv(out, index=False)
+    print(f"Saved to {out}")
 
 
 if __name__ == "__main__":
@@ -122,11 +122,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--models",
         nargs="+",
-        default=["mps_lsf_sigma", "mps_dmrg_bm"],
+        default=["mps_bm_lsf", "mps_bm_dmrg"],
     )
     parser.add_argument("--horizons", nargs="+", default=[], type=int)
     parser.add_argument("--d_outputs", nargs="+", default=[], type=int)
     parser.add_argument("--d_output", type=int, default=2)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--out", type=str, default="results/latency_sweep.csv")
     args = parser.parse_args()
     sweep(**args.__dict__)

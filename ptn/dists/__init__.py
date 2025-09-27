@@ -9,12 +9,12 @@ dists = {
     # ----------------------------------
     # CP Dists
     # ----------------------------------
-    "cp_lsf_sigma": CP_SIGMA_LSF,  # Non-Negative Canonical Polyadic w/ LSF
+    "cp_sigma_lsf": CP_SIGMA_LSF,  # Non-Negative Canonical Polyadic w/ LSF
     "cp_moe": CP_MOE,  # Mixture of Experts
     # ----------------------------------
     # MPS Dists
     # ----------------------------------
-    "mps_lsf_sigma": MPS_SIGMA_LSF,  # Non-Negative MPS w/ LSF
-    "mps_lsf_bm": MPS_BM_LSF,  # Born Machine w/ LSF
-    "mps_dmrg_bm": MPS_BM_DMRG,  # Born Machine w/ DMRG)
+    "mps_sigma_lsf": MPS_SIGMA_LSF,  # Non-Negative MPS w/ LSF
+    "mps_bm_lsf": MPS_BM_LSF,  # Born Machine w/ LSF
+    "mps_bm_dmrg": MPS_BM_DMRG,  # Born Machine w/ DMRG)
 }
