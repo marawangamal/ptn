@@ -8,3 +8,5 @@ data
 checkpoints
 media
 data
+scripts/clean.sh
+scripts/setup.sh
