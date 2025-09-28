@@ -7,6 +7,8 @@ from ptn.dists._abc import (
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
+
 
 def pad_and_stack(seq, max_len):
     """Pad and stack a sequence of tensors.
@@ -193,22 +195,28 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         g = self.g
 
         if y is not None:
-            h = H - 1
+            h = 0
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
 
-            # Map: (R, D, R) -> (R, B, R)
-            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-            gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-            psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-            z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
+            # # Map: (R, D, R) -> (R, B, R)
+            # yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            # gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+            # psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
+            # z = torch.einsum("ip,idj,pdq,jq->", g[h], g[h])
 
-            # if ((psi**2) > z).any():
-            #     print("WARNING: psi > z")
-            #     print(f"psi > z: {psi} > {z}")
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+            z = torch.einsum("idj,idj->", g[h], g[h])
+            g_tilde_ix = torch.einsum(
+                "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+            )  # (Rl, B, Rr)
 
+            # compute loss
+            psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
             loss = (
                 z.clamp(min=eps_clamp).log()
-                - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
-            )
+                - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+            ) * (1 / H)
 
             return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
 
@@ -306,6 +314,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
                 # merge
                 g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+                z = torch.einsum("idj,idj->", g[h], g[h])
                 losses_right = []
                 for _ in range(n_grad_steps):
                     g_tilde_ix = torch.einsum(
@@ -314,7 +323,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
                     # compute loss
                     psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
-                    z = torch.einsum("idj,idj->", g[h], g[h])
                     loss = (
                         z.clamp(min=eps_clamp).log()
                         - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
