@@ -188,7 +188,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
-        sl, sr, ml, mr = self.build_cache(x, y)
+        sl, sr = self.build_cache(x, y)
         g = self.g
 
         if y is not None:
