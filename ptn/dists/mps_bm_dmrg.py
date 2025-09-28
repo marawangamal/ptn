@@ -318,7 +318,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                     loss = (
                         z.clamp(min=eps_clamp).log()
                         - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                    )
+                    ) * (1 / H)
 
                     # sgd
                     (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
@@ -382,7 +382,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                     loss = (
                         z.clamp(min=eps_clamp).log()
                         - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                    )
+                    ) * (1 / H)
 
                     # sgd
                     (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
