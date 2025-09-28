@@ -33,10 +33,6 @@ def pad_and_stack(seq, max_len):
     return torch.stack(padded), torch.stack(mask)
 
 
-import torch
-import torch.nn.functional as F
-
-
 def pad_and_stack2d(seq, max_len=None, pad_value=0.0):
     """Pad and stack a list of 2D (Di x Di) tensors.
 
@@ -287,6 +283,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
         self.assert_right_canonical()
 
+    def __repr__(self):
+        bond_dims = [self.g[h].shape[0] for h in range(len(self.g))]
+        bond_dims.append(self.g[-1].shape[-1])
+        return f"MPS_BM_DMRG(bond_dims={bond_dims})"
+
     def assert_right_canonical(self):
         if self.config.ignore_canonical:
             return
@@ -397,7 +398,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         n_sweeps: int = 1,
         eps_clamp: float = 1e-10,
         lr: float = 1e-3,
-        eps_trunc: float = 1e-10,
+        eps_trunc: float = 1e-32,
         max_bond_dim: int = 32,
     ):
         """Train the model for one step.
@@ -442,24 +443,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
 
-                # if ((psi**2) > z).any():
-                #     print("WARNING: psi > z")
-                #     print(f"psi > z: {psi} > {z}")
-
                 loss = (
                     z.clamp(min=eps_clamp).log()
                     - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
                 )
                 losses.append(loss)
-                # if loss < 0:
-                #     print(f"Loss is negative: {loss}")
-                #     print(f"z: {z}")
-                #     print(f"psi: {psi}")
-                #     print(f"g_tilde: {g_tilde}")
-                #     print(f"sl: {sl}")
-                #     print(f"sr: {sr}")
-                #     print(f"ml: {ml}")
-                #     print(f"mr: {mr}")
 
                 z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
                 i_h = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
@@ -508,19 +496,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                         # But sr, mr will be invalid everywhere. Thankfully we wont need sr, mr on initial leftwards sweep.
                         sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
                         ml[h + 1] = torch.einsum("ip,idj,pdq->jq", ml[h], g[h], g[h])
-
-                    # TODO: left sweep
-                    # else:  # going left
-                    #     U, s, Vt = torch.linalg.svd(g[h].reshape(R, Do * R))
-                    #     R_prime = Vt.size(0)
-                    #     g[h] = Vt.reshape(R_prime, Do, R)[:R]  # (R, Do, R)
-                    #     g[h - 1] = torch.einsum("ivk,kr,rj->ivj", g[h - 1], U, s)[
-                    #         :, :, :R
-                    #     ]
-                    #     # sl[:, h + 1] = torch.einsum("bi,idj->bj", sl[:, h], self._g[h])
-                    #     # ml[h + 1] = torch.einsum(
-                    #     #     "i,ij->j", ml[h], self._g[h].sum(dim=1)
-                    #     # )
 
         return losses
 
