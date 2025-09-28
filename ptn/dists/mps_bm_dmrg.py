@@ -245,8 +245,9 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         return sl, sr
 
     def train_example(self, *args, **kwargs):
-        with torch.no_grad():
-            return self._train_example(*args, **kwargs)
+        # with torch.no_grad():
+        #     return  self._train_example(*args, **kwargs)
+        return self._train_example(*args, **kwargs)
 
     def _train_example(
         self,
@@ -257,6 +258,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         lr: float = 1e-3,
         eps_trunc: float = 1e-32,
         max_bond_dim: int = 32,
+        verbose: bool = False,
     ):
         """Train the model for one step.
 
@@ -290,33 +292,32 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
                 # Freeze all cores except h
                 for k in range(H):
-                    g[k].requires_grad = True if k == h else False
+                    g[k].requires_grad = True if k in [h, h + 1] else False
 
-                # Map: (R, D, R) -> (R, B, R)
-                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
+                # merge
+                g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+                e_yp1 = torch.eye(self.config.d_output, device=dv)[
+                    y[:, h + 1]
+                ]  # (B, Do)
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+                )  # (Rl, B, Rr)
+
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
                 z = torch.einsum("idj,idj->", g[h], g[h])
-                g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
-
                 loss = (
                     z.clamp(min=eps_clamp).log()
-                    - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
                 )
-                losses.append(loss)
+                losses.append(loss.item())
 
-                z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
-                i_h = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
-                i_hp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B,)
-                psi_prime = torch.einsum(
-                    "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
-                )  # (B, Rl, Do, Do, Rr)
-
-                # Shape:  (Rl, Do, Do, Rr)
-                dldg_tilde = (z_prime / z.clamp(min=eps_clamp)) - 2 * (
-                    psi_prime / psi.view(-1, 1, 1, 1, 1).clamp(min=eps_clamp)
-                ).mean(dim=0)
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde, retain_graph=True)
                 g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+
+                # svd
                 u, s, vt = torch.linalg.svd(
                     g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
                 )
@@ -349,31 +350,32 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
                 Rl, Rr = g[h - 1].size(0), g[h].size(-1)
 
-                # Map: (R, D, R) -> (R, B, R)
-                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-                z = torch.einsum("idj,idj->", g[h], g[h])
-                g_tilde = torch.einsum("ivj,jdk->ivdk", g[h - 1], g[h])
+                # Freeze all cores except h
+                for k in range(H):
+                    g[k].requires_grad = True if k in [h - 1, h] else False
 
+                # merge
+                g_tilde = torch.einsum("idj,jqk->idqk", g[h - 1], g[h])
+                e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
+                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
+                )  # (Rl, B, Rr)
+
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
+                z = torch.einsum("idj,idj->", g[h], g[h])
                 loss = (
                     z.clamp(min=eps_clamp).log()
-                    - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
                 )
-                losses.append(loss)
+                losses.append(loss.item())
 
-                z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
-                i_h = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]  # (B,)
-                i_hp1 = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
-                psi_prime = torch.einsum(
-                    "bi,bd,bv,bj->bidvj", sl[h - 1], i_h, i_hp1, sr[h]
-                )  # (B, Rl, Do, Do, Rr)
-
-                # Shape:  (Rl, Do, Do, Rr)
-                dldg_tilde = (z_prime / z.clamp(min=eps_clamp)) - 2 * (
-                    psi_prime / psi.view(-1, 1, 1, 1, 1).clamp(min=eps_clamp)
-                ).mean(dim=0)
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde, retain_graph=True)
                 g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+
+                # svd
                 u, s, vt = torch.linalg.svd(
                     g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
                 )
@@ -416,7 +418,7 @@ def train_example():
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
         losses = mt_head.train_example(x, y, lr=1e-3)
-        print(f"loss: {torch.stack(losses).mean():.2f}")
+        print(f"loss: {losses[-1]:.2f}")
 
 
 if __name__ == "__main__":
