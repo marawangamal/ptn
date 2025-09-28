@@ -399,7 +399,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
         return sl, sr, ml, mr
 
-    def train_example(
+    def train_example(self, *args, **kwargs):
+        with torch.no_grad():
+            return self._train_example(*args, **kwargs)
+
+    def _train_example(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
@@ -431,11 +435,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-        sl, sr, ml, mr = self.build_cache(x, y)
+        sl, sr, _, _ = self.build_cache(x, y)
 
         losses = []
         for n_sweeps in range(n_sweeps):
-            for h in range(0, H - 1):  # sweep rightwards
+            for h in range(0, H - 1):  # (sweep rightwards ===>)
                 self.assert_mixed_canonical(center=h)
                 Rl, Rr = g[h].size(0), g[h + 1].size(-1)
 
@@ -447,8 +451,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
                 psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-                # BUG: should not need the environment for margins since we are cano
-                # z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
                 z = torch.einsum("idj,idj->", g[h], g[h])
                 g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
 
@@ -478,47 +480,29 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                     print(f"NaN in g_tilde")
                     raise ValueError("NaN in g_tilde")
 
-                # Now we need to re-canonicalize and update left / right caches
-                # TOOD: fix this bug
-                # BUG: need to do a left sweep otherwise we are in the next iteration working with left cano
-                # and going rightwards which is incorrect
-                with torch.no_grad():
-                    # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
-                    # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
-                    # end of the rightwards sweep.
-                    Rtrunc = min(
-                        max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1
-                    )
-                    g[h] = u.reshape(Rl, Do, u.size(-1))[:, :, :Rtrunc]  # (R, Do, R)
-                    g[h + 1] = torch.einsum(
-                        "ir,rvj->ivj",
-                        torch.diag(s[:Rtrunc]),
-                        vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
-                    )
-                    # normalize g[h+1]
-                    g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
-                        min=eps_clamp
-                    )
-                    # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
-                    # But, we only need to use h+1 in the next iteration.
-                    # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
-                    # But sr, mr will be invalid everywhere. Thankfully we wont need sr, mr on initial leftwards sweep.
-                    yh = (
-                        y[:, h]
-                        .reshape(1, -1, 1)
-                        .expand(g[h].size(0), -1, g[h].size(-1))
-                    )
-                    gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                    sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)
-                    # ml[h + 1] = torch.einsum("ip,idj,pdq->jq", ml[h], g[h], g[h])
+                # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
+                # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
+                # end of the rightwards sweep.
+                Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+                g[h] = u.reshape(Rl, Do, u.size(-1))[:, :, :Rtrunc]  # (R, Do, R)
+                g[h + 1] = torch.einsum(
+                    "ir,rvj->ivj",
+                    torch.diag(s[:Rtrunc]),
+                    vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
+                )
+                # normalize
+                g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
+                    min=eps_clamp
+                )
+                # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
+                # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
+                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+                sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
 
-            for h in range(H - 1, 0, -1):  # sweep leftwards
+            for h in range(H - 1, 0, -1):  # ( <=== sweep leftwards)
                 self.assert_mixed_canonical(center=h)
                 Rl, Rr = g[h - 1].size(0), g[h].size(-1)
-
-                # # Freeze all cores except h
-                # for k in range(H):
-                #     g[k].requires_grad = True if k == h else False
 
                 # Map: (R, D, R) -> (R, B, R)
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
@@ -553,36 +537,22 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                     print(f"NaN in g_tilde")
                     raise ValueError("NaN in g_tilde")
 
-                # Now we need to re-canonicalize and update left / right caches
-                # TOOD: fix this bug
-                # BUG: need to do a left sweep otherwise we are in the next iteration working with left cano
-                # and going rightwards which is incorrect
-                with torch.no_grad():
-                    # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
-                    # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
-                    Rtrunc = min(
-                        max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1
-                    )
-                    g[h - 1] = torch.einsum(
-                        "idj,jk->idk",
-                        u[:, :Rtrunc].reshape(Rl, Do, Rtrunc),  # (Rl, Do, R')
-                        torch.diag(s[:Rtrunc]),  # (R', R')
-                    )
-                    g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
-                    # normalize g[h+1]
-                    g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
-                        min=eps_clamp
-                    )
-                    yh = (
-                        y[:, h]
-                        .reshape(1, -1, 1)
-                        .expand(g[h].size(0), -1, g[h].size(-1))
-                    )
-                    gh_yh = g[h].gather(dim=1, index=yh)
-                    sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])
-
-                    # gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                    # sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)
+                # NOTE: We are going left, so everything in front is left canonicalized. However, we need to
+                # leave our wake right canonicalized as we pass through so that we are ready to go rightwards at the
+                Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+                g[h - 1] = torch.einsum(
+                    "idj,jk->idk",
+                    u[:, :Rtrunc].reshape(Rl, Do, Rtrunc),  # (Rl, Do, R')
+                    torch.diag(s[:Rtrunc]),  # (R', R')
+                )
+                g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
+                # normalize
+                g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
+                    min=eps_clamp
+                )
+                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+                gh_yh = g[h].gather(dim=1, index=yh)
+                sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
 
         return losses
 
@@ -600,7 +570,7 @@ def train_example():
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
-        losses = mt_head.train_example(x, y, lr=1e-4)
+        losses = mt_head.train_example(x, y, lr=1e-3)
         print(f"loss: {torch.stack(losses).mean():.2f}")
 
 
