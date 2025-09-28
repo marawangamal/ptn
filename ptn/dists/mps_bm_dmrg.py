@@ -199,12 +199,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
             e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
             e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
 
-            # # Map: (R, D, R) -> (R, B, R)
-            # yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-            # gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-            # psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-            # z = torch.einsum("ip,idj,pdq,jq->", g[h], g[h])
-
             g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
             z = torch.einsum("idj,idj->", g[h], g[h])
             g_tilde_ix = torch.einsum(

@@ -15,6 +15,8 @@ from ptn.dists import dists
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
+# NOTE: change mps_bm_dmrg to take in the whole train_dataloader and the logger too.
+
 
 def get_data_loaders(batch_size=32, data_dir="./data", scale=None):
     """Create MNIST data loaders with binary thresholding."""
