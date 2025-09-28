@@ -248,21 +248,18 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         return sl, sr
 
     def train_example(self, *args, **kwargs):
-        # with torch.no_grad():
-        #     return  self._train_example(*args, **kwargs)
         return self._train_example(*args, **kwargs)
 
     def _train_example(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-        n_sweeps: int = 1,
         eps_clamp: float = 1e-10,
         lr: float = 1e-4,
-        eps_trunc: float = 1e-32,
-        max_bond_dim: int = 32,
+        eps_trunc: float = 1e-7,
+        max_bond_dim: int = 800,
+        n_grad_steps: int = 10,
         verbose: bool = False,
-        n_grad_steps: int = 1000,
     ):
         """Train the model for one step.
 
@@ -289,134 +286,139 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         sl, sr = self.build_cache(x, y)
 
         losses = []
-        for n_sweeps in range(n_sweeps):
 
-            pbar_right_sweep = tqdm(range(0, H - 1), desc="Right Sweep")
-            for h in pbar_right_sweep:  # (sweep rightwards ===>)
-                # self.assert_mixed_canonical(center=h) # used for debugging
+        pbar_right_sweep = (
+            tqdm(range(0, H - 1), desc="Right Sweep") if verbose else range(0, H - 1)
+        )
+        for h in pbar_right_sweep:  # (sweep rightwards ===>)
+            # self.assert_mixed_canonical(center=h) # used for debugging
 
-                # Setup dims and & one-hots
-                Rl, Rr = g[h].size(0), g[h + 1].size(-1)
-                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
-                e_yp1 = torch.eye(self.config.d_output, device=dv)[
-                    y[:, h + 1]
-                ]  # (B, Do)
+            # Setup dims and & one-hots
+            Rl, Rr = g[h].size(0), g[h + 1].size(-1)
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
 
-                # Freeze all cores except h
-                for k in range(H):
-                    g[k].requires_grad = True if k in [h, h + 1] else False
+            # Freeze all cores except h
+            for k in range(H):
+                g[k].requires_grad = True if k in [h, h + 1] else False
 
-                # merge
-                g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
-                z = torch.einsum("idj,idj->", g[h], g[h])
-                losses_right = []
-                for _ in range(n_grad_steps):
-                    g_tilde_ix = torch.einsum(
-                        "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
-                    )  # (Rl, B, Rr)
+            # merge
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+            z = torch.einsum("idj,idj->", g[h], g[h])
+            losses_right = []
+            for _ in range(n_grad_steps):
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+                )  # (Rl, B, Rr)
 
-                    # compute loss
-                    psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
-                    loss = (
-                        z.clamp(min=eps_clamp).log()
-                        - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                    ) * (1 / H)
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
+                loss = (
+                    z.clamp(min=eps_clamp).log()
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                ) * (1 / H)
 
-                    # sgd
-                    (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
-                    g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
-                    losses_right.append(loss.detach())
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
+                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                losses_right.append(loss.detach())
+            if verbose:
                 pbar_right_sweep.set_postfix(loss=torch.stack(losses_right).mean())
-                losses.append(torch.stack(losses_right).mean().item())
+            losses.append(losses_right[-1])
 
-                # svd
-                u, s, vt = torch.linalg.svd(
-                    g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
-                )
+            # svd
+            u, s, vt = torch.linalg.svd(
+                g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
+            )
 
-                if not g_tilde.isfinite().all():
-                    print(f"NaN in g_tilde")
-                    raise ValueError("NaN in g_tilde")
+            if not g_tilde.isfinite().all():
+                print(f"NaN in g_tilde")
+                raise ValueError("NaN in g_tilde")
 
-                # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
-                # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
-                # end of the rightwards sweep.
-                Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
-                g[h] = u.reshape(Rl, Do, u.size(-1))[:, :, :Rtrunc]  # (R, Do, R)
-                g[h + 1] = torch.einsum(
-                    "ir,rvj->ivj",
-                    torch.diag(s[:Rtrunc]),
-                    vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
-                )
-                # normalize
-                g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
-                    min=eps_clamp
-                )
-                # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
-                # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
-                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
+            # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
+            # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
+            # end of the rightwards sweep.
+            Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+            g[h] = u.reshape(Rl, Do, u.size(-1))[:, :, :Rtrunc]  # (R, Do, R)
+            g[h + 1] = torch.einsum(
+                "ir,rvj->ivj",
+                torch.diag(s[:Rtrunc]),
+                vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
+            )
+            # normalize
+            g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
+                min=eps_clamp
+            )
+            # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
+            # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
+            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+            sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
 
-            pbar_left_sweep = tqdm(range(H - 1, 0, -1), desc="Left Sweep")
-            for h in pbar_left_sweep:  # ( <=== sweep leftwards)
-                # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
-                # Setup dims and & one-hots
-                Rl, Rr = g[h - 1].size(0), g[h].size(-1)
-                e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
-                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
+        pbar_left_sweep = (
+            tqdm(range(H - 1, 0, -1), desc="Left Sweep")
+            if verbose
+            else range(H - 1, 0, -1)
+        )
+        for h in pbar_left_sweep:  # ( <=== sweep leftwards)
+            # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
+            # Setup dims and & one-hots
+            Rl, Rr = g[h - 1].size(0), g[h].size(-1)
+            e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
 
-                # Freeze all cores except h
-                for k in range(H):
-                    g[k].requires_grad = True if k in [h - 1, h] else False
+            # Freeze all cores except h
+            for k in range(H):
+                g[k].requires_grad = True if k in [h - 1, h] else False
 
-                # merge
-                g_tilde = torch.einsum("idj,jqk->idqk", g[h - 1], g[h])
-                losses_left = []
-                for _ in range(n_grad_steps):
-                    g_tilde_ix = torch.einsum(
-                        "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
-                    )  # (Rl, B, Rr)
+            # merge
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h - 1], g[h])
+            losses_left = []
+            for _ in range(n_grad_steps):
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
+                )  # (Rl, B, Rr)
 
-                    # compute loss
-                    psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
-                    z = torch.einsum("idj,idj->", g[h], g[h])
-                    loss = (
-                        z.clamp(min=eps_clamp).log()
-                        - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                    ) * (1 / H)
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
+                z = torch.einsum("idj,idj->", g[h], g[h])
+                loss = (
+                    z.clamp(min=eps_clamp).log()
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                ) * (1 / H)
 
-                    # sgd
-                    (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
-                    g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
-                    losses_left.append(loss.detach())
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
+                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                losses_left.append(loss.detach())
+            if verbose:
                 pbar_left_sweep.set_postfix(loss=torch.stack(losses_left).mean().item())
 
-                # svd
-                u, s, vt = torch.linalg.svd(
-                    g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
-                )
+            # svd
+            u, s, vt = torch.linalg.svd(
+                g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
+            )
 
-                if not g_tilde.isfinite().all():
-                    print(f"NaN in g_tilde")
-                    raise ValueError("NaN in g_tilde")
+            if not g_tilde.isfinite().all():
+                print(f"NaN in g_tilde")
+                raise ValueError("NaN in g_tilde")
 
-                # NOTE: We are going left, so everything in front is left canonicalized. However, we need to
-                # leave our wake right canonicalized as we pass through so that we are ready to go rightwards at the
-                Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
-                g[h - 1] = torch.einsum(
-                    "idj,jk->idk",
-                    u[:, :Rtrunc].reshape(Rl, Do, Rtrunc),  # (Rl, Do, R')
-                    torch.diag(s[:Rtrunc]),  # (R', R')
-                )
-                g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
-                # normalize
-                g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
-                    min=eps_clamp
-                )
-                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-                gh_yh = g[h].gather(dim=1, index=yh)
-                sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
+            # NOTE: We are going left, so everything in front is left canonicalized. However, we need to
+            # leave our wake right canonicalized as we pass through so that we are ready to go rightwards at the
+            Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+            g[h - 1] = torch.einsum(
+                "idj,jk->idk",
+                u[:, :Rtrunc].reshape(Rl, Do, Rtrunc),  # (Rl, Do, R')
+                torch.diag(s[:Rtrunc]),  # (R', R')
+            )
+            g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
+            # normalize
+            g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
+                min=eps_clamp
+            )
+            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            gh_yh = g[h].gather(dim=1, index=yh)
+            sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
 
         return losses
 
@@ -435,7 +437,7 @@ def train_example():
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
         losses = mt_head.train_example(x, y, lr=1e-4)
-        print(f"loss: {losses[-1]:.2f}")
+        print(f"[{i}] loss: {losses[-1]:.2f}")
 
 
 if __name__ == "__main__":
