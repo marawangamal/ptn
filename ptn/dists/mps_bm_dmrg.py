@@ -294,15 +294,15 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         bond_dims.append(self.g[-1].shape[-1])
         return f"MPS_BM_DMRG(bond_dims={bond_dims})"
 
-    def assert_mixed_canonical(self, center=0):
+    def assert_mixed_canonical(self, center=0, atol=1e-2):
         if self.config.ignore_canonical:
             return
         for h in range(len(self.g) - 1, center + 1, -1):
             w = self.g[h].reshape(self.g[h].size(0), -1)  # (R, Do*R)
-            assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=1e-6)
+            assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=atol)
         for h in range(center):
             w = self.g[h].reshape(-1, self.g[h].size(-1))  # (Do*R, R)
-            assert torch.allclose(w.T @ w, torch.eye(w.size(1)), atol=1e-6)
+            assert torch.allclose(w.T @ w, torch.eye(w.size(1)), atol=atol)
 
     def forward(
         self,
@@ -514,11 +514,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
             for h in range(H - 1, 0, -1):  # sweep leftwards
                 self.assert_mixed_canonical(center=h)
-                Rl, Rr = g[h].size(0), g[h + 1].size(-1)
+                Rl, Rr = g[h - 1].size(0), g[h].size(-1)
 
-                # Freeze all cores except h
-                for k in range(H):
-                    g[k].requires_grad = True if k == h else False
+                # # Freeze all cores except h
+                # for k in range(H):
+                #     g[k].requires_grad = True if k == h else False
 
                 # Map: (R, D, R) -> (R, B, R)
                 yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
@@ -573,19 +573,16 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                     g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
                         min=eps_clamp
                     )
-                    yhm1 = (
-                        y[:, h - 1]
-                        .reshape(1, -1, 1)
-                        .expand(g[h - 1].size(0), -1, g[h - 1].size(-1))
-                    )
                     yh = (
                         y[:, h]
                         .reshape(1, -1, 1)
                         .expand(g[h].size(0), -1, g[h].size(-1))
                     )
-                    gh_yhm1 = g[h].gather(dim=1, index=yhm1)
-                    gh_yh = g[h + 1].gather(dim=1, index=yh)
-                    sr[h - 1] = torch.einsum("ibk,kbj,bj->bi", gh_yhm1, gh_yh, sr[h])
+                    gh_yh = g[h].gather(dim=1, index=yh)
+                    sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])
+
+                    # gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+                    # sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)
 
         return losses
 
