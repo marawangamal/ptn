@@ -285,7 +285,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         losses = []
         for n_sweeps in range(n_sweeps):
             for h in range(0, H - 1):  # (sweep rightwards ===>)
-                self.assert_mixed_canonical(center=h)
+                # self.assert_mixed_canonical(center=h) # used for debugging
                 Rl, Rr = g[h].size(0), g[h + 1].size(-1)
 
                 # Freeze all cores except h
@@ -346,7 +346,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
 
             for h in range(H - 1, 0, -1):  # ( <=== sweep leftwards)
-                self.assert_mixed_canonical(center=h)
+                # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
                 Rl, Rr = g[h - 1].size(0), g[h].size(-1)
 
                 # Map: (R, D, R) -> (R, B, R)
