@@ -5,6 +5,7 @@ from ptn.dists._abc import (
     AbstractDisributionHeadOutput,
 )
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 def pad_and_stack(seq, max_len):
@@ -255,10 +256,11 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         y: torch.Tensor,
         n_sweeps: int = 1,
         eps_clamp: float = 1e-10,
-        lr: float = 1e-3,
+        lr: float = 1e-4,
         eps_trunc: float = 1e-32,
         max_bond_dim: int = 32,
         verbose: bool = False,
+        n_grad_steps: int = 1000,
     ):
         """Train the model for one step.
 
@@ -286,9 +288,17 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
         losses = []
         for n_sweeps in range(n_sweeps):
-            for h in range(0, H - 1):  # (sweep rightwards ===>)
+
+            pbar_right_sweep = tqdm(range(0, H - 1), desc="Right Sweep")
+            for h in pbar_right_sweep:  # (sweep rightwards ===>)
                 # self.assert_mixed_canonical(center=h) # used for debugging
+
+                # Setup dims and & one-hots
                 Rl, Rr = g[h].size(0), g[h + 1].size(-1)
+                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+                e_yp1 = torch.eye(self.config.d_output, device=dv)[
+                    y[:, h + 1]
+                ]  # (B, Do)
 
                 # Freeze all cores except h
                 for k in range(H):
@@ -296,26 +306,26 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
                 # merge
                 g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
-                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
-                e_yp1 = torch.eye(self.config.d_output, device=dv)[
-                    y[:, h + 1]
-                ]  # (B, Do)
-                g_tilde_ix = torch.einsum(
-                    "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
-                )  # (Rl, B, Rr)
+                losses_right = []
+                for _ in range(n_grad_steps):
+                    g_tilde_ix = torch.einsum(
+                        "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+                    )  # (Rl, B, Rr)
 
-                # compute loss
-                psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
-                z = torch.einsum("idj,idj->", g[h], g[h])
-                loss = (
-                    z.clamp(min=eps_clamp).log()
-                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                )
-                losses.append(loss.item())
+                    # compute loss
+                    psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
+                    z = torch.einsum("idj,idj->", g[h], g[h])
+                    loss = (
+                        z.clamp(min=eps_clamp).log()
+                        - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                    )
 
-                # sgd
-                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde, retain_graph=True)
-                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                    # sgd
+                    (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
+                    g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                    losses_right.append(loss.detach())
+                pbar_right_sweep.set_postfix(loss=torch.stack(losses_right).mean())
+                losses.append(torch.stack(losses_right).mean().item())
 
                 # svd
                 u, s, vt = torch.linalg.svd(
@@ -346,9 +356,13 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
                 sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
 
-            for h in range(H - 1, 0, -1):  # ( <=== sweep leftwards)
+            pbar_left_sweep = tqdm(range(H - 1, 0, -1), desc="Left Sweep")
+            for h in pbar_left_sweep:  # ( <=== sweep leftwards)
                 # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
+                # Setup dims and & one-hots
                 Rl, Rr = g[h - 1].size(0), g[h].size(-1)
+                e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
+                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
 
                 # Freeze all cores except h
                 for k in range(H):
@@ -356,24 +370,25 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
                 # merge
                 g_tilde = torch.einsum("idj,jqk->idqk", g[h - 1], g[h])
-                e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
-                e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
-                g_tilde_ix = torch.einsum(
-                    "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
-                )  # (Rl, B, Rr)
+                losses_left = []
+                for _ in range(n_grad_steps):
+                    g_tilde_ix = torch.einsum(
+                        "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
+                    )  # (Rl, B, Rr)
 
-                # compute loss
-                psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
-                z = torch.einsum("idj,idj->", g[h], g[h])
-                loss = (
-                    z.clamp(min=eps_clamp).log()
-                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                )
-                losses.append(loss.item())
+                    # compute loss
+                    psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
+                    z = torch.einsum("idj,idj->", g[h], g[h])
+                    loss = (
+                        z.clamp(min=eps_clamp).log()
+                        - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                    )
 
-                # sgd
-                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde, retain_graph=True)
-                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                    # sgd
+                    (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
+                    g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                    losses_left.append(loss.detach())
+                pbar_left_sweep.set_postfix(loss=torch.stack(losses_left).mean().item())
 
                 # svd
                 u, s, vt = torch.linalg.svd(
@@ -417,7 +432,7 @@ def train_example():
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
-        losses = mt_head.train_example(x, y, lr=1e-3)
+        losses = mt_head.train_example(x, y, lr=1e-4)
         print(f"loss: {losses[-1]:.2f}")
 
 
