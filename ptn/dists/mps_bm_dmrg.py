@@ -33,148 +33,6 @@ def pad_and_stack(seq, max_len):
     return torch.stack(padded), torch.stack(mask)
 
 
-def pad_and_stack2d(seq, max_len=None, pad_value=0.0):
-    """Pad and stack a list of 2D (Di x Di) tensors.
-
-    Args:
-        seq: list[Tensor], each (Di, Di)
-        max_len: int or None — if None, inferred from seq
-        pad_value: scalar fill value for padding
-
-    Returns:
-        padded: (T, max_len, max_len)
-        mask:   (T, max_len, max_len) bool (True=valid)
-    """
-    if not seq:
-        raise ValueError("seq must be non-empty.")
-
-    if max_len is None:
-        max_len = max(x.size(0) for x in seq)
-
-    padded, masks = [], []
-    for x in seq:
-        h, w = x.shape
-        if h > max_len or w > max_len:
-            raise ValueError(f"item {h}x{w} exceeds max_len={max_len}")
-        pad_h, pad_w = max_len - h, max_len - w
-
-        # data
-        padded.append(F.pad(x, (0, pad_w, 0, pad_h), value=pad_value))
-        # mask: ones on data region, zeros on padding
-        m = torch.ones_like(x, dtype=torch.bool)
-        masks.append(F.pad(m, (0, pad_w, 0, pad_h), value=False))
-
-    return torch.stack(padded), torch.stack(masks)
-
-
-def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True):
-    """Compute the left and right marginalization caches for the Born machine.
-
-    For MPS-BM-DMRG, the marginalization cache is computed as:
-    .. math::
-        l[h] = \\sum_{d=1}^{Do} g[1]g[h][:, d, :]
-        r[h] = \\sum_{d=1}^{Do} g[h][:, :, d]
-    where :math:`g[h]` is the MPS core at step :math:`h`.
-
-    Args:
-        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
-
-    Returns:
-        torch.Tensor: Left term. Shape: (H, R).
-        torch.Tensor: Right term. Shape: (H, R).
-    """
-    _, H = g[1].shape[0], len(g)
-
-    # Map: (1, Do, R) -> (R,)
-    lh = g[0].sum(dim=1).squeeze(0)  # (R,)
-    left = [torch.ones_like(lh), lh]
-    for h in range(1, H - 1):
-        # Map: (R, Do, R') -> (R, R')
-        gh_y = g[h].sum(dim=1)  # (R, R')
-        lh = torch.einsum("i,ij->j", lh, gh_y)
-        left.append(lh)
-
-    # Map: (R, Do, 1) -> (R,)
-    rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
-    right = [torch.ones_like(rh), rh]
-    for h in range(H - 2, 0, -1):
-        gh_y = g[h].sum(dim=1)  # (R, R')
-        rh = torch.einsum("ij,j->i", gh_y, rh)
-        right.append(rh)
-    right.reverse()
-
-    if pad:
-        r_max = max([x.size(0) for x in left + right])
-        left_m, left_mask = pad_and_stack(left, max_len=r_max)
-        right_m, right_mask = pad_and_stack(right, max_len=r_max)
-
-        return (
-            left_m,
-            left_mask,
-            right_m,
-            right_mask,
-        )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
-    return torch.stack(left), torch.stack(right)
-
-
-def compute_lr_marginalization_cache_bm(g: torch.nn.ParameterList, pad: bool = True):
-    """Compute the left and right marginalization caches for the Born machine.
-
-    Args:
-        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
-
-    Returns:
-        torch.Tensor: Left term. Shape: (H, R).
-        torch.Tensor: Right term. Shape: (H, R).
-    """
-    _, H = g[1].shape[0], len(g)
-    dt, dv = g[0].dtype, g[0].device
-
-    # Map: (1, Do, R) -> (R,)
-    lh = torch.einsum("idj,pdq->jq", g[0], g[0])
-    R0 = g[0].shape[0]
-    left = [
-        torch.einsum(
-            "i,j->ij",
-            torch.ones(R0, dtype=dt, device=dv),
-            torch.ones(R0, dtype=dt, device=dv),
-        ),
-        lh,
-    ]
-    for h in range(1, H - 1):
-        lh = torch.einsum("ip,idj,pdq->jq", lh, g[h], g[h])
-        left.append(lh)
-
-    # Map: (R, Do, 1) -> (R,)
-    rh = torch.einsum("idj,pdq->ip", g[-1], g[-1])
-    RH = g[-1].shape[0]
-    right = [
-        torch.einsum(
-            "i,j->ij",
-            torch.ones(RH, dtype=dt, device=dv),
-            torch.ones(RH, dtype=dt, device=dv),
-        ),
-        rh,
-    ]
-    for h in range(H - 2, 0, -1):
-        rh = torch.einsum("idj,pdq,jq->ip", g[h], g[h], rh)
-        right.append(rh)
-    right.reverse()
-
-    if pad:
-        r_max = max([x.size(0) for x in left + right])
-        left_m, left_mask = pad_and_stack2d(left, max_len=r_max)
-        right_m, right_mask = pad_and_stack2d(right, max_len=r_max)
-
-        return (
-            left_m,
-            left_mask,
-            right_m,
-            right_mask,
-        )  # (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax)
-    return torch.stack(left), torch.stack(right)
-
-
 def compute_lr_selection_cache(
     g: torch.nn.ParameterList, y: torch.Tensor, pad: bool = True
 ):
@@ -371,9 +229,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
             g, y
         )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
-        ml, ml_mask, mr, mr_mask = compute_lr_marginalization_cache_bm(
-            g
-        )  # (H, R', R'), (H, R', R'), (H, R', R'), (H, R', R')
 
         # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
         sl = [
@@ -382,22 +237,12 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         sr = [
             sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
         ]  # (H, B, R) -> H x (B, R)
-        ml = [
-            ml[h, : ml_mask[h][:, 0].sum().long(), : ml_mask[h][:, 0].sum().long()]
-            for h in range(H)
-        ]  # (H, R) -> H x (R,)
-        mr = [
-            mr[h, : mr_mask[h][:, 0].sum().long(), : mr_mask[h][:, 0].sum().long()]
-            for h in range(H)
-        ]  # (H, R) -> H x (R,)
 
         # Boundary Corrections:
         sl[0] = sl[0][:, :1]
-        ml[0] = ml[0][:1]
         sr[-1] = sr[-1][:, :1]
-        mr[-1] = mr[-1][:1]
 
-        return sl, sr, ml, mr
+        return sl, sr
 
     def train_example(self, *args, **kwargs):
         with torch.no_grad():
@@ -435,7 +280,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-        sl, sr, _, _ = self.build_cache(x, y)
+        sl, sr = self.build_cache(x, y)
 
         losses = []
         for n_sweeps in range(n_sweeps):
