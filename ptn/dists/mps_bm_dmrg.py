@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 from ptn.dists._abc import (
     AbstractDisributionHead,
@@ -121,6 +122,17 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         Z = \\sum_{y1, y2, ..., yH} \\left(G0[y1] G1[y2] ... GH[yH] \\right) **2
 
 
+    Usage:
+        - Training: call `train_example(x, y, ...)`, which performs local two-site
+          DMRG-style updates and updates the internal MPS cores in-place. This method
+          implements its own inner optimization loop (does not use the external optimizer).
+        - Validation/Evaluation: call `forward(x, y, ...)` to compute the current loss
+          (and optionally logits) without mutating parameters. This is what evaluation
+          loops should use.
+
+    Note:
+        Since this is an unconditional model, `x` is currently unused.
+
     """
 
     def __init__(self, config: AbstractDisributionHeadConfig):
@@ -148,14 +160,14 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 plist.append(torch.nn.Parameter(w.T.reshape(R, Do, R)))
         self.g = torch.nn.ParameterList(plist)
 
-        self.assert_mixed_canonical()
+        self._assert_mixed_canonical()
 
     def __repr__(self):
         bond_dims = [self.g[h].shape[0] for h in range(len(self.g))]
         bond_dims.append(self.g[-1].shape[-1])
         return f"MPS_BM_DMRG(bond_dims={bond_dims})"
 
-    def assert_mixed_canonical(self, center=0, atol=1e-2):
+    def _assert_mixed_canonical(self, center=0, atol=1e-2):
         if self.config.ignore_canonical:
             return
         for h in range(len(self.g) - 1, center + 1, -1):
@@ -165,58 +177,21 @@ class MPS_BM_DMRG(AbstractDisributionHead):
             w = self.g[h].reshape(-1, self.g[h].size(-1))  # (Do*R, R)
             assert torch.allclose(w.T @ w, torch.eye(w.size(1)), atol=atol)
 
-    def forward(
-        self,
-        x,
-        y=None,
-        ignore_index: int = -100,
-        return_logits: bool = False,
-        eps_clamp: float = 1e-10,
-    ):
-        # Input validation
-        assert x.ndim == 2, "x must be 2D (B, D)"
-        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
-        assert (
-            y is None or y.size(1) == self.config.horizon
-        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
-        dt, dv = x.dtype, x.device
+    def _build_cache(self, x, y):
+        """Build the left and right selection and marginalization caches.
 
-        B, R, H, V = (
-            x.size(0),
-            self.config.rank,
-            self.config.horizon,
-            self.config.d_output,
-        )
-        loss = None
-        self.sig = (
-            lambda x: x
-        )  # left for user to override (i.e. when using born machine)
-        sl, sr = self.build_cache(x, y)
-        g = self.g
+        This method is used to build the left and right selection and marginalization caches.
+        Caches are defined as:
+            sl[h] = G0[y1] G1[y2] ... Gh-1[yh-1]
+            sr[h] = Gh[yh+1] Gh+1[yh+2] ... GH[yH]
 
-        if y is not None:
-            h = 0
-            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
-            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
+        Args:
+            x (torch.Tensor): Input tensor. Shape: (B, D).
+            y (torch.Tensor): Target tensor. Shape: (B, H).
 
-            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
-            z = torch.einsum("idj,idj->", g[h], g[h])
-            g_tilde_ix = torch.einsum(
-                "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
-            )  # (Rl, B, Rr)
-
-            # compute loss
-            psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
-            loss = (
-                z.clamp(min=eps_clamp).log()
-                - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-            ) * (1 / H)
-
-            return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
-
-        return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
-
-    def build_cache(self, x, y):
+        Returns:
+            Tuple[List[torch.Tensor], List[torch.Tensor]]: Left and right caches.
+        """
         # Precompute L and R
         B, R, Do, H = (
             x.shape[0],
@@ -247,17 +222,81 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
         return sl, sr
 
-    def train_example(self, *args, **kwargs):
-        return self._train_example(*args, **kwargs)
+    def forward(
+        self,
+        x: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
+        ignore_index: int = -100,
+        return_logits: bool = False,
+        eps_clamp: float = 1e-10,
+    ):
+        """Forward pass for the model.
 
-    def _train_example(
+        This method is not intended to be used for training. Use `train_example` instead.
+        Use this method for evaluation (i.e. computing loss on validation set).
+
+        Args:
+            x (torch.Tensor): Input tensor. Shape: (B, D).
+            y (Optional[torch.Tensor], optional): Target tensor. Shape: (B, H). Defaults to None.
+            ignore_index (int, optional): Ignore index for loss computation. Defaults to -100.
+            return_logits (bool, optional): Whether to return logits. Defaults to False.
+            eps_clamp (float, optional): Clamping value for the loss. Defaults to 1e-10.
+
+        Returns:
+            AbstractDisributionHeadOutput: Output with loss and logits.
+        """
+
+        # Input validation
+        assert x.ndim == 2, "x must be 2D (B, D)"
+        assert y is None or y.ndim == 2, "y must be 2D (B, H)"
+        assert (
+            y is None or y.size(1) == self.config.horizon
+        ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
+        dt, dv = x.dtype, x.device
+
+        B, R, H, V = (
+            x.size(0),
+            self.config.rank,
+            self.config.horizon,
+            self.config.d_output,
+        )
+        loss = None
+        self.sig = (
+            lambda x: x
+        )  # left for user to override (i.e. when using born machine)
+        sl, sr = self._build_cache(x, y)
+        g = self.g
+
+        if y is not None:
+            h = 0
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
+
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+            z = torch.einsum("idj,idj->", g[h], g[h])
+            g_tilde_ix = torch.einsum(
+                "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+            )  # (Rl, B, Rr)
+
+            # compute loss
+            psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
+            loss = (
+                z.clamp(min=eps_clamp).log()
+                - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+            ) * (1 / H)
+
+            return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
+
+        return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
+
+    def train_example(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-        eps_clamp: float = 1e-10,
         lr: float = 1e-4,
+        eps_clamp: float = 1e-16,
         eps_trunc: float = 1e-7,
-        max_bond_dim: int = 800,
+        max_bond_dim: int = 32,
         n_grad_steps: int = 10,
         verbose: bool = False,
     ):
@@ -266,13 +305,17 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         Args:
             x (torch.Tensor): Input tensor. Shape: (B, H).
             y (torch.Tensor): Target tensor. Shape: (B, H).
-            optimizer (torch.optim.Optimizer): Optimizer.
-            n_sweeps (int, optional): Number of sweeps. Defaults to 1.
+            lr (float): Learning rate.
+            eps_clamp (float): Clamping value for the loss.
+            eps_trunc (float): SVD truncation threshold relative to max singular value.
+            max_bond_dim (int): Maximum bond dimension after truncation.
+            n_grad_steps (int): Number of local gradient steps per merge before SVD.
+            verbose (bool): If True, shows progress bars for left/right sweeps.
 
         Note: we don't use x since this is an unconditional model.
 
         Returns:
-            torch.Tensor: Loss.
+            List[torch.Tensor]: Losses collected during the sweep.
         """
         # Precompute L and R
         B, R, Do, H = (
@@ -283,7 +326,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-        sl, sr = self.build_cache(x, y)
+        sl, sr = self._build_cache(x, y)
 
         losses = []
 
@@ -423,8 +466,8 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         return losses
 
 
-def train_example():
-    B, H, D, V = 32, 32, 9, 2
+def train_single_example():
+    B, H, D, V = 32, 8, 1, 2
     mt_head = MPS_BM_DMRG(
         AbstractDisributionHeadConfig(
             d_model=D,
@@ -436,7 +479,7 @@ def train_example():
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
-        losses = mt_head.train_example(x, y, lr=1e-4)
+        losses = mt_head.train_example(x, y, lr=1e-3, max_bond_dim=16)
         print(f"[{i}] loss: {losses[-1]:.2f}")
 
 
@@ -444,4 +487,4 @@ if __name__ == "__main__":
     # set seed
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    train_example()
+    train_single_example()
