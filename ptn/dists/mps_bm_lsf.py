@@ -269,7 +269,7 @@ def train_single_example():
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    optimizer = torch.optim.AdamW(mt_head.parameters(), lr=1e-3)
+    optimizer = torch.optim.SGD(mt_head.parameters(), lr=1e-3)
     for i in range(10_000):
         output = mt_head(x, y)
         output.loss.backward()
