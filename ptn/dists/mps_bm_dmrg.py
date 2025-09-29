@@ -8,8 +8,6 @@ from ptn.dists._abc import (
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
-
 
 def pad_and_stack(seq, max_len):
     """Pad and stack a sequence of tensors.
