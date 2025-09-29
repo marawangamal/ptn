@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 from ptn.dists._abc import (
     AbstractDisributionHead,
@@ -5,6 +6,7 @@ from ptn.dists._abc import (
     AbstractDisributionHeadOutput,
 )
 import torch.nn.functional as F
+from tqdm import tqdm
 
 
 def pad_and_stack(seq, max_len):
@@ -31,142 +33,6 @@ def pad_and_stack(seq, max_len):
             )
         )
     return torch.stack(padded), torch.stack(mask)
-
-
-def pad_and_stack2d(seq, max_len=None, pad_value=0.0):
-    """Pad and stack a list of 2D (Di x Di) tensors.
-
-    Args:
-        seq: list[Tensor], each (Di, Di)
-        max_len: int or None — if None, inferred from seq
-        pad_value: scalar fill value for padding
-
-    Returns:
-        padded: (T, max_len, max_len)
-        mask:   (T, max_len, max_len) bool (True=valid)
-    """
-    if not seq:
-        raise ValueError("seq must be non-empty.")
-
-    if max_len is None:
-        max_len = max(x.size(0) for x in seq)
-
-    padded, masks = [], []
-    for x in seq:
-        h, w = x.shape
-        if h > max_len or w > max_len:
-            raise ValueError(f"item {h}x{w} exceeds max_len={max_len}")
-        pad_h, pad_w = max_len - h, max_len - w
-
-        # data
-        padded.append(F.pad(x, (0, pad_w, 0, pad_h), value=pad_value))
-        # mask: ones on data region, zeros on padding
-        m = torch.ones_like(x, dtype=torch.bool)
-        masks.append(F.pad(m, (0, pad_w, 0, pad_h), value=False))
-
-    return torch.stack(padded), torch.stack(masks)
-
-
-def compute_lr_marginalization_cache(g: torch.nn.ParameterList, pad: bool = True):
-    """Compute the left and right marginalization caches for the Born machine.
-
-    Args:
-        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
-
-    Returns:
-        torch.Tensor: Left term. Shape: (H, R).
-        torch.Tensor: Right term. Shape: (H, R).
-    """
-    _, H = g[1].shape[0], len(g)
-
-    # Map: (1, Do, R) -> (R,)
-    lh = g[0].sum(dim=1).squeeze(0)  # (R,)
-    left = [torch.ones_like(lh), lh]
-    for h in range(1, H - 1):
-        # Map: (R, Do, R') -> (R, R')
-        gh_y = g[h].sum(dim=1)  # (R, R')
-        lh = torch.einsum("i,ij->j", lh, gh_y)
-        left.append(lh)
-
-    # Map: (R, Do, 1) -> (R,)
-    rh = g[-1].sum(dim=1).squeeze(-1)  # (R,)
-    right = [torch.ones_like(rh), rh]
-    for h in range(H - 2, 0, -1):
-        gh_y = g[h].sum(dim=1)  # (R, R')
-        rh = torch.einsum("ij,j->i", gh_y, rh)
-        right.append(rh)
-    right.reverse()
-
-    if pad:
-        r_max = max([x.size(0) for x in left + right])
-        left_m, left_mask = pad_and_stack(left, max_len=r_max)
-        right_m, right_mask = pad_and_stack(right, max_len=r_max)
-
-        return (
-            left_m,
-            left_mask,
-            right_m,
-            right_mask,
-        )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
-    return torch.stack(left), torch.stack(right)
-
-
-def compute_lr_marginalization_cache_bm(g: torch.nn.ParameterList, pad: bool = True):
-    """Compute the left and right marginalization caches for the Born machine.
-
-    Args:
-        g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
-
-    Returns:
-        torch.Tensor: Left term. Shape: (H, R).
-        torch.Tensor: Right term. Shape: (H, R).
-    """
-    _, H = g[1].shape[0], len(g)
-    dt, dv = g[0].dtype, g[0].device
-
-    # Map: (1, Do, R) -> (R,)
-    lh = torch.einsum("idj,pdq->jq", g[0], g[0])
-    R0 = g[0].shape[0]
-    left = [
-        torch.einsum(
-            "i,j->ij",
-            torch.ones(R0, dtype=dt, device=dv),
-            torch.ones(R0, dtype=dt, device=dv),
-        ),
-        lh,
-    ]
-    for h in range(1, H - 1):
-        lh = torch.einsum("ip,idj,pdq->jq", lh, g[h], g[h])
-        left.append(lh)
-
-    # Map: (R, Do, 1) -> (R,)
-    rh = torch.einsum("idj,pdq->ip", g[-1], g[-1])
-    RH = g[-1].shape[0]
-    right = [
-        torch.einsum(
-            "i,j->ij",
-            torch.ones(RH, dtype=dt, device=dv),
-            torch.ones(RH, dtype=dt, device=dv),
-        ),
-        rh,
-    ]
-    for h in range(H - 2, 0, -1):
-        rh = torch.einsum("idj,pdq,jq->ip", g[h], g[h], rh)
-        right.append(rh)
-    right.reverse()
-
-    if pad:
-        r_max = max([x.size(0) for x in left + right])
-        left_m, left_mask = pad_and_stack2d(left, max_len=r_max)
-        right_m, right_mask = pad_and_stack2d(right, max_len=r_max)
-
-        return (
-            left_m,
-            left_mask,
-            right_m,
-            right_mask,
-        )  # (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax), (H, Rmax, Rmax)
-    return torch.stack(left), torch.stack(right)
 
 
 def compute_lr_selection_cache(
@@ -254,6 +120,17 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         Z = \\sum_{y1, y2, ..., yH} \\left(G0[y1] G1[y2] ... GH[yH] \\right) **2
 
 
+    Usage:
+        - Training: call `train_example(x, y, ...)`, which performs local two-site
+          DMRG-style updates and updates the internal MPS cores in-place. This method
+          implements its own inner optimization loop (does not use the external optimizer).
+        - Validation/Evaluation: call `forward(x, y, ...)` to compute the current loss
+          (and optionally logits) without mutating parameters. This is what evaluation
+          loops should use.
+
+    Note:
+        Since this is an unconditional model, `x` is currently unused.
+
     """
 
     def __init__(self, config: AbstractDisributionHeadConfig):
@@ -281,29 +158,92 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 plist.append(torch.nn.Parameter(w.T.reshape(R, Do, R)))
         self.g = torch.nn.ParameterList(plist)
 
-        self.assert_right_canonical()
+        self._assert_mixed_canonical()
 
     def __repr__(self):
         bond_dims = [self.g[h].shape[0] for h in range(len(self.g))]
         bond_dims.append(self.g[-1].shape[-1])
         return f"MPS_BM_DMRG(bond_dims={bond_dims})"
 
-    def assert_right_canonical(self):
+    def _assert_mixed_canonical(self, center=0, atol=1e-2):
         if self.config.ignore_canonical:
             return
-        for h in range(len(self.g) - 1, 0, -1):
+        for h in range(len(self.g) - 1, center + 1, -1):
             w = self.g[h].reshape(self.g[h].size(0), -1)  # (R, Do*R)
-            assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=1e-6)
-        # print("[PASS] MPS is in right-canonical format")
+            assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=atol)
+        for h in range(center):
+            w = self.g[h].reshape(-1, self.g[h].size(-1))  # (Do*R, R)
+            assert torch.allclose(w.T @ w, torch.eye(w.size(1)), atol=atol)
+
+    def _build_cache(self, x, y):
+        """Build the left and right selection and marginalization caches.
+
+        This method is used to build the left and right selection and marginalization caches.
+        Caches are defined as:
+            sl[h] = G0[y1] G1[y2] ... Gh-1[yh-1]
+            sr[h] = Gh[yh+1] Gh+1[yh+2] ... GH[yH]
+
+        Args:
+            x (torch.Tensor): Input tensor. Shape: (B, D).
+            y (torch.Tensor): Target tensor. Shape: (B, H).
+
+        Returns:
+            Tuple[List[torch.Tensor], List[torch.Tensor]]: Left and right caches.
+        """
+        # Precompute L and R
+        B, R, Do, H = (
+            x.shape[0],
+            self.config.rank,
+            self.config.d_output,
+            self.config.horizon,
+        )
+        dt, dv = x.dtype, x.device
+        g = self.g  # MPS cores list H x (R, Do, R)
+
+        # Precomputes left/right selection and marginalization caches
+        # NEW:
+        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
+            g, y
+        )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
+
+        # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
+        sl = [
+            sl[:, h, : sl_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+        sr = [
+            sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
+        ]  # (H, B, R) -> H x (B, R)
+
+        # Boundary Corrections:
+        sl[0] = sl[0][:, :1]
+        sr[-1] = sr[-1][:, :1]
+
+        return sl, sr
 
     def forward(
         self,
-        x,
-        y=None,
+        x: torch.Tensor,
+        y: Optional[torch.Tensor] = None,
         ignore_index: int = -100,
         return_logits: bool = False,
         eps_clamp: float = 1e-10,
     ):
+        """Forward pass for the model.
+
+        This method is not intended to be used for training. Use `train_example` instead.
+        Use this method for evaluation (i.e. computing loss on validation set).
+
+        Args:
+            x (torch.Tensor): Input tensor. Shape: (B, D).
+            y (Optional[torch.Tensor], optional): Target tensor. Shape: (B, H). Defaults to None.
+            ignore_index (int, optional): Ignore index for loss computation. Defaults to -100.
+            return_logits (bool, optional): Whether to return logits. Defaults to False.
+            eps_clamp (float, optional): Clamping value for the loss. Defaults to 1e-10.
+
+        Returns:
+            AbstractDisributionHeadOutput: Output with loss and logits.
+        """
+
         # Input validation
         assert x.ndim == 2, "x must be 2D (B, D)"
         assert y is None or y.ndim == 2, "y must be 2D (B, H)"
@@ -322,97 +262,58 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
-        sl, sr, ml, mr = self.build_cache(x, y)
+        sl, sr = self._build_cache(x, y)
         g = self.g
 
         if y is not None:
-            h = H - 1
+            h = 0
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
 
-            # Map: (R, D, R) -> (R, B, R)
-            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-            gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-            psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-            z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+            z = torch.einsum("idj,idj->", g[h], g[h])
+            g_tilde_ix = torch.einsum(
+                "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+            )  # (Rl, B, Rr)
 
-            # if ((psi**2) > z).any():
-            #     print("WARNING: psi > z")
-            #     print(f"psi > z: {psi} > {z}")
-
+            # compute loss
+            psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
             loss = (
                 z.clamp(min=eps_clamp).log()
-                - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
-            )
+                - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+            ) * (1 / H)
 
             return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
 
         return AbstractDisributionHeadOutput(loss=loss, logits=torch.randn(B, H, V))
 
-    def build_cache(self, x, y):
-        # Precompute L and R
-        B, R, Do, H = (
-            x.shape[0],
-            self.config.rank,
-            self.config.d_output,
-            self.config.horizon,
-        )
-        dt, dv = x.dtype, x.device
-        g = self.g  # MPS cores list H x (R, Do, R)
-
-        # Precomputes left/right selection and marginalization caches
-        # NEW:
-        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
-            g, y
-        )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
-        ml, ml_mask, mr, mr_mask = compute_lr_marginalization_cache_bm(
-            g
-        )  # (H, R', R'), (H, R', R'), (H, R', R'), (H, R', R')
-
-        # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
-        sl = [
-            sl[:, h, : sl_mask[0, h].sum().long()] for h in range(H)
-        ]  # (H, B, R) -> H x (B, R)
-        sr = [
-            sr[:, h, : sr_mask[0, h].sum().long()] for h in range(H)
-        ]  # (H, B, R) -> H x (B, R)
-        ml = [
-            ml[h, : ml_mask[h][:, 0].sum().long(), : ml_mask[h][:, 0].sum().long()]
-            for h in range(H)
-        ]  # (H, R) -> H x (R,)
-        mr = [
-            mr[h, : mr_mask[h][:, 0].sum().long(), : mr_mask[h][:, 0].sum().long()]
-            for h in range(H)
-        ]  # (H, R) -> H x (R,)
-
-        # Boundary Corrections:
-        sl[0] = sl[0][:, :1]
-        ml[0] = ml[0][:1]
-        sr[-1] = sr[-1][:, :1]
-        mr[-1] = mr[-1][:1]
-
-        return sl, sr, ml, mr
-
     def train_example(
         self,
         x: torch.Tensor,
         y: torch.Tensor,
-        n_sweeps: int = 1,
-        eps_clamp: float = 1e-10,
-        lr: float = 1e-3,
-        eps_trunc: float = 1e-32,
+        lr: float = 1e-4,
+        eps_clamp: float = 1e-16,
+        eps_trunc: float = 1e-7,
         max_bond_dim: int = 32,
+        n_grad_steps: int = 10,
+        verbose: bool = False,
     ):
         """Train the model for one step.
 
         Args:
             x (torch.Tensor): Input tensor. Shape: (B, H).
             y (torch.Tensor): Target tensor. Shape: (B, H).
-            optimizer (torch.optim.Optimizer): Optimizer.
-            n_sweeps (int, optional): Number of sweeps. Defaults to 1.
+            lr (float): Learning rate.
+            eps_clamp (float): Clamping value for the loss.
+            eps_trunc (float): SVD truncation threshold relative to max singular value.
+            max_bond_dim (int): Maximum bond dimension after truncation.
+            n_grad_steps (int): Number of local gradient steps per merge before SVD.
+            verbose (bool): If True, shows progress bars for left/right sweeps.
 
         Note: we don't use x since this is an unconditional model.
 
         Returns:
-            torch.Tensor: Loss.
+            List[torch.Tensor]: Losses collected during the sweep.
         """
         # Precompute L and R
         B, R, Do, H = (
@@ -423,102 +324,165 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-        sl, sr, ml, mr = self.build_cache(x, y)
+        sl, sr = self._build_cache(x, y)
 
-        going_right = True
         losses = []
-        # BUG: m[k] = 0 for all k, m[0] should never be 0 and always be 1
-        for n_sweeps in range(n_sweeps):
-            for h in range(1, H - 1) if going_right else range(H - 1, -1, -1):
-                Rl, Rr = g[h].size(0), g[h + 1].size(-1)
 
-                # Freeze all cores except h
-                for k in range(H):
-                    g[k].requires_grad = True if k == h else False
+        pbar_right_sweep = (
+            tqdm(range(0, H - 1), desc="Right Sweep") if verbose else range(0, H - 1)
+        )
+        for h in pbar_right_sweep:  # (sweep rightwards ===>)
+            # self.assert_mixed_canonical(center=h) # used for debugging
 
-                # Map: (R, D, R) -> (R, B, R)
-                yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
-                gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
-                psi = torch.einsum("bi,ibj,bj->b", sl[h], gh_yh, sr[h])
-                z = torch.einsum("ip,idj,pdq,jq->", ml[h], g[h], g[h], mr[h])
-                g_tilde = torch.einsum("ivj,jdk->ivdk", g[h], g[h + 1])
+            # Setup dims and & one-hots
+            Rl, Rr = g[h].size(0), g[h + 1].size(-1)
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B, Do)
+            e_yp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B, Do)
 
+            # Freeze all cores except h
+            for k in range(H):
+                g[k].requires_grad = True if k in [h, h + 1] else False
+
+            # merge
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h], g[h + 1])
+            z = torch.einsum("idj,idj->", g[h], g[h])
+            losses_right = []
+            for _ in range(n_grad_steps):
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_y, e_yp1
+                )  # (Rl, B, Rr)
+
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h], g_tilde_ix, sr[h + 1])
                 loss = (
                     z.clamp(min=eps_clamp).log()
-                    - 2 * (psi).abs().clamp(min=eps_clamp).log().mean()
-                )
-                losses.append(loss)
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                ) * (1 / H)
 
-                z_prime = 2 * g_tilde  # (Rl, Do, Do Rr)
-                i_h = torch.eye(self.config.d_output, device=dv)[y[:, h]]  # (B,)
-                i_hp1 = torch.eye(self.config.d_output, device=dv)[y[:, h + 1]]  # (B,)
-                psi_prime = torch.einsum(
-                    "bi,bd,bv,bj->bidvj", sl[h], i_h, i_hp1, sr[h + 1]
-                )  # (B, Rl, Do, Do, Rr)
-
-                # Shape:  (Rl, Do, Do, Rr)
-                dldg_tilde = (z_prime / z.clamp(min=eps_clamp)) - 2 * (
-                    psi_prime / psi.view(-1, 1, 1, 1, 1).clamp(min=eps_clamp)
-                ).mean(dim=0)
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
                 g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
-                u, s, vt = torch.linalg.svd(
-                    g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
-                )
+                losses_right.append(loss.detach())
+            if verbose:
+                pbar_right_sweep.set_postfix(loss=torch.stack(losses_right).mean())
+            losses.append(losses_right[-1])
 
-                if not g_tilde.isfinite().all():
-                    print(f"NaN in g_tilde")
-                    raise ValueError("NaN in g_tilde")
+            # svd
+            u, s, vt = torch.linalg.svd(
+                g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
+            )
 
-                # Now we need to re-canonicalize and update left / right caches
-                with torch.no_grad():
-                    # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
-                    # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
-                    # end of the rightwards sweep.
-                    if going_right:
-                        Rtrunc = min(
-                            max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1
-                        )
-                        g[h] = u.reshape(Rl, Do, u.size(-1))[
-                            :, :, :Rtrunc
-                        ]  # (R, Do, R)
-                        g[h + 1] = torch.einsum(
-                            "ir,rvj->ivj",
-                            torch.diag(s[:Rtrunc]),
-                            vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
-                        )
-                        # normalize g[h+1]
-                        g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
-                            min=eps_clamp
-                        )
-                        # NOTE: we changed gh and gh+1 so left[h+1:], right[:h+1] are invalid for both select/margin caches.
-                        # But, we only need to use h+1 in the next iteration.
-                        # So we can update sl[h+1] and ml[h+1] only. At then end of the sweep sl, ml will be valid for all h.
-                        # But sr, mr will be invalid everywhere. Thankfully we wont need sr, mr on initial leftwards sweep.
-                        sl[h + 1] = torch.einsum("bi,idj->bj", sl[h], g[h])
-                        ml[h + 1] = torch.einsum("ip,idj,pdq->jq", ml[h], g[h], g[h])
+            if not g_tilde.isfinite().all():
+                print(f"NaN in g_tilde")
+                raise ValueError("NaN in g_tilde")
+
+            # NOTE: We are going right, so everything in front is right canonicalized. However, we need to
+            # leave our wake left canonicalized as we pass through so that we are ready to go leftwards at the
+            # end of the rightwards sweep.
+            Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+            g[h] = u.reshape(Rl, Do, u.size(-1))[:, :, :Rtrunc]  # (R, Do, R)
+            g[h + 1] = torch.einsum(
+                "ir,rvj->ivj",
+                torch.diag(s[:Rtrunc]),
+                vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
+            )
+            # normalize
+            g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
+                min=eps_clamp
+            )
+            # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
+            # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
+            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            gh_yh = g[h].gather(dim=1, index=yh)  # (R, B, R)
+            sl[h + 1] = torch.einsum("bi,ibj->bj", sl[h], gh_yh)  # update cache
+
+        pbar_left_sweep = (
+            tqdm(range(H - 1, 0, -1), desc="Left Sweep")
+            if verbose
+            else range(H - 1, 0, -1)
+        )
+        for h in pbar_left_sweep:  # ( <=== sweep leftwards)
+            # self.assert_mixed_canonical(center=h) # used for debugging# self.assert_mixed_canonical(center=h) # used for debugging
+            # Setup dims and & one-hots
+            Rl, Rr = g[h - 1].size(0), g[h].size(-1)
+            e_ym1 = torch.eye(self.config.d_output, device=dv)[y[:, h - 1]]
+            e_y = torch.eye(self.config.d_output, device=dv)[y[:, h]]
+
+            # Freeze all cores except h
+            for k in range(H):
+                g[k].requires_grad = True if k in [h - 1, h] else False
+
+            # merge
+            g_tilde = torch.einsum("idj,jqk->idqk", g[h - 1], g[h])
+            losses_left = []
+            for _ in range(n_grad_steps):
+                g_tilde_ix = torch.einsum(
+                    "idvj,bd,bv->bij", g_tilde, e_ym1, e_y
+                )  # (Rl, B, Rr)
+
+                # compute loss
+                psi = torch.einsum("bi,bij,bj->b", sl[h - 1], g_tilde_ix, sr[h])
+                z = torch.einsum("idj,idj->", g[h], g[h])
+                loss = (
+                    z.clamp(min=eps_clamp).log()
+                    - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                ) * (1 / H)
+
+                # sgd
+                (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
+                g_tilde = g_tilde - dldg_tilde * lr  # (Rl, Do, Do Rr)
+                losses_left.append(loss.detach())
+            if verbose:
+                pbar_left_sweep.set_postfix(loss=torch.stack(losses_left).mean().item())
+
+            # svd
+            u, s, vt = torch.linalg.svd(
+                g_tilde.reshape(Rl * Do, Do * Rr), full_matrices=True
+            )
+
+            if not g_tilde.isfinite().all():
+                print(f"NaN in g_tilde")
+                raise ValueError("NaN in g_tilde")
+
+            # NOTE: We are going left, so everything in front is left canonicalized. However, we need to
+            # leave our wake right canonicalized as we pass through so that we are ready to go rightwards at the
+            Rtrunc = min(max_bond_dim, (s / s.abs().max() > eps_trunc).sum() or 1)
+            g[h - 1] = torch.einsum(
+                "idj,jk->idk",
+                u[:, :Rtrunc].reshape(Rl, Do, Rtrunc),  # (Rl, Do, R')
+                torch.diag(s[:Rtrunc]),  # (R', R')
+            )
+            g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
+            # normalize
+            g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
+                min=eps_clamp
+            )
+            yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
+            gh_yh = g[h].gather(dim=1, index=yh)
+            sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
 
         return losses
 
 
-def train_example():
-    B, H, D, V = 32, 5, 9, 2
-    mt_head = BM(
+def train_single_example():
+    B, H, D, V = 32, 8, 1, 2
+    mt_head = MPS_BM_DMRG(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
-            rank=8,
+            rank=2,
         ),
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    for i in range(32):
-        losses = mt_head.train_example(x, y, lr=1e-3)
-        print(torch.stack(losses).mean())
+    for i in range(1000):
+        losses = mt_head.train_example(x, y, lr=1e-3, max_bond_dim=16)
+        print(f"[{i}] loss: {losses[-1]:.2f}")
 
 
 if __name__ == "__main__":
     # set seed
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
-    train_example()
+    train_single_example()

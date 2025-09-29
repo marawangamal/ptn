@@ -15,6 +15,8 @@ from ptn.dists import dists
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
+# NOTE: change mps_bm_dmrg to take in the whole train_dataloader and the logger too.
+
 
 def get_data_loaders(batch_size=32, data_dir="./data", scale=None):
     """Create MNIST data loaders with binary thresholding."""
@@ -186,6 +188,17 @@ def set_seed(seed=42):
     np.random.seed(seed)
 
 
+def model_state_digest(model) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with torch.no_grad():
+        for k, t in model.state_dict().items():
+            h.update(k.encode("utf-8"))
+            h.update(t.detach().cpu().contiguous().numpy().tobytes())
+    return h.hexdigest()[:8]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train dists on MNIST")
     parser.add_argument("--model", default="mps_sigma_lsf", choices=dists.keys())
@@ -287,7 +300,7 @@ def main():
         )
 
         print(
-            f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
+            f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Mhash: {model_state_digest(model)}"
         )
 
         # Generate and log images

@@ -257,5 +257,27 @@ def run_test():
     # print(f"generated: {out}")
 
 
+def train_single_example():
+    B, H, D, V = 32, 8, 1, 2
+    mt_head = MPS_BM_LSF(
+        AbstractDisributionHeadConfig(
+            d_model=D,
+            d_output=V,
+            horizon=H,
+            rank=2,
+        ),
+    )
+    x = torch.randn(B, D)
+    y = torch.randint(0, V, (B, H))
+    optimizer = torch.optim.SGD(mt_head.parameters(), lr=1e-3)
+    for i in range(10_000):
+        output = mt_head(x, y)
+        output.loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        if i % 100 == 0:
+            print(f"[{i}] loss: {output.loss:.2f}")
+
+
 if __name__ == "__main__":
-    run_test()
+    train_single_example()
