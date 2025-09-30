@@ -3,9 +3,14 @@ from ptn.dists.cp_sigma_lsf import CP_SIGMA_LSF
 from ptn.dists.mps_bm_dmrg import MPS_BM_DMRG
 from ptn.dists.mps_bm_lsf import MPS_BM_LSF
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
+from ptn.dists.stp import STP
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 dists = {
+    # ----------------------------------
+    # Basic
+    # ----------------------------------
+    "stp": STP,
     # ----------------------------------
     # CP Dists
     # ----------------------------------
