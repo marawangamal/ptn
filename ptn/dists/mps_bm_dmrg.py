@@ -8,6 +8,9 @@ from ptn.dists._abc import (
 import torch.nn.functional as F
 from tqdm import tqdm
 
+# TODO: improve documentation
+# TODO: use scale factors for computing psi
+
 
 def pad_and_stack(seq, max_len):
     """Pad and stack a sequence of tensors.
@@ -36,24 +39,37 @@ def pad_and_stack(seq, max_len):
 
 
 def compute_lr_selection_cache(
-    g: torch.nn.ParameterList, y: torch.Tensor, pad: bool = True
+    g: torch.nn.ParameterList,
+    y: torch.Tensor,
+    use_scale_factors: bool = False,
 ):
     """Compute the left and right selection caches for the Born machine.
+
+    Caches are defined as:
+        sl[h] = G0[y1] G1[y2] ... Gh-1[yh-1]
+        sr[h] = Gh+1[yh+1] Gh+2[yh+2] ... GH[yH]
 
     Args:
         g (torch.Tensor): MPS cores. Shape: (Rh-1, Do, Rh) x H
         y (torch.Tensor): Target tensor. Shape: (H,).
 
     Returns:
-        torch.Tensor: Left term. Shape: (H, R).
-        torch.Tensor: Right term. Shape: (H, R).
+        left (torch.Tensor): Left term. Shape: (H, R).
+        right (torch.Tensor): Right term. Shape: (H, R).
+        gammas_left (torch.Tensor): Scale factors for the left term. Shape: (H,).
+        gammas_right (torch.Tensor): Scale factors for the right term. Shape: (H,).
     """
     R0, R1, H = g[0].shape[0], g[0].shape[-1], len(g)
     y_slct = y.reshape(1, -1, 1).expand(R0, -1, R1)  # (1, H, R1)
+    dv, dt = y.device, y.dtype
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
     lh = g[0].gather(dim=1, index=y_slct[:1, :1]).squeeze(0, 1)  # (R,)
     left = [torch.ones_like(lh), lh]
+    gammas_left = [
+        torch.tensor(1, device=dv, dtype=dt),
+        torch.tensor(1, device=dv, dtype=dt),
+    ]
     for h in range(1, H - 1):
         Rh, Rhp1 = g[h].shape[0], g[h + 1].shape[0]
         y_slct = y.reshape(1, -1, 1).expand(Rh, -1, Rhp1)  # (R, H, R)
@@ -61,6 +77,10 @@ def compute_lr_selection_cache(
             g[h].gather(dim=1, index=y_slct[:, h : h + 1, :]).squeeze(1)
         )  # (Rh, Rh+1)
         lh = torch.einsum("i,ij->j", lh, gh_y)  # (Rh,)
+        if use_scale_factors:
+            gam = lh.abs().max()
+            lh = lh / gam
+            gammas_left.append(gam)
         left.append(lh)
 
     # Map: (R, Do, R) -> (R, 1, R) -> (R, R)
@@ -68,6 +88,10 @@ def compute_lr_selection_cache(
     y_slct = y.reshape(1, -1, 1).expand(RHm1, -1, RH)  # (1, H, R1)
     rh = g[-1].gather(dim=1, index=y_slct[:, -1:, :1]).squeeze(1, 2)  # (R,)
     right = [torch.ones_like(rh), rh]
+    gammas_right = [
+        torch.tensor(1, device=dv, dtype=dt),
+        torch.tensor(1, device=dv, dtype=dt),
+    ]
     for h in range(H - 2, 0, -1):
         Rh, Rhp1 = g[h].shape[0], g[h + 1].shape[0]
         y_slct = y.reshape(1, -1, 1).expand(Rh, -1, Rhp1)  # (1, H, R1)
@@ -76,20 +100,27 @@ def compute_lr_selection_cache(
         )  # (Rh, Rhp1)
         rh = torch.einsum("ij,j->i", gh_y, rh)
         right.append(rh)
+        if use_scale_factors:
+            gam = rh.abs().max()
+            rh = rh / gam
+            gammas_right.append(gam)
     right.reverse()
+    gammas_right.reverse()
 
-    if pad:
-        r_max = max([x.size(0) for x in left + right])
-        left_m, left_mask = pad_and_stack(left, max_len=r_max)
-        right_m, right_mask = pad_and_stack(right, max_len=r_max)
+    # Note: left and right contains lists of tensors with different rank dims.
+    # In order to return tensors (needed for torch.vmap), we need to pad and stack them.
+    r_max = max([x.size(0) for x in left + right])
+    left_m, left_mask = pad_and_stack(left, max_len=r_max)
+    right_m, right_mask = pad_and_stack(right, max_len=r_max)
 
-        return (
-            left_m,
-            left_mask,
-            right_m,
-            right_mask,
-        )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
-    return torch.stack(left), torch.stack(right)
+    return (
+        left_m,
+        left_mask,
+        right_m,
+        right_mask,
+        torch.stack(gammas_left),
+        torch.stack(gammas_right),
+    )  # (H, Rmax), (H, Rmax), (H, Rmax), (H, Rmax)
 
 
 batch_compute_lr_selection_terms = torch.vmap(
@@ -200,10 +231,10 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
 
-        # Precomputes left/right selection and marginalization caches
-        # NEW:
-        sl, sl_mask, sr, sr_mask = batch_compute_lr_selection_terms(
-            g, y
+        sl, sl_mask, sr, sr_mask, gammas_left, gammas_right = (
+            batch_compute_lr_selection_terms(
+                g, y, use_scale_factors=self.config.use_scale_factors
+            )
         )  # (B, H, Rmax), (B, H, Rmax), (B, H, Rmax), (B, H, Rmax)
 
         # Convert caches to lists as ranks can change throughout sweep and break tensor shapes
@@ -218,7 +249,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         sl[0] = sl[0][:, :1]
         sr[-1] = sr[-1][:, :1]
 
-        return sl, sr
+        return sl, sr, gammas_left, gammas_right
 
     def forward(
         self,
@@ -262,7 +293,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         self.sig = (
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
-        sl, sr = self._build_cache(x, y)
+        sl, sr, gammas_left, gammas_right = self._build_cache(x, y)
         g = self.g
 
         if y is not None:
@@ -324,7 +355,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         )
         dt, dv = x.dtype, x.device
         g = self.g  # MPS cores list H x (R, Do, R)
-        sl, sr = self._build_cache(x, y)
+        sl, sr, gammas_left, gammas_right = self._build_cache(x, y)
 
         losses = []
 
@@ -357,6 +388,8 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 loss = (
                     z.clamp(min=eps_clamp).log()
                     - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                    - (gammas_right[h:].log().sum(dim=-1)).mean()
+                    - (gammas_left[: h + 1].log().sum(dim=-1)).mean()
                 ) * (1 / H)
 
                 # sgd
@@ -387,9 +420,9 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
             )
             # normalize
-            g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
-                min=eps_clamp
-            )
+            # g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
+            #     min=eps_clamp
+            # )
             # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
             # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
             yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
@@ -454,9 +487,9 @@ class MPS_BM_DMRG(AbstractDisributionHead):
             )
             g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
             # normalize
-            g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
-                min=eps_clamp
-            )
+            # g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
+            #     min=eps_clamp
+            # )
             yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
             gh_yh = g[h].gather(dim=1, index=yh)
             sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
@@ -465,13 +498,14 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
 
 def train_single_example():
-    B, H, D, V = 32, 8, 1, 2
+    B, H, D, V = 32, 28 * 28, 1, 2
     mt_head = MPS_BM_DMRG(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
             rank=2,
+            use_scale_factors=False,
         ),
     )
     x = torch.randn(B, D)
