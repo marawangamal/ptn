@@ -18,6 +18,7 @@ import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
+import wandb
 
 
 def sample_image(mps, typ):
@@ -123,6 +124,12 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     dtset = np.load(train_dataset_name)
     m.designate_data(dtset)
 
+    # wandb init
+    wandb.init(
+        project="ptn-dmrg",
+        name=os.path.basename(train_dataset_name),
+    )
+
     result = find_latest_MPS()
     if result is None:
         print("No MPS found to resume from. Please run 'start' first.")
@@ -165,10 +172,25 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
                 print("Computing test loss...")
                 test_loss = m.Calc_Loss(np.load(test_dataset_name))
                 print(f"Test loss: {test_loss}")
+                wandb.log(
+                    {
+                        "train/loop": loop_last,
+                        "train/loss_last": float(m.Loss[-1]),
+                        "train/lr": float(lr),
+                        "eval/test_loss": float(test_loss),
+                        "mps/bond_mean": (
+                            float(m.bond_dimension.mean())
+                            if hasattr(m, "bond_dimension")
+                            else None
+                        ),
+                        "mps/cutoff": float(m.cutoff) if hasattr(m, "cutoff") else None,
+                    }
+                )
             except:
                 lr *= lr_shrink
                 if lr < lr_inf:
                     print("lr becomes negligible.")
+                    wandb.finish()
                     return
                 m.loadMPS("Loop%dMPS" % loop_last)
                 m.designate_data(dtset)
@@ -180,6 +202,8 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
         loop_last += nlp
         m.saveMPS("Loop%d" % loop_last, True)
         print("Loop%d Saved" % loop_last)
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
