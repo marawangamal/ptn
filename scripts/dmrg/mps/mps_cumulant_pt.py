@@ -4,12 +4,32 @@ class MPS cumulant
 @author: congzlwag
 """
 import numpy as np
-from numpy import ones, dot, zeros, log, asarray, save, load, einsum
-from scipy.linalg import norm, svd
-from numpy.random import rand, seed, randint
+
+# from numpy import ones, dot, zeros, log, asarray, save, load, einsum
+# from scipy.linalg import norm, svd
+# from numpy.random import rand, seed, randint
+import math
 from time import strftime
 import os
 import sys
+
+import torch
+from torch import (
+    ones,
+    dot,
+    zeros,
+    log,
+    einsum,
+    rand,
+    manual_seed as seed,
+    randint,
+    diag,
+    argwhere,
+    asarray,
+)
+from torch.linalg import norm, svd
+
+from torch import int16, int8
 
 
 class MPS_c:
@@ -50,11 +70,11 @@ class MPS_c:
         init_bondim = 2
         self.minibond = 2
         self.maxibond = 300
-        self.bond_dimension = init_bondim * ones((space_size,), dtype=np.int16)
+        self.bond_dimension = init_bondim * ones((space_size,), dtype=int16)
         self.bond_dimension[-1] = 1
         seed(1)
         self.matrices = [
-            rand(self.bond_dimension[i - 1], 2, self.bond_dimension[i])
+            rand((self.bond_dimension[i - 1], 2, self.bond_dimension[i]))
             for i in range(space_size)
         ]
 
@@ -86,11 +106,11 @@ class MPS_c:
 
     def merge_bond(self):
         k = self.current_bond
-        self.merged_matrix = np.einsum(
+        self.merged_matrix = einsum(
             "ijk,klm->ijlm",
             self.matrices[k],
             self.matrices[(k + 1) % self.space_size],
-            order="C",
+            # order="C",
         )
 
     def normalize(self):
@@ -144,7 +164,7 @@ class MPS_c:
                 cut_recommend = -1.0
             else:
                 cut_recommend = s[l] / s[0]
-        s = np.diag(s[:l])
+        s = diag(s[:l])
         U = U[:, :l]
         V = V[:l, :]
         bdm_last = self.bond_dimension[k]
@@ -152,10 +172,10 @@ class MPS_c:
 
         if going_right:
             V = dot(s, V)
-            V /= norm(V)
+            V = V / norm(V)
         else:
             U = dot(U, s)
-            U /= norm(U)
+            U = U / norm(U)
 
         if not kepbdm:
             if self.verbose > 1:
@@ -173,16 +193,16 @@ class MPS_c:
 
         if spec:
             if cutrec:
-                return np.diag(s), cut_recommend
+                return diag(s), cut_recommend
             else:
-                return np.diag(s)
+                return diag(s)
         else:
             if cutrec:
                 return cut_recommend
 
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
-        self.data = dataset.astype(np.int8)
+        self.data = dataset.astype(int8)
         self.batchsize = self.data.shape[0] // self.nbatch
 
     def init_cumulants(self):
@@ -238,7 +258,7 @@ class MPS_c:
 
     def Show_Loss(self, append=True):
         """Show the NLL averaged on the training set"""
-        L = -log(np.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
+        L = -log(torch.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
         if append:
             self.Loss.append(L)
         if self.verbose > 0:
@@ -247,7 +267,7 @@ class MPS_c:
 
     def Calc_Loss(self, dat):
         """Show the NLL averaged on an arbitrary set"""
-        L = -log(np.abs(self.Give_psi(dat)) ** 2).mean()
+        L = -log(torch.abs(self.Give_psi(dat)) ** 2).mean()
         if self.verbose > 0:
             print("Calculated loss:", L)
         return L
@@ -281,13 +301,13 @@ class MPS_c:
                 "Error: At bond %d, batchsize=%d, while %d of them psi=0."
                 % (self.current_bond, self.batchsize, (psi == 0).sum())
             )
-            print(np.argwhere(psi == 0).ravel())
+            print(argwhere(psi == 0).ravel())
             print("Maybe you should decrease n_batch")
             raise ZeroDivisionError("Some of the psis=0")
         for i, j in [(i, j) for i in range(2) for j in range(2)]:
             idx = (states[:, k] == i) * (states[:, kp1] == j)
             gradient[:, i, j, :] = (
-                np.einsum("ijk,i->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
+                einsum("ijk,i->jk", phi_mat[idx, :, :], psi_inv[idx]) * 2
             )
         gradient = gradient / self.batchsize - 2 * self.merged_matrix
         self.merged_matrix += gradient * self.descenting_step_length
@@ -318,7 +338,7 @@ class MPS_c:
         showloss: whether Show_Loss is called.
         """
         self.merge_bond()
-        batch_start = randint(self.nbatch)
+        batch_start = randint(0, self.nbatch, (1,))[0]
         # batch_start = 0
         self.batchsize = self.data.shape[0] // self.nbatch
         for n in range(self.descent_steps):
@@ -365,8 +385,8 @@ class MPS_c:
         )
         if rec_cut:
             if self.verbose > 2:
-                print(asarray(cut_rec))
-            cut_rec.sort(reverse=True)
+                print(torch.tensor(cut_rec))
+            cut_rec.sort(reverse=True, key=lambda x: x)
             k = max(5, int(self.space_size * 0.2))
             while k >= 0 and cut_rec[k] < 0:
                 k -= 1
@@ -407,23 +427,25 @@ class MPS_c:
             )
         )
         fp.write("bond dimension:\n")
-        a = int(np.sqrt(self.space_size))
+        a = int(math.sqrt(self.space_size))
         if self.space_size % a == 0:
-            a *= int(np.log10(self.bond_dimension.max())) + 2
+            a *= int(math.log10(self.bond_dimension.max())) + 2
             fp.write(
-                np.array2string(self.bond_dimension, precision=0, max_line_width=a)
+                np.array2string(
+                    self.bond_dimension.numpy(), precision=0, max_line_width=a
+                )
             )
         else:
-            fp.write(np.array2string(self.bond_dimension, precision=0))
+            fp.write(np.array2string(self.bond_dimension.numpy(), precision=0))
         try:
             fp.write("\nloss=%1.6e\n" % self.Loss[-1])
         except:
             pass
-        save("Cutoff.npy", self.cutoff)
-        save("Loss.npy", asarray(self.Loss))
-        save("Bondim.npy", self.bond_dimension)
-        save("TrainHistory.npy", asarray(self.trainhistory))
-        save("CurrentBond.npy", self.current_bond)
+        np.save("Cutoff.npy", self.cutoff)
+        np.save("Loss.npy", asarray(self.Loss))
+        np.save("Bondim.npy", self.bond_dimension.numpy())
+        np.save("TrainHistory.npy", asarray(self.trainhistory))
+        np.save("CurrentBond.npy", self.current_bond)
         # Save matrices individually since they have different shapes
         matrices_dict = {}
         for i, mat in enumerate(self.matrices):
@@ -440,12 +462,12 @@ class MPS_c:
         if srch_pwd is not None:
             oripwd = os.getcwd()
             os.chdir(srch_pwd)
-        self.bond_dimension = load("Bondim.npy")
+        self.bond_dimension = torch.from_numpy(np.load("Bondim.npy"))
         self.space_size = len(self.bond_dimension)
-        self.trainhistory = load("TrainHistory.npy").tolist()
-        self.Loss = load("Loss.npy").tolist()
+        self.trainhistory = np.load("TrainHistory.npy").tolist()
+        self.Loss = np.load("Loss.npy").tolist()
         try:
-            self.current_bond = int(load("CurrentBond.npy"))
+            self.current_bond = int(np.load("CurrentBond.npy"))
         except FileNotFoundError:
             self.current_bond = self.space_size - 2
             # most MPS are saved after a loop, when current_bond is space_size-2
@@ -466,7 +488,7 @@ class MPS_c:
         except:
             pass
         try:
-            self.cutoff = float(load("Cutoff.npy"))
+            self.cutoff = float(np.load("Cutoff.npy"))
         except:
             pass
         try:
@@ -481,7 +503,7 @@ class MPS_c:
                     self.matrices = list(mats_data["Mats"])
                     break
         except:
-            self.matrices = [load("Mat_%d.npy" % i) for i in range(self.space_size)]
+            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.space_size)]
 
         self.merged_matrix = None
         if srch_pwd is not None:
