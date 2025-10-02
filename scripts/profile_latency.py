@@ -81,7 +81,6 @@ def sweep(
                     d_model=Di,
                     d_output=Do,
                     horizon=H,
-                    ignore_canonical=True,
                 )
             ).to(device)
             r = test_latency(model, n_warmup, n_iters, device, x, y)

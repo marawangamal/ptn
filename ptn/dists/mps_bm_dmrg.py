@@ -166,11 +166,9 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
     def __init__(self, config: AbstractDisributionHeadConfig):
         super().__init__(config)
-        if not config.ignore_canonical:
-            config.rank = 2  # initially set to rank 2
         H, R, Di, Do = (
             config.horizon,
-            config.rank,
+            2,  # initially set to rank 2
             config.d_model,
             config.d_output,
         )
@@ -197,8 +195,8 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         return f"MPS_BM_DMRG(bond_dims={bond_dims})"
 
     def _assert_mixed_canonical(self, center=0, atol=1e-2):
-        if self.config.ignore_canonical:
-            return
+        # if self.config.ignore_canonical:
+        #     return
         for h in range(len(self.g) - 1, center + 1, -1):
             w = self.g[h].reshape(self.g[h].size(0), -1)  # (R, Do*R)
             assert torch.allclose(w @ w.T, torch.eye(w.size(0)), atol=atol)
@@ -222,13 +220,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
             Tuple[List[torch.Tensor], List[torch.Tensor]]: Left and right caches.
         """
         # Precompute L and R
-        B, R, Do, H = (
-            x.shape[0],
-            self.config.rank,
-            self.config.d_output,
-            self.config.horizon,
-        )
-        dt, dv = x.dtype, x.device
+        H = self.config.horizon
         g = self.g  # MPS cores list H x (R, Do, R)
 
         sl, sl_mask, sr, sr_mask, gammas_left, gammas_right = (
@@ -283,9 +275,8 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
         dt, dv = x.dtype, x.device
 
-        B, R, H, V = (
+        B, H, V = (
             x.size(0),
-            self.config.rank,
             self.config.horizon,
             self.config.d_output,
         )
@@ -325,7 +316,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         lr: float = 1e-4,
         eps_clamp: float = 1e-16,
         eps_trunc: float = 1e-7,
-        max_bond_dim: int = 32,
         n_grad_steps: int = 10,
         verbose: bool = False,
     ):
@@ -347,9 +337,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
             List[torch.Tensor]: Losses collected during the sweep.
         """
         # Precompute L and R
-        B, R, Do, H = (
-            x.shape[0],
-            self.config.rank,
+        Do, H = (
             self.config.d_output,
             self.config.horizon,
         )
@@ -358,6 +346,7 @@ class MPS_BM_DMRG(AbstractDisributionHead):
         sl, sr, gammas_left, gammas_right = self._build_cache(x, y)
 
         losses = []
+        max_bond_dim = self.config.rank
 
         pbar_right_sweep = (
             tqdm(range(0, H - 1), desc="Right Sweep") if verbose else range(0, H - 1)
@@ -388,9 +377,13 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 loss = (
                     z.clamp(min=eps_clamp).log()
                     - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
-                    - (gammas_right[h:].log().sum(dim=-1)).mean()
-                    - (gammas_left[: h + 1].log().sum(dim=-1)).mean()
+                    - (gammas_right[:, h:].log().sum(dim=-1)).mean()
+                    - (gammas_left[:, : h + 1].log().sum(dim=-1)).mean()
                 ) * (1 / H)
+
+                if loss.isnan():
+                    print(f"NaN in loss: {loss}")
+                    raise ValueError("NaN in loss")
 
                 # sgd
                 (dldg_tilde,) = torch.autograd.grad(loss, g_tilde)
@@ -420,9 +413,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 vt[:Rtrunc].reshape(Rtrunc, Do, Rr),
             )
             # normalize
-            # g[h + 1] = g[h + 1] / g[h + 1].norm(dim=1, keepdim=True).clamp(
-            #     min=eps_clamp
-            # )
             # NOTE: we changed gh and gh+1 so sl[h+1:], sr[:h+1] are invalid for both select/margin caches.
             # But, we only need to use sl[h+1] and sr[h+1] in the next iteration. So we can update sl[h+1] only.
             yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
@@ -459,6 +449,8 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 loss = (
                     z.clamp(min=eps_clamp).log()
                     - 2 * ((psi).abs().clamp(min=eps_clamp).log()).mean()
+                    - (gammas_right[:, h:].log().sum(dim=-1)).mean()
+                    - (gammas_left[:, : h + 1].log().sum(dim=-1)).mean()
                 ) * (1 / H)
 
                 # sgd
@@ -486,10 +478,6 @@ class MPS_BM_DMRG(AbstractDisributionHead):
                 torch.diag(s[:Rtrunc]),  # (R', R')
             )
             g[h] = vt[:Rtrunc].reshape(Rtrunc, Do, Rr)  # (R', Do, Rr)
-            # normalize
-            # g[h - 1] = g[h - 1] / g[h - 1].norm(dim=1, keepdim=True).clamp(
-            #     min=eps_clamp
-            # )
             yh = y[:, h].reshape(1, -1, 1).expand(g[h].size(0), -1, g[h].size(-1))
             gh_yh = g[h].gather(dim=1, index=yh)
             sr[h - 1] = torch.einsum("ibj,bj->bi", gh_yh, sr[h])  # update cache
@@ -498,20 +486,20 @@ class MPS_BM_DMRG(AbstractDisributionHead):
 
 
 def train_single_example():
-    B, H, D, V = 32, 28 * 28, 1, 2
+    B, R, H, D, V = 32, 8, 8, 1, 2
     mt_head = MPS_BM_DMRG(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
             rank=2,
-            use_scale_factors=False,
+            use_scale_factors=True,
         ),
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
     for i in range(1000):
-        losses = mt_head.train_example(x, y, lr=1e-3, max_bond_dim=16)
+        losses = mt_head.train_example(x, y, lr=1e-3)
         print(f"[{i}] loss: {losses[-1]:.2f}")
 
 
