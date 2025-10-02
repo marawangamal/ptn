@@ -92,13 +92,13 @@ def find_latest_MPS():
 
 def start():
     """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
-    dtset = np.load(dataset_name)
+    dtset = np.load(train_dataset_name)
 
     timestamp = strftime("MNIST-contin_on_%B_%d_%H%M")
     os.mkdir(timestamp)
     os.chdir(timestamp)
-    f = open("DATA_" + dataset_name.split("/")[-1] + ".txt", "w")
-    f.write("../" + dataset_name)
+    f = open("DATA_" + train_dataset_name.split("/")[-1] + ".txt", "w")
+    f.write("../" + train_dataset_name)
     f.close()
 
     m.verbose = 0
@@ -120,7 +120,7 @@ def start():
 
 def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     """Continue the training, in a fixed cutoff, train until loopmax is finished"""
-    dtset = np.load(dataset_name)
+    dtset = np.load(train_dataset_name)
     m.designate_data(dtset)
 
     result = find_latest_MPS()
@@ -160,6 +160,11 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
                 if m.Loss[-1] - loss_last > safe_thres:
                     print("lr=%1.3e is too large to continue safely" % lr)
                     raise Exception("lr=%1.3e is too large to continue safely" % lr)
+
+                # Compute test loss
+                print("Computing test loss...")
+                test_loss = m.Calc_Loss(np.load(test_dataset_name))
+                print(f"Test loss: {test_loss}")
             except:
                 lr *= lr_shrink
                 if lr < lr_inf:
@@ -178,7 +183,9 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
 
 
 if __name__ == "__main__":
-    dataset_name = "data/mnist-rand1k_28_thr50_z/_data.npy"
+    # train_dataset_name = "data/mnist-rand1k_28_thr50_z/_data.npy"
+    train_dataset_name = "data/mnist/train.npy"
+    test_dataset_name = "data/mnist/test.npy"
 
     m = MPS_c(28 * 28)
     # m.Calc_Loss(np.load(dataset_name))

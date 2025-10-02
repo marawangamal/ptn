@@ -338,8 +338,8 @@ class MPS_c:
                 self.__bondtrain__(False, showloss=(bond == 1))
             for bond in range(0, self.space_size - 2):
                 self.__bondtrain__(True, showloss=(bond == self.space_size - 3))
-            print("Current Loss: %.9f\nBondim:" % self.Loss[-1])
-            print(self.bond_dimension)
+            print(f"Current Loss: {self.Loss[-1]}")
+            # print(self.bond_dimension)
 
         if rec_cut:
             # Now loop = Loops - 1
