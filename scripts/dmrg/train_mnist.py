@@ -57,10 +57,10 @@ def loss_plot(mps, spars):
     plt.savefig("Loss.pdf")
 
 
-def find_latest_MPS():
+def find_latest_MPS(ckpt_dir="checkpoints/dmrg"):
     """Searching for the last MPS in the most recent timestamped directory"""
     # Find the most recent MNIST-contin directory
-    name_list = os.listdir("./")
+    name_list = os.listdir(ckpt_dir)
     timestamp_dirs = [d for d in name_list if d.startswith("MNIST-contin_on_")]
 
     if not timestamp_dirs:
@@ -72,7 +72,8 @@ def find_latest_MPS():
     print(f"Looking in directory: {latest_dir}")
 
     # Look for MPS files in that directory
-    mps_files = os.listdir(f"./{latest_dir}")
+    # mps_files = os.listdir(f"./{latest_dir}")
+    mps_files = os.listdir(os.path.join(ckpt_dir, latest_dir))
     pmx = -1
     mx = 0
     pattrn = r"Loop(\d+)MPS"
@@ -88,16 +89,16 @@ def find_latest_MPS():
         print("No MPS Found")
         return None
     else:
-        return mx, f"{latest_dir}/{mps_files[pmx]}"
+        return mx, f"{latest_dir}/{mps_files[pmx]}", latest_dir
 
 
-def start():
+def start(ckpt_dir="checkpoints/dmrg"):
     """Start the training, in a relatively high cutoff, over usually just 1 epoch"""
     dtset = np.load(train_dataset_name)
 
-    timestamp = strftime("MNIST-contin_on_%B_%d_%H%M")
-    os.mkdir(timestamp)
-    os.chdir(timestamp)
+    filepath = os.path.join(ckpt_dir, strftime("MNIST-contin_on_%B_%d_%H%M"))
+    os.makedirs(filepath, exist_ok=True)
+    os.chdir(filepath)
     f = open("DATA_" + train_dataset_name.split("/")[-1] + ".txt", "w")
     f.write("../" + train_dataset_name)
     f.close()
@@ -119,7 +120,9 @@ def start():
     m.saveMPS("Loop%d" % (nlp - 1), True)
 
 
-def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
+def onecutrain(
+    lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10, ckpt_dir="checkpoints/dmrg"
+):
     """Continue the training, in a fixed cutoff, train until loopmax is finished"""
     dtset = np.load(train_dataset_name)
     m.designate_data(dtset)
@@ -127,20 +130,20 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
     # wandb init
     wandb.init(
         project="ptn-dmrg",
-        name=os.path.basename(train_dataset_name),
+        name=f"mnist-lr_shrink_{lr_shrink}-loopmax_{loopmax}-safe_thres_{safe_thres}-lr_inf_{lr_inf}",
     )
 
     result = find_latest_MPS()
     if result is None:
         print("No MPS found to resume from. Please run 'start' first.")
         return
-    mx, folder = result
+    mx, folder, latest_dir = result
     print("Resuming: ", folder)
 
     loop_last = mx
     nlp = 5
     m.verbose = 0
-    m.loadMPS(folder)
+    m.loadMPS(os.path.join(ckpt_dir, folder))
     # m.descent_steps = 10
     m.init_cumulants()
     # m.verbose = 1
@@ -200,7 +203,7 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
                 break
 
         loop_last += nlp
-        m.saveMPS("Loop%d" % loop_last, True)
+        m.saveMPS(os.path.join(ckpt_dir, latest_dir, "Loop%d" % loop_last), True)
         print("Loop%d Saved" % loop_last)
 
     wandb.finish()
@@ -208,11 +211,10 @@ def onecutrain(lr_shrink, loopmax, safe_thres=0.5, lr_inf=1e-10):
 
 if __name__ == "__main__":
     # train_dataset_name = "data/mnist-rand1k_28_thr50_z/_data.npy"
-    train_dataset_name = "data/mnist/train.npy"
+    train_dataset_name = "data/mnist/test.npy"
     test_dataset_name = "data/mnist/test.npy"
 
     m = MPS_c(28 * 28)
-    # m.Calc_Loss(np.load(dataset_name))
 
     if argv[1] == "start":
         start()

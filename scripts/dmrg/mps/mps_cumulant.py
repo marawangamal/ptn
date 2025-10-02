@@ -390,7 +390,7 @@ class MPS_c:
         else:
             timestamp = prefix + "MPS"
         try:
-            os.mkdir("./" + timestamp + "/")
+            os.makedirs("./" + timestamp + "/")
         except FileExistsError:
             pass
         os.chdir("./" + timestamp + "/")
