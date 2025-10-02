@@ -147,10 +147,10 @@ def onecutrain(
     # m.descent_steps = 10
     m.init_cumulants()
     # m.verbose = 1
-    # m.cutoff = 1e-7
+    m.cutoff = 1e-7
 
     """Set the hyperparameters here"""
-    m.maxibond = 800
+    m.maxibond = 64
     m.nbatch = 20
     m.descent_steps = 10
     m.descenting_step_length = 0.001
@@ -177,16 +177,17 @@ def onecutrain(
                 print(f"Test loss: {test_loss}")
                 wandb.log(
                     {
-                        "train/loop": loop_last,
-                        "train/loss_last": float(m.Loss[-1]),
+                        "train/loss": float(m.Loss[-1]),
                         "train/lr": float(lr),
-                        "eval/test_loss": float(test_loss),
-                        "mps/bond_mean": (
+                        "train/bond_mean": (
                             float(m.bond_dimension.mean())
                             if hasattr(m, "bond_dimension")
                             else None
                         ),
-                        "mps/cutoff": float(m.cutoff) if hasattr(m, "cutoff") else None,
+                        "train/cutoff": (
+                            float(m.cutoff) if hasattr(m, "cutoff") else None
+                        ),
+                        "eval/loss": float(test_loss),
                     }
                 )
             except:
