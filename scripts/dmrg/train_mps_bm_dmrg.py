@@ -4,10 +4,12 @@ from sys import path, argv
 import os
 import time
 
+import torch
+
 # Add the parent directory to Python path
 path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mps.mps_cumulant import MPS_c
+from mps.mps_cumulant_pt import MPS_c
 import os
 import re
 import numpy as np
@@ -253,7 +255,10 @@ def train(
     m.descenting_step_length = lr
 
     while loop_last < loopmax:
-        if m.minibond > 1 and m.bond_dimension.mean() > 10:
+        if (
+            m.minibond > 1
+            and torch.tensor(m.bond_dimension).to(torch.float32).mean() > 10
+        ):
             m.minibond = 1
             print("From now bondDmin=1")
 
@@ -361,7 +366,10 @@ def trainv2(
     for loop_idx in range(0, max_loops, num_loops):
 
         # Reset minibond after mean bond dimension > 10
-        if m.minibond > 1 and m.bond_dimension.mean() > 10:
+        if (
+            m.minibond > 1
+            and torch.tensor(m.bond_dimension).to(torch.float32).mean() > 10
+        ):
             m.minibond = 1
             print("Resetting minibond to 1")
 
@@ -400,7 +408,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Data
-    train_dataset_name = f"data/{args.dataset}/train.npy"
+    train_dataset_name = f"data/{args.dataset}/test.npy"
     test_dataset_name = f"data/{args.dataset}/test.npy"
 
     # Initialize wandb
@@ -414,14 +422,25 @@ if __name__ == "__main__":
     num_samples, num_features = np.load(train_dataset_name).shape
 
     m = MPS_c(num_features)
-    trainv2(
+    # trainv2(
+    #     m,
+    #     lr=args.lr,
+    #     batch_size=args.batch_size,
+    #     max_loops=args.epochs,
+    #     num_loops=args.num_loops,
+    #     max_bond_dim=args.rank,
+    #     num_grad_steps=args.num_grad_steps,
+    #     train_dataset_name=train_dataset_name,
+    #     test_dataset_name=test_dataset_name,
+    # )
+
+    train(
         m,
+        loopmax=args.epochs,
         lr=args.lr,
-        batch_size=args.batch_size,
-        max_loops=args.epochs,
-        num_loops=args.num_loops,
-        max_bond_dim=args.rank,
-        num_grad_steps=args.num_grad_steps,
         train_dataset_name=train_dataset_name,
         test_dataset_name=test_dataset_name,
     )
+
+
+# Looping:  20%|█████████████████▍                                                                     | 1/5 [02:45<11:01, 165.36s/it, loss=94.6]

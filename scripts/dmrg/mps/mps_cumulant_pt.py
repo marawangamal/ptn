@@ -12,6 +12,7 @@ import math
 from time import strftime
 import os
 import sys
+from tqdm import tqdm
 
 import torch
 from torch import (
@@ -29,7 +30,9 @@ from torch import (
 )
 from torch.linalg import norm, svd
 
-from torch import int16, int8
+from torch import int16
+
+torch.set_default_dtype(torch.float64)
 
 
 def dot(a, b):
@@ -172,7 +175,7 @@ class MPS_c:
             print(s)
 
         if not kepbdm:
-            bdmax = min(self.maxibond, s.size)
+            bdmax = min(self.maxibond, s.shape[0])
             l = self.minibond
             while l < bdmax and s[l] >= s[0] * self.cutoff:
                 l += 1
@@ -224,7 +227,7 @@ class MPS_c:
 
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
-        self.data = dataset.astype(int8)
+        self.data = torch.from_numpy(dataset).to(torch.long)
         self.batchsize = self.data.shape[0] // self.nbatch
 
     def init_cumulants(self):
@@ -375,13 +378,15 @@ class MPS_c:
 
     def train(self, Loops, rec_cut=True):
         """Training over several epoches. `Loops' is the number of epoches"""
-        for loop in range(Loops - 1 if rec_cut else Loops):
+        pbar = tqdm(range(Loops - 1 if rec_cut else Loops), leave=False, desc="Looping")
+        for loop in pbar:
             for bond in range(self.space_size - 2, 0, -1):
                 self.__bondtrain__(False, showloss=(bond == 1))
             for bond in range(0, self.space_size - 2):
                 self.__bondtrain__(True, showloss=(bond == self.space_size - 3))
-            print(f"Current Loss: {self.Loss[-1]}")
+            # print(f"Current Loss: {self.Loss[-1]}")
             # print(self.bond_dimension)
+            pbar.set_postfix(loss=self.Loss[-1])
 
         if rec_cut:
             # Now loop = Loops - 1
