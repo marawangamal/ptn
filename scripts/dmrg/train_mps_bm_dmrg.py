@@ -2,6 +2,7 @@
 import argparse
 from sys import path, argv
 import os
+import time
 
 # Add the parent directory to Python path
 path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -213,6 +214,7 @@ def onecutrain(
 def train(
     m,
     loopmax,
+    lr=0.001,
     lr_shrink=0.9,
     safe_thres=0.5,
     lr_inf=1e-10,
@@ -248,9 +250,8 @@ def train(
     m.maxibond = maxibond
     m.nbatch = 20
     m.descent_steps = 10
-    m.descenting_step_length = 0.001
+    m.descenting_step_length = lr
 
-    lr = m.descenting_step_length
     while loop_last < loopmax:
         if m.minibond > 1 and m.bond_dimension.mean() > 10:
             m.minibond = 1
@@ -261,15 +262,15 @@ def train(
         while True:
             try:
                 print(f"Training loop {loop_last} with nlp={nlp}")
+                start_time = time.time()
                 m.train(nlp, False)
                 if m.Loss[-1] - loss_last > safe_thres:
                     print("lr=%1.3e is too large to continue safely" % lr)
                     raise Exception("lr=%1.3e is too large to continue safely" % lr)
 
                 # Compute test loss
-                print("Computing test loss...")
                 test_loss = m.Calc_Loss(np.load(test_dataset_name))
-                print(f"Test loss: {test_loss}")
+                print(f"Test loss: {test_loss} | Time: {time.time() - start_time:.2f}s")
                 wandb.log(
                     {
                         "train/loss": float(m.Loss[-1]),
@@ -293,6 +294,23 @@ def train(
                     wandb.finish()
                     return
                 m.descenting_step_length = lr
+                test_loss = m.Calc_Loss(np.load(test_dataset_name))
+                wandb.log(
+                    {
+                        "train/loss": float(m.Loss[-1]),
+                        "train/lr": float(lr),
+                        "train/bond_mean": (
+                            float(m.bond_dimension.mean())
+                            if hasattr(m, "bond_dimension")
+                            else None
+                        ),
+                        "train/cutoff": (
+                            float(m.cutoff) if hasattr(m, "cutoff") else None
+                        ),
+                        "eval/loss": float(test_loss),
+                        "horizon": len(m.matrices),
+                    }
+                )
             else:
                 break
 
@@ -301,34 +319,109 @@ def train(
     wandb.finish()
 
 
+def trainv2(
+    m,
+    max_loops=50,
+    num_loops=5,
+    lr=0.001,
+    lr_shrink=0.9,
+    safe_thresh=0.5,
+    lr_inf=1e-10,
+    batch_size=32,
+    num_grad_steps=10,
+    eps_trunc=1e-7,
+    max_bond_dim=64,
+    train_dataset_name="data/mnist/train.npy",
+    test_dataset_name="data/mnist/test.npy",
+):
+
+    # Init HPs for first epoch
+    print("Initializing MPS for first epoch...")
+    m.verbose = 0
+    m.left_cano()
+    m.designate_data(np.load(train_dataset_name))
+    m.init_cumulants()
+    m.nbatch = 10
+    m.descenting_step_length = 0.05
+    m.descent_steps = 10
+    m.cutoff = 0.3
+    cut_rec = m.train(1, True)
+    m.cutoff = cut_rec
+
+    # 2. Continue the training, in a fixed cutoff, train until loopmax is finished
+    m.verbose = 0
+    m.cutoff = eps_trunc
+    m.maxibond = max_bond_dim
+    m.nbatch = batch_size
+    m.descent_steps = num_grad_steps
+    m.descenting_step_length = lr
+
+    loss_prev = float("inf")
+    print("Starting training...")
+    for loop_idx in range(0, max_loops, num_loops):
+
+        # Reset minibond after mean bond dimension > 10
+        if m.minibond > 1 and m.bond_dimension.mean() > 10:
+            m.minibond = 1
+            print("Resetting minibond to 1")
+
+        # Train
+        m.train(num_loops, False)
+        test_loss = m.Calc_Loss(np.load(test_dataset_name))
+        wandb.log(
+            {
+                "train/loss": float(m.Loss[-1]),
+                "train/lr": float(lr),
+                "eval/loss": float(test_loss),
+            }
+        )
+        print(
+            f"Loop {loop_idx+1}/{max_loops} | Train Loss: {m.Loss[-1]:.4f} | Test Loss: {test_loss:.4f}"
+        )
+
+        # LR decay
+        if m.Loss[-1] - loss_prev > safe_thresh:
+            lr *= lr_shrink
+            if lr < lr_inf:
+                print("lr becomes negligible.")
+                wandb.finish()
+                return
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="mnist")
     parser.add_argument("--rank", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--num_grad_steps", type=int, default=10)
+    parser.add_argument("--num_loops", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=32)
     args = parser.parse_args()
 
     # Data
     train_dataset_name = f"data/{args.dataset}/train.npy"
     test_dataset_name = f"data/{args.dataset}/test.npy"
 
-    # Hyperparameters
-    loopmax = args.epochs
-
     # Initialize wandb
     wandb.init(
         project="ptn-dmrg",
-        name=f"{args.dataset}-epochs{args.epochs}",
+        name=f"{args.dataset}-epochs{args.epochs}-l{args.lr}-b{args.batch_size}-ngs{args.num_grad_steps}-nl{args.num_loops}-r{args.rank}",
+        config=vars(args),
     )
 
     # Get num features
-    num_features = np.load(train_dataset_name).shape[1]
+    num_samples, num_features = np.load(train_dataset_name).shape
 
     m = MPS_c(num_features)
-    train(
+    trainv2(
         m,
-        loopmax=args.epochs,
-        maxibond=args.rank,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        max_loops=args.epochs,
+        num_loops=args.num_loops,
+        max_bond_dim=args.rank,
+        num_grad_steps=args.num_grad_steps,
         train_dataset_name=train_dataset_name,
         test_dataset_name=test_dataset_name,
     )
