@@ -58,11 +58,12 @@ def dot(a, b):
 
 
 class MPS_c:
-    def __init__(self, space_size):
+    def __init__(self, space_size, device="cpu"):
         """
         MPS class, with cumulant technique, efficient in DMRG-2
         Attributes:
                 space_size: length of chain
+                device: device to perform computations on ('cpu', 'cuda', etc.)
                 cutoff: truncation rate
                 descenting_step_length: learning rate
                 nbatch: number of batches
@@ -85,6 +86,7 @@ class MPS_c:
                 trainhistory: recorder of training history
         """
         self.space_size = space_size
+        self.device = device
         self.cutoff = 0.01
         self.descenting_step_length = 0.1
         self.descent_steps = 10
@@ -95,11 +97,13 @@ class MPS_c:
         init_bondim = 2
         self.minibond = 2
         self.maxibond = 300
-        self.bond_dimension = init_bondim * ones((space_size,), dtype=int16)
+        self.bond_dimension = init_bondim * ones(
+            (space_size,), dtype=int16, device=device
+        )
         self.bond_dimension[-1] = 1
         seed(1)
         self.matrices = [
-            rand((self.bond_dimension[i - 1], 2, self.bond_dimension[i]))
+            rand((self.bond_dimension[i - 1], 2, self.bond_dimension[i]), device=device)
             for i in range(space_size)
         ]
 
@@ -169,7 +173,7 @@ class MPS_c:
             raise FloatingPointError("Merged_mat trained to all-zero")
 
         if self.verbose:
-            # print("bond:", k)
+            print("bond:", k)
             pass
         if self.verbose > 1:
             print(s)
@@ -227,7 +231,7 @@ class MPS_c:
 
     def designate_data(self, dataset):
         """Before the training starts, the training set is designated"""
-        self.data = torch.from_numpy(dataset).to(torch.long)
+        self.data = torch.from_numpy(dataset).to(torch.long).to(self.device)
         self.batchsize = self.data.shape[0] // self.nbatch
 
     def init_cumulants(self):
@@ -244,7 +248,7 @@ class MPS_c:
         if self.current_bond == self.space_size - 1:
             # In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is space_size-2
             self.current_bond -= 1
-        self.cumulants = [ones((self.data.shape[0], 1))]
+        self.cumulants = [ones((self.data.shape[0], 1), device=self.device)]
         for n in range(0, self.current_bond):
             self.cumulants.append(
                 einsum(
@@ -253,7 +257,7 @@ class MPS_c:
                     self.matrices[n][:, self.data[:, n], :],
                 )
             )
-        right_part = [ones((1, self.data.shape[0]))]
+        right_part = [ones((1, self.data.shape[0]), device=self.device)]
         for n in range(self.space_size - 1, self.current_bond + 1, -1):
             right_part = [
                 einsum(
@@ -319,7 +323,10 @@ class MPS_c:
             right_vecs,
         )  # batchsize*D
 
-        gradient = zeros([self.bond_dimension[km1], 2, 2, self.bond_dimension[kp1]])
+        gradient = zeros(
+            [self.bond_dimension[km1], 2, 2, self.bond_dimension[kp1]],
+            device=self.device,
+        )
         psi_inv = 1 / psi
         if (psi == 0).sum():
             print(
@@ -459,24 +466,24 @@ class MPS_c:
             a *= int(math.log10(self.bond_dimension.max())) + 2
             fp.write(
                 np.array2string(
-                    self.bond_dimension.numpy(), precision=0, max_line_width=a
+                    self.bond_dimension.cpu().numpy(), precision=0, max_line_width=a
                 )
             )
         else:
-            fp.write(np.array2string(self.bond_dimension.numpy(), precision=0))
+            fp.write(np.array2string(self.bond_dimension.cpu().numpy(), precision=0))
         try:
             fp.write("\nloss=%1.6e\n" % self.Loss[-1])
         except:
             pass
         np.save("Cutoff.npy", self.cutoff)
         np.save("Loss.npy", asarray(self.Loss))
-        np.save("Bondim.npy", self.bond_dimension.numpy())
+        np.save("Bondim.npy", self.bond_dimension.cpu().numpy())
         np.save("TrainHistory.npy", asarray(self.trainhistory))
         np.save("CurrentBond.npy", self.current_bond)
         # Save matrices individually since they have different shapes
         matrices_dict = {}
         for i, mat in enumerate(self.matrices):
-            matrices_dict[f"mat_{i}"] = mat
+            matrices_dict[f"mat_{i}"] = mat.cpu().numpy()
         np.savez_compressed("Mats.npz", **matrices_dict)
         fp.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
         for history in self.trainhistory:
@@ -489,7 +496,7 @@ class MPS_c:
         if srch_pwd is not None:
             oripwd = os.getcwd()
             os.chdir(srch_pwd)
-        self.bond_dimension = torch.from_numpy(np.load("Bondim.npy"))
+        self.bond_dimension = torch.from_numpy(np.load("Bondim.npy")).to(self.device)
         self.space_size = len(self.bond_dimension)
         self.trainhistory = np.load("TrainHistory.npy").tolist()
         self.Loss = np.load("Loss.npy").tolist()
@@ -524,13 +531,21 @@ class MPS_c:
             self.matrices = []
             for i in range(self.space_size):
                 if f"mat_{i}" in mats_data:
-                    self.matrices.append(mats_data[f"mat_{i}"])
+                    self.matrices.append(
+                        torch.from_numpy(mats_data[f"mat_{i}"]).to(self.device)
+                    )
                 else:
                     # Fallback to old format
-                    self.matrices = list(mats_data["Mats"])
+                    self.matrices = [
+                        torch.from_numpy(mat).to(self.device)
+                        for mat in mats_data["Mats"]
+                    ]
                     break
         except:
-            self.matrices = [np.load("Mat_%d.npy" % i) for i in range(self.space_size)]
+            self.matrices = [
+                torch.from_numpy(np.load("Mat_%d.npy" % i)).to(self.device)
+                for i in range(self.space_size)
+            ]
 
         self.merged_matrix = None
         if srch_pwd is not None:
@@ -545,8 +560,8 @@ class MPS_c:
             nsam = states.shape[0]
             k = self.current_bond
             kp1 = (k + 1) % self.space_size
-            left_vecs = np.ones((nsam, 1))
-            right_vecs = np.ones((1, nsam))
+            left_vecs = ones((nsam, 1), device=self.device)
+            right_vecs = ones((1, nsam), device=self.device)
             for i in range(0, k):
                 left_vecs = einsum(
                     "ij,jik->ik", left_vecs, self.matrices[i][:, states[:, i], :]
@@ -576,7 +591,7 @@ class MPS_c:
 
     def Give_probab(self, states):
         """Calculate the corresponding probability for configuration `states'"""
-        return np.abs(self.Give_psi(states)) ** 2
+        return torch.abs(self.Give_psi(states)) ** 2
 
     def generate_sample(self, given_seg=None, *arg):
         """
@@ -594,7 +609,7 @@ class MPS_c:
                 )
                 self.left_cano()
                 print("Left-canonicalized, but please add left_cano before generation.")
-            vec = asarray([1])
+            vec = asarray([1], device=self.device)
             for p in range(self.space_size - 1, -1, -1):
                 vec_act = dot(self.matrices[p][:, 1], vec)
                 if rand() < (norm(vec_act) / norm(vec)) ** 2:
@@ -663,7 +678,7 @@ class MPS_c:
             if self.current_bond != self.space_size - 1:
                 self.left_cano()
             state = np.empty((self.space_size,), dtype=np.int8)
-            vec = asarray([1])
+            vec = asarray([1], device=self.device)
             for p in np.arange(self.space_size)[::-1]:
                 vec_act = dot(self.matrices[p][:, 1], vec)
                 if rand() < (norm(vec_act) / norm(vec)) ** 2:
@@ -859,16 +874,16 @@ class MPS_c:
         # else recursively generate
         return self.generate_sample_1(state, givn_mask)
 
-    def proper_cano(self, target_bond, update_cumulant):
-        """Gauge Transform the MPS into the mix-canonical form that:
-        the only uncanonical tensor is either target_bond or target_bond+1. Both are accepted.
-        """
-        if self.current_bond == target_bond:
-            return
-        else:
-            direction = 1 if self.current_bond < target_bond else -1
-            for b in range(self.current_bond, target_bond, direction):
-                self.merge_bond(b)
-                self.rebuild_bond(going_right=(direction == 1), kepbdm=True)
-                if update_cumulant:
-                    self.update_cumulants(direction == 1)
+    # def proper_cano(self, target_bond, update_cumulant):
+    #     """Gauge Transform the MPS into the mix-canonical form that:
+    #     the only uncanonical tensor is either target_bond or target_bond+1. Both are accepted.
+    #     """
+    #     if self.current_bond == target_bond:
+    #         return
+    #     else:
+    #         direction = 1 if self.current_bond < target_bond else -1
+    #         for b in range(self.current_bond, target_bond, direction):
+    #             self.merge_bond(b)
+    #             self.rebuild_bond(going_right=(direction == 1), kepbdm=True)
+    #             if update_cumulant:
+    #                 self.update_cumulants(direction == 1)

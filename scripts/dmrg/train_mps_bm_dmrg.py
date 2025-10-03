@@ -275,20 +275,28 @@ def train(
 
                 # Compute test loss
                 test_loss = m.Calc_Loss(np.load(test_dataset_name))
-                print(f"Test loss: {test_loss} | Time: {time.time() - start_time:.2f}s")
+                print(
+                    f"[Loop {loop_last}/{loopmax}] Test loss: {test_loss} | Time: {time.time() - start_time:.2f}s"
+                )
+                print(f"Bond dimension: {m.bond_dimension}")
                 wandb.log(
                     {
-                        "train/loss": float(m.Loss[-1]),
-                        "train/lr": float(lr),
+                        "train/loss": torch.tensor(m.Loss[-1]).item(),
+                        "train/lr": torch.tensor(lr).item(),
                         "train/bond_mean": (
-                            float(m.bond_dimension.mean())
+                            torch.tensor(m.bond_dimension)
+                            .to(torch.float32)
+                            .mean()
+                            .item()
                             if hasattr(m, "bond_dimension")
                             else None
                         ),
                         "train/cutoff": (
-                            float(m.cutoff) if hasattr(m, "cutoff") else None
+                            torch.tensor(m.cutoff).item()
+                            if hasattr(m, "cutoff")
+                            else None
                         ),
-                        "eval/loss": float(test_loss),
+                        "eval/loss": torch.tensor(test_loss).item(),
                         "horizon": len(m.matrices),
                     }
                 )
@@ -302,17 +310,22 @@ def train(
                 test_loss = m.Calc_Loss(np.load(test_dataset_name))
                 wandb.log(
                     {
-                        "train/loss": float(m.Loss[-1]),
-                        "train/lr": float(lr),
+                        "train/loss": torch.tensor(m.Loss[-1]).item(),
+                        "train/lr": torch.tensor(lr).item(),
                         "train/bond_mean": (
-                            float(m.bond_dimension.mean())
+                            torch.tensor(m.bond_dimension)
+                            .to(torch.float32)
+                            .mean()
+                            .item()
                             if hasattr(m, "bond_dimension")
                             else None
                         ),
                         "train/cutoff": (
-                            float(m.cutoff) if hasattr(m, "cutoff") else None
+                            torch.tensor(m.cutoff).item()
+                            if hasattr(m, "cutoff")
+                            else None
                         ),
-                        "eval/loss": float(test_loss),
+                        "eval/loss": torch.tensor(test_loss).item(),
                         "horizon": len(m.matrices),
                     }
                 )
@@ -378,14 +391,24 @@ def trainv2(
         test_loss = m.Calc_Loss(np.load(test_dataset_name))
         wandb.log(
             {
-                "train/loss": float(m.Loss[-1]),
-                "train/lr": float(lr),
-                "eval/loss": float(test_loss),
+                "train/loss": torch.tensor(m.Loss[-1]).item(),
+                "train/lr": torch.tensor(lr).item(),
+                "train/bond_mean": (
+                    torch.tensor(m.bond_dimension).to(torch.float32).mean().item()
+                    if hasattr(m, "bond_dimension")
+                    else None
+                ),
+                "train/cutoff": (
+                    torch.tensor(m.cutoff).item() if hasattr(m, "cutoff") else None
+                ),
+                "eval/loss": torch.tensor(test_loss).item(),
+                "horizon": len(m.matrices),
             }
         )
         print(
             f"Loop {loop_idx+1}/{max_loops} | Train Loss: {m.Loss[-1]:.4f} | Test Loss: {test_loss:.4f}"
         )
+        print(f"Bond dimension: {m.bond_dimension}")
 
         # LR decay
         if m.Loss[-1] - loss_prev > safe_thresh:
@@ -420,8 +443,9 @@ if __name__ == "__main__":
 
     # Get num features
     num_samples, num_features = np.load(train_dataset_name).shape
-
-    m = MPS_c(num_features)
+    dv = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {dv}")
+    m = MPS_c(num_features, device=dv)
     # trainv2(
     #     m,
     #     lr=args.lr,
