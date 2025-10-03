@@ -16,7 +16,7 @@ import sys
 import torch
 from torch import (
     ones,
-    dot,
+    # dot,
     zeros,
     log,
     einsum,
@@ -30,6 +30,28 @@ from torch import (
 from torch.linalg import norm, svd
 
 from torch import int16, int8
+
+
+def dot(a, b):
+    # copy numpy dot
+    # Dot product of two arrays. Specifically,
+
+    # If both a and b are 1-D arrays, it is inner product of vectors (without complex conjugation).
+
+    # If both a and b are 2-D arrays, it is matrix multiplication, but using matmul or a @ b is preferred.
+
+    # If either a or b is 0-D (scalar), it is equivalent to multiply and using numpy.multiply(a, b) or a * b is preferred.
+
+    # If a is an N-D array and b is a 1-D array, it is a sum product over the last axis of a and b.
+
+    # If a is an N-D array and b is an M-D array (where M>=2), it is a sum product over the last axis of a and the second-to-last axis of b:
+
+    if a.ndim == 1 and b.ndim == 1:
+        return torch.dot(a, b)
+    elif a.ndim == 2 and b.ndim == 2:
+        return torch.matmul(a, b)
+    else:
+        raise ValueError("Invalid dimensions for dot product")
 
 
 class MPS_c:

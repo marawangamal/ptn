@@ -210,20 +210,125 @@ def onecutrain(
     wandb.finish()
 
 
+def train(
+    m,
+    loopmax,
+    lr_shrink=0.9,
+    safe_thres=0.5,
+    lr_inf=1e-10,
+    maxibond=64,
+    train_dataset_name="data/mnist/train.npy",
+    test_dataset_name="data/mnist/test.npy",
+):
+    # 1. Initialize MPS in a relatively high cutoff, over usually just 1 epoch
+    dtset = np.load(train_dataset_name)
+    m.verbose = 0
+    m.left_cano()
+    m.designate_data(dtset)
+    m.init_cumulants()
+    m.nbatch = 10
+    m.descenting_step_length = 0.05
+    m.descent_steps = 10
+    m.cutoff = 0.3
+
+    nlp = 1
+    cut_rec = m.train(nlp, True)
+    m.cutoff = cut_rec
+
+    # 2. Continue the training, in a fixed cutoff, train until loopmax is finished
+    dtset = np.load(train_dataset_name)
+    m.designate_data(dtset)
+
+    loop_last = 0
+    nlp = 5
+    m.verbose = 0
+    m.init_cumulants()
+    m.cutoff = 1e-7
+
+    m.maxibond = maxibond
+    m.nbatch = 20
+    m.descent_steps = 10
+    m.descenting_step_length = 0.001
+
+    lr = m.descenting_step_length
+    while loop_last < loopmax:
+        if m.minibond > 1 and m.bond_dimension.mean() > 10:
+            m.minibond = 1
+            print("From now bondDmin=1")
+
+        # train tentatively
+        loss_last = m.Loss[-1]
+        while True:
+            try:
+                print(f"Training loop {loop_last} with nlp={nlp}")
+                m.train(nlp, False)
+                if m.Loss[-1] - loss_last > safe_thres:
+                    print("lr=%1.3e is too large to continue safely" % lr)
+                    raise Exception("lr=%1.3e is too large to continue safely" % lr)
+
+                # Compute test loss
+                print("Computing test loss...")
+                test_loss = m.Calc_Loss(np.load(test_dataset_name))
+                print(f"Test loss: {test_loss}")
+                wandb.log(
+                    {
+                        "train/loss": float(m.Loss[-1]),
+                        "train/lr": float(lr),
+                        "train/bond_mean": (
+                            float(m.bond_dimension.mean())
+                            if hasattr(m, "bond_dimension")
+                            else None
+                        ),
+                        "train/cutoff": (
+                            float(m.cutoff) if hasattr(m, "cutoff") else None
+                        ),
+                        "eval/loss": float(test_loss),
+                        "horizon": len(m.matrices),
+                    }
+                )
+            except:
+                lr *= lr_shrink
+                if lr < lr_inf:
+                    print("lr becomes negligible.")
+                    wandb.finish()
+                    return
+                m.descenting_step_length = lr
+            else:
+                break
+
+        loop_last += nlp
+
+    wandb.finish()
+
+
 if __name__ == "__main__":
-    # train_dataset_name = "data/mnist-rand1k_28_thr50_z/_data.npy"
-    train_dataset_name = "data/mnist/test.npy"
-    test_dataset_name = "data/mnist/test.npy"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="mnist")
+    parser.add_argument("--rank", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=50)
+    args = parser.parse_args()
 
-    m = MPS_c(28 * 28)
+    # Data
+    train_dataset_name = f"data/{args.dataset}/train.npy"
+    test_dataset_name = f"data/{args.dataset}/test.npy"
 
-    if argv[1] == "start":
-        start()
-    elif argv[1] == "one":
-        onecutrain(0.9, 250, 0.05)
-    elif argv[1] == "plot":
-        m.loadMPS("./Loop%dMPS" % int(argv[2]))
+    # Hyperparameters
+    loopmax = args.epochs
 
-    # loss_plot(m, True)
-    np.random.seed(1996)
-    sample_plot(m, "z", 20)
+    # Initialize wandb
+    wandb.init(
+        project="ptn-dmrg",
+        name=f"{args.dataset}-epochs_{args.epochs}",
+    )
+
+    # Get num features
+    num_features = np.load(train_dataset_name).shape[1]
+
+    m = MPS_c(num_features)
+    train(
+        m,
+        loopmax=args.epochs,
+        maxibond=args.rank,
+        train_dataset_name=train_dataset_name,
+        test_dataset_name=test_dataset_name,
+    )
