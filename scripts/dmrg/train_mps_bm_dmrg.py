@@ -318,7 +318,7 @@ if __name__ == "__main__":
     # Initialize wandb
     wandb.init(
         project="ptn-dmrg",
-        name=f"{args.dataset}-epochs_{args.epochs}",
+        name=f"{args.dataset}-epochs{args.epochs}",
     )
 
     # Get num features

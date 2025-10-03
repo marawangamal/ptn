@@ -7,6 +7,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from urllib.request import urlretrieve, urlopen
+from tqdm import tqdm
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
@@ -207,24 +208,16 @@ def dataset_to_numpy(dataset):
 if __name__ == "__main__":
 
     # UCLA
-    for dataset in ["nltcs", "msnbc", "kdd"]:
-        train_set, test_set = load_ucla(dataset=dataset)
+    pbar = tqdm(["nltcs", "msnbc", "kdd", "plants", "jester", "baudio", "bnetflix"])
+    for dataset in pbar:
+        load_fn = lambda: load_ucla(dataset=dataset)
+        if dataset == "mnist":
+            load_fn = load_mnist
+        train_set, test_set = load_fn()
         X_train = dataset_to_numpy(train_set)
         X_test = dataset_to_numpy(test_set)
         os.makedirs(f"data/{dataset}", exist_ok=True)
 
         np.save(f"data/{dataset}/train.npy", X_train)
         np.save(f"data/{dataset}/test.npy", X_test)
-        print("Train shape:", X_train.shape)  # (60000, 784)
-        print("Test shape:", X_test.shape)  # (10000, 784)
-
-    # MNIST
-    train_set, test_set = load_mnist(scale=28)
-    X_train = dataset_to_numpy(train_set)
-    X_test = dataset_to_numpy(test_set)
-    os.makedirs("data/mnist", exist_ok=True)
-
-    np.save("data/mnist/train.npy", X_train)
-    np.save("data/mnist/test.npy", X_test)
-    print("Train shape:", X_train.shape)  # (60000, 784)
-    print("Test shape:", X_test.shape)  # (10000, 784)
+        pbar.set_postfix({"dataset": dataset})
