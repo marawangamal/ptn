@@ -448,8 +448,8 @@ class MPS_c:
         # Save metadata
         meta_dict = [
             {"name": "Cutoff", "value": self.cutoff},
-            {"name": "Loss", "value": self.Loss},
-            {"name": "Bondim", "value": self.bond_dimension},
+            {"name": "Loss", "value": torch.tensor(self.Loss).cpu().numpy().tolist()},
+            {"name": "Bondim", "value": self.bond_dimension.cpu().numpy()},
             {"name": "TrainHistory", "value": self.trainhistory},
             {"name": "CurrentBond", "value": self.current_bond},
         ]
