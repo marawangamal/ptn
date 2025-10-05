@@ -229,7 +229,7 @@ class MPS_c:
             if cutrec:
                 return cut_recommend
 
-    def designate_data(self, dataset):
+    def designate_data(self, dataset: np.ndarray):
         """Before the training starts, the training set is designated"""
         self.data = torch.from_numpy(dataset).to(torch.long).to(self.device)
         self.batchsize = self.data.shape[0] // self.nbatch
@@ -285,6 +285,11 @@ class MPS_c:
                 self.cumulants[k + 1],
             )
 
+    def _coerce_states(self, states: np.ndarray):
+        if isinstance(states, torch.Tensor):
+            return states
+        return torch.from_numpy(states).to(torch.long).to(self.device)
+
     def Show_Loss(self, append=True):
         """Show the NLL averaged on the training set"""
         L = -log(torch.abs(self.Give_psi_cumulant()) ** 2).mean()  # - self.data_shannon
@@ -295,7 +300,9 @@ class MPS_c:
         return L
 
     def Calc_Loss(self, dat):
-        """Show the NLL averaged on an arbitrary set"""
+        dat = self._coerce_states(
+            dat
+        )  # handles numpy/torch, dtype, device, binarization
         L = -log(torch.abs(self.Give_psi(dat)) ** 2).mean()
         if self.verbose > 0:
             print("Calculated loss:", L)
@@ -307,7 +314,12 @@ class MPS_c:
 			Added by Pan Zhang on 2017.08.01
 			Revised to single cumulant by Jun Wang on 20170802
 		"""
-        indx = range(batch_id * self.batchsize, (batch_id + 1) * self.batchsize)
+        indx = torch.arange(
+            batch_id * self.batchsize,
+            (batch_id + 1) * self.batchsize,
+            device=self.device,
+            dtype=torch.long,
+        )
         states = self.data[indx]
         k = self.current_bond
         kp1 = (k + 1) % self.space_size
@@ -393,7 +405,7 @@ class MPS_c:
                 self.__bondtrain__(True, showloss=(bond == self.space_size - 3))
             # print(f"Current Loss: {self.Loss[-1]}")
             # print(self.bond_dimension)
-            pbar.set_postfix(loss=self.Loss[-1])
+            pbar.set_postfix(loss=self.Loss[-1].item())
 
         if rec_cut:
             # Now loop = Loops - 1
@@ -431,77 +443,35 @@ class MPS_c:
                 print("Recommend cutoff for next loop:", "Keep current value")
                 return self.cutoff
 
-    def saveMPS(self, prefix="", override=False):
-        """Saving all the information of the MPS into a folder
-        The name of the folder is defaultly set as:
-                prefix + strftime('MPS_%H%M_%d_%b'), about the moment you save it
-        but you can also override the timestamp, which means the name will be:
-                prefix + 'MPS'
-        """
+    def saveMPS(self, ckpt_dir: str):
         assert self.merged_matrix is None
-        if not override:
-            timestamp = prefix + strftime("MPS_%H%M_%d_%b")
-        else:
-            timestamp = prefix + "MPS"
-        try:
-            os.makedirs("./" + timestamp + "/")
-        except FileExistsError:
-            pass
-        os.chdir("./" + timestamp + "/")
-        fp = open("MPS.log", "w")
-        fp.write("Present State of MPS:\n")
-        fp.write(
-            "space_size=%d,\ncutoff=%1.5e,\tlr=%1.5e,\tnstep=%d\tnbatch=%d\n"
-            % (
-                self.space_size,
-                self.cutoff,
-                self.descenting_step_length,
-                self.descent_steps,
-                self.nbatch,
-            )
-        )
-        fp.write("bond dimension:\n")
-        a = int(math.sqrt(self.space_size))
-        if self.space_size % a == 0:
-            a *= int(math.log10(self.bond_dimension.max())) + 2
-            fp.write(
-                np.array2string(
-                    self.bond_dimension.cpu().numpy(), precision=0, max_line_width=a
-                )
-            )
-        else:
-            fp.write(np.array2string(self.bond_dimension.cpu().numpy(), precision=0))
-        try:
-            fp.write("\nloss=%1.6e\n" % self.Loss[-1])
-        except:
-            pass
-        np.save("Cutoff.npy", self.cutoff)
-        np.save("Loss.npy", asarray(self.Loss))
-        np.save("Bondim.npy", self.bond_dimension.cpu().numpy())
-        np.save("TrainHistory.npy", asarray(self.trainhistory))
-        np.save("CurrentBond.npy", self.current_bond)
-        # Save matrices individually since they have different shapes
+        # Save metadata
+        meta_dict = [
+            {"name": "Cutoff", "value": self.cutoff},
+            {"name": "Loss", "value": self.Loss},
+            {"name": "Bondim", "value": self.bond_dimension},
+            {"name": "TrainHistory", "value": self.trainhistory},
+            {"name": "CurrentBond", "value": self.current_bond},
+        ]
+        for item in meta_dict:
+            np.save(os.path.join(ckpt_dir, f"{item['name']}.npy"), item["value"])
+
+        # Save MPS cores
         matrices_dict = {}
         for i, mat in enumerate(self.matrices):
             matrices_dict[f"mat_{i}"] = mat.cpu().numpy()
-        np.savez_compressed("Mats.npz", **matrices_dict)
-        fp.write("cutoff\tn_loop\tn_descent\tlearning_rate\tn_batch\n")
-        for history in self.trainhistory:
-            fp.write("%1.2e\t%d\t%d\t\t%1.2e\t%d\n" % tuple(history))
-        fp.close()
-        os.chdir("../")
+        np.savez_compressed(os.path.join(ckpt_dir, "Mats.npz"), **matrices_dict)
 
-    def loadMPS(self, srch_pwd=None):
-        """Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory"""
-        if srch_pwd is not None:
-            oripwd = os.getcwd()
-            os.chdir(srch_pwd)
-        self.bond_dimension = torch.from_numpy(np.load("Bondim.npy")).to(self.device)
+    def loadMPS(self, ckpt_dir):
+        """Loading a MPS from directory `ckpt_dir'"""
+        self.bond_dimension = torch.from_numpy(
+            np.load(os.path.join(ckpt_dir, "Bondim.npy"))
+        ).to(self.device)
         self.space_size = len(self.bond_dimension)
-        self.trainhistory = np.load("TrainHistory.npy").tolist()
-        self.Loss = np.load("Loss.npy").tolist()
+        self.trainhistory = np.load(os.path.join(ckpt_dir, "TrainHistory.npy")).tolist()
+        self.Loss = np.load(os.path.join(ckpt_dir, "Loss.npy")).tolist()
         try:
-            self.current_bond = int(np.load("CurrentBond.npy"))
+            self.current_bond = int(np.load(os.path.join(ckpt_dir, "CurrentBond.npy")))
         except FileNotFoundError:
             self.current_bond = self.space_size - 2
             # most MPS are saved after a loop, when current_bond is space_size-2
@@ -522,37 +492,30 @@ class MPS_c:
         except:
             pass
         try:
-            self.cutoff = float(np.load("Cutoff.npy"))
+            self.cutoff = float(np.load(os.path.join(ckpt_dir, "Cutoff.npy")))
         except:
             pass
-        try:
-            # Load matrices with new format (individual matrices)
-            mats_data = np.load("Mats.npz")
-            self.matrices = []
-            for i in range(self.space_size):
-                if f"mat_{i}" in mats_data:
-                    self.matrices.append(
-                        torch.from_numpy(mats_data[f"mat_{i}"]).to(self.device)
-                    )
-                else:
-                    # Fallback to old format
-                    self.matrices = [
-                        torch.from_numpy(mat).to(self.device)
-                        for mat in mats_data["Mats"]
-                    ]
-                    break
-        except:
-            self.matrices = [
-                torch.from_numpy(np.load("Mat_%d.npy" % i)).to(self.device)
-                for i in range(self.space_size)
-            ]
+
+        # Load matrices with new format (individual matrices)
+        mats_data = np.load(os.path.join(ckpt_dir, "Mats.npz"))
+        self.matrices = []
+        for i in range(self.space_size):
+            if f"mat_{i}" in mats_data:
+                self.matrices.append(
+                    torch.from_numpy(mats_data[f"mat_{i}"]).to(self.device)
+                )
+            else:
+                # Fallback to old format
+                self.matrices = [
+                    torch.from_numpy(mat).to(self.device) for mat in mats_data["Mats"]
+                ]
+                break
 
         self.merged_matrix = None
-        if srch_pwd is not None:
-            os.chdir(oripwd)
 
     def Give_psi(self, states):
         """Calculate the corresponding psi for configuration `states'"""
+        states = self._coerce_states(states)
         if states.ndim == 1:
             states = states.reshape((1, -1))
         if self.merged_matrix is not None:

@@ -221,9 +221,14 @@ def train(
     safe_thres=0.5,
     lr_inf=1e-10,
     maxibond=64,
+    num_batch=20,
     train_dataset_name="data/mnist/train.npy",
     test_dataset_name="data/mnist/test.npy",
+    ckpt_dir="checkpoints/dmrg",
 ):
+    # 0. Setup
+    os.makedirs(ckpt_dir, exist_ok=True)
+
     # 1. Initialize MPS in a relatively high cutoff, over usually just 1 epoch
     dtset = np.load(train_dataset_name)
     m.verbose = 0
@@ -250,11 +255,12 @@ def train(
     m.cutoff = 1e-7
 
     m.maxibond = maxibond
-    m.nbatch = 20
+    m.nbatch = num_batch
     m.descent_steps = 10
     m.descenting_step_length = lr
 
     while loop_last < loopmax:
+        m.saveMPS(ckpt_dir)
         if (
             m.minibond > 1
             and torch.tensor(m.bond_dimension).to(torch.float32).mean() > 10
@@ -302,33 +308,19 @@ def train(
                 )
             except:
                 lr *= lr_shrink
+                print(
+                    f"Shrinking lr to {lr} (loss: {m.Loss[-1]}, loss_last: {loss_last})"
+                )
                 if lr < lr_inf:
                     print("lr becomes negligible.")
                     wandb.finish()
                     return
+
+                # Load checkpoint
+                m.loadMPS(ckpt_dir)
+                m.designate_data(dtset)
+                m.init_cumulants()
                 m.descenting_step_length = lr
-                test_loss = m.Calc_Loss(np.load(test_dataset_name))
-                wandb.log(
-                    {
-                        "train/loss": torch.tensor(m.Loss[-1]).item(),
-                        "train/lr": torch.tensor(lr).item(),
-                        "train/bond_mean": (
-                            torch.tensor(m.bond_dimension)
-                            .to(torch.float32)
-                            .mean()
-                            .item()
-                            if hasattr(m, "bond_dimension")
-                            else None
-                        ),
-                        "train/cutoff": (
-                            torch.tensor(m.cutoff).item()
-                            if hasattr(m, "cutoff")
-                            else None
-                        ),
-                        "eval/loss": torch.tensor(test_loss).item(),
-                        "horizon": len(m.matrices),
-                    }
-                )
             else:
                 break
 
@@ -351,7 +343,12 @@ def trainv2(
     max_bond_dim=64,
     train_dataset_name="data/mnist/train.npy",
     test_dataset_name="data/mnist/test.npy",
+    ckpt_dir="checkpoints/dmrg",
 ):
+
+    # Setup
+    ckpt_dir = os.path.join(ckpt_dir, strftime("MNIST-contin_on_%B_%d_%H%M"))
+    os.makedirs(ckpt_dir, exist_ok=True)
 
     # Init HPs for first epoch
     print("Initializing MPS for first epoch...")
@@ -377,6 +374,8 @@ def trainv2(
     loss_prev = float("inf")
     print("Starting training...")
     for loop_idx in range(0, max_loops, num_loops):
+        # Save checkpoint
+        m.saveMPS(ckpt_dir)
 
         # Reset minibond after mean bond dimension > 10
         if (
@@ -410,13 +409,17 @@ def trainv2(
         )
         print(f"Bond dimension: {m.bond_dimension}")
 
-        # LR decay
+        # Reset and decay LR
         if m.Loss[-1] - loss_prev > safe_thresh:
             lr *= lr_shrink
             if lr < lr_inf:
-                print("lr becomes negligible.")
+                print("Ending training due to negligible LR.")
                 wandb.finish()
                 return
+            m.loadMPS(ckpt_dir)
+            m.designate_data(np.load(train_dataset_name))
+            m.init_cumulants()
+            m.descenting_step_length = lr
 
 
 if __name__ == "__main__":
@@ -428,22 +431,26 @@ if __name__ == "__main__":
     parser.add_argument("--num_grad_steps", type=int, default=10)
     parser.add_argument("--num_loops", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--device", type=str, default=None)
     args = parser.parse_args()
 
     # Data
-    train_dataset_name = f"data/{args.dataset}/test.npy"
+    train_dataset_name = f"data/{args.dataset}/train.npy"
     test_dataset_name = f"data/{args.dataset}/test.npy"
 
     # Initialize wandb
+    exp_name = f"{args.dataset}-epochs{args.epochs}-l{args.lr}-b{args.batch_size}-ngs{args.num_grad_steps}-nl{args.num_loops}-r{args.rank}"
     wandb.init(
         project="ptn-dmrg",
-        name=f"{args.dataset}-epochs{args.epochs}-l{args.lr}-b{args.batch_size}-ngs{args.num_grad_steps}-nl{args.num_loops}-r{args.rank}",
+        name=exp_name,
         config=vars(args),
     )
 
     # Get num features
     num_samples, num_features = np.load(train_dataset_name).shape
-    dv = "cuda" if torch.cuda.is_available() else "cpu"
+    dv = args.device
+    if dv is None:
+        dv = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {dv}")
     m = MPS_c(num_features, device=dv)
     # trainv2(
@@ -457,9 +464,10 @@ if __name__ == "__main__":
     #     train_dataset_name=train_dataset_name,
     #     test_dataset_name=test_dataset_name,
     # )
-
+    num_batch = num_samples // args.batch_size
     train(
         m,
+        ckpt_dir=f"checkpoints/dmrg/{exp_name}",
         loopmax=args.epochs,
         lr=args.lr,
         train_dataset_name=train_dataset_name,
