@@ -6,11 +6,11 @@ preambles:
     - "#SBATCH --output=slurm/slurm-%j.out"
     - "#SBATCH --error=slurm/slurm-%j.err"   
     - "#SBATCH --partition=long"
-    - "#SBATCH --gres=gpu:a100l:4"
+    - "#SBATCH --gres=gpu:rtx8000:1"
     - "#SBATCH --mem=128G"
     - "#SBATCH --cpus-per-task=16"
     - "#SBATCH --nodes=1"
-    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+    - "source /home/mila/m/marawan.gamal/scratch/ptn/.venv/bin/activate"
 
   clong:   
     - "#!/bin/bash"
@@ -29,10 +29,26 @@ group:
         preamble: glong
         sweep:
           dataset: [
-            "nltcs", "msnbc", "kdd", "plants", "baudio", "jester", "bnetflix",
-            # "accidents", "mushrooms", "adult", "connect4", "ocr_letters", "rcv1",
-            # "tretail", "pumsb_star", "dna", "kosarek", "msweb", "nips", "book",
-            # "tmovie", "cwebkb", "cr52", "c20ng", "moviereview", "bbc", "voting",
-            # "ad", "binarized_mnist"
+            # "mnist",
+            # "nltcs", 
+            # "msnbc", 
+            # "kdd", 
+            # "plants", 
+            # "baudio", 
+            # "jester", 
+            # "bnetflix",
+            "accidents",
+            # "retail",
+            # "pumsb_star",
+            # "dna",
+            # "kosarek",
+            "msweb",
+            "book",
+            "tmovie",
+            "cwebkb",
+            "cr52",
+            "c20ng",
+            "bbc",
+            "ad",
           ]
-        sweep_template:  "python train_mps_bm_dmrg.py --dataset {dataset}"
+        sweep_template:  "python scripts/dmrg/train_mps_bm_dmrg.py --dataset {dataset}"

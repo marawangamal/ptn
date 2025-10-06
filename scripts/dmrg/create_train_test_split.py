@@ -208,7 +208,30 @@ def dataset_to_numpy(dataset):
 if __name__ == "__main__":
 
     # UCLA
-    pbar = tqdm(["nltcs", "msnbc", "kdd", "plants", "jester", "baudio", "bnetflix"])
+    pbar = tqdm(
+        [
+            # "nltcs",
+            # "msnbc",
+            # "kdd",
+            # "plants",
+            # "jester",
+            # "baudio",
+            # "bnetflix",
+            # "accidents",
+            # "retail",
+            # "pumsb_star",
+            # "dna",
+            # "kosarek",
+            "msweb",
+            "book",
+            "tmovie",
+            "cwebkb",
+            "cr52",
+            "c20ng",
+            "bbc",
+            "ad",
+        ]
+    )
     for dataset in pbar:
         load_fn = lambda: load_ucla(dataset=dataset)
         if dataset == "mnist":

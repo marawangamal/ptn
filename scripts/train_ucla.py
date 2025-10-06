@@ -14,6 +14,7 @@ from urllib.request import urlretrieve, urlopen
 
 from ptn.dists._abc import AbstractDisributionHeadConfig
 from ptn.dists import dists
+from ptn.utils import RollbackOnIncrease
 
 
 import numpy as np
@@ -227,6 +228,16 @@ def get_data_loaders(
     return train_loader, val_loader
 
 
+def get_synthetic_data_loaders(
+    num_samples=1000,
+    num_features=10,
+    num_classes=2,
+    mutual_info=0.5,
+    seed=0,
+):
+    pass
+
+
 def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_classes):
     """Train for one epoch and return average loss."""
     model.train()
@@ -342,6 +353,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--conditional", action="store_true", help="Conditional model")
     parser.add_argument("--tags", type=str, nargs="*", default=[])
+    parser.add_argument(
+        "--optimizer", type=str, default="adamw", choices=["AdamW", "SGD"]
+    )
+    parser.add_argument("--controller", action="store_true", help="Use controller")
     args = parser.parse_args()
 
     # Initialize wandb
@@ -389,7 +404,12 @@ def main():
         )
     )
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    optimizer = getattr(torch.optim, args.optimizer)(model.parameters(), lr=args.lr)
+    controller = None
+    if args.controller:
+        controller = RollbackOnIncrease(
+            model, optimizer, factor=0.9, min_lr=1e-8, eps=0.5
+        )
 
     # Training loop
     print(f"Training samples: {len(train_loader.dataset)}")
@@ -408,6 +428,8 @@ def main():
             model, train_loader, optimizer, device, wandb, num_classes
         )
         val_loss = evaluate(model, val_loader, device, num_classes)
+        if controller is not None:
+            controller.step(train_loss)
 
         print(
             f"Epoch {epoch+1}/{args.epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
