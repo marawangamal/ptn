@@ -23,6 +23,8 @@ def born_mps_marginalize(
             scale_factors.append(sf)
             L = L / sf
     L = torch.einsum("pq,p,q->", L, b, b)
+    if not use_scale_factors:
+        scale_factors = [torch.tensor(1.0)]
     return L, torch.stack(scale_factors)  # (1,), (H,)
 
 

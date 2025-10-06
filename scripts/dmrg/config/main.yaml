@@ -1,0 +1,54 @@
+# Experiment 1
+# Evaluating efficacy of multi-token regularization during pretraining and finetuning
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:rtx8000:1"
+    - "#SBATCH --mem=128G"
+    - "#SBATCH --cpus-per-task=16"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/ptn/.venv/bin/activate"
+
+  clong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --mem=64G"
+    - "#SBATCH --cpus-per-task=64"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+    - group:
+        type: sweep
+        preamble: glong
+        sweep:
+          dataset: [
+            # "mnist",
+            # "nltcs", 
+            # "msnbc", 
+            # "kdd", 
+            # "plants", 
+            # "baudio", 
+            # "jester", 
+            # "bnetflix",
+            "accidents",
+            # "retail",
+            # "pumsb_star",
+            # "dna",
+            # "kosarek",
+            "msweb",
+            "book",
+            "tmovie",
+            "cwebkb",
+            "cr52",
+            "c20ng",
+            "bbc",
+            "ad",
+          ]
+        sweep_template:  "python scripts/dmrg/train_mps_bm_dmrg.py --dataset {dataset}"
