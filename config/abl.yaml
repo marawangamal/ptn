@@ -29,29 +29,15 @@ group:
         preamble: glong
         sweep:
           dataset: [
-            "nltcs", 
-            "msnbc", 
-            "kdd", 
-            "plants", 
-            "baudio", 
-            "jester", 
-            "bnetflix",
-            "accidents",
-            "retail",
-            "pumsb_star",
-            "dna",
-            "kosarek",
-            "msweb",
-            "book",
-            "tmovie",
-            "cwebkb",
-            "cr52",
-            "c20ng",
-            "bbc",
-            "ad",
+            # "mnist",
+            "nltcs",
+            # "bnetflix", 
           ]
           model: [
-            "mps_sigma_lsf",
             "mps_bm_lsf",
+          ]
+          norm: [
+            "l2",
+            "linf",
           ]
         sweep_template:  "python scripts/train_ucla.py --dataset {dataset} --rank 32 --model {model}"

@@ -455,26 +455,26 @@ if __name__ == "__main__":
         dv = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {dv}")
     m = MPS_c(num_features, device=dv)
-    # trainv2(
-    #     m,
-    #     lr=args.lr,
-    #     batch_size=args.batch_size,
-    #     max_loops=args.epochs,
-    #     num_loops=args.num_loops,
-    #     max_bond_dim=args.rank,
-    #     num_grad_steps=args.num_grad_steps,
-    #     train_dataset_name=train_dataset_name,
-    #     test_dataset_name=test_dataset_name,
-    # )
-    num_batch = num_samples // args.batch_size
-    train(
+    trainv2(
         m,
-        ckpt_dir=f"checkpoints/dmrg/{exp_name}",
-        loopmax=args.epochs,
         lr=args.lr,
+        batch_size=args.batch_size,
+        max_loops=args.epochs,
+        num_loops=args.num_loops,
+        max_bond_dim=args.rank,
+        num_grad_steps=args.num_grad_steps,
         train_dataset_name=train_dataset_name,
         test_dataset_name=test_dataset_name,
     )
+    # num_batch = num_samples // args.batch_size
+    # train(
+    #     m,
+    #     ckpt_dir=f"checkpoints/dmrg/{exp_name}",
+    #     loopmax=args.epochs,
+    #     lr=args.lr,
+    #     train_dataset_name=train_dataset_name,
+    #     test_dataset_name=test_dataset_name,
+    # )
 
 
 # Looping:  20%|█████████████████▍                                                                     | 1/5 [02:45<11:01, 165.36s/it, loss=94.6]
