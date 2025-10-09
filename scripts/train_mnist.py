@@ -239,6 +239,7 @@ def main():
         "--mode", type=str, default="multitask", choices=["multitask", "single"]
     )
     parser.add_argument("--sample", action="store_true", help="Sample from the model")
+    parser.add_argument("--norm", type=str, default="linf", choices=["l2", "linf"])
 
     args = parser.parse_args()
 
@@ -279,6 +280,7 @@ def main():
             lambda_ortho=args.lambda_ortho,
             init_method=args.init_method,
             use_scale_factors=args.sf >= 1,
+            norm=args.norm,
         )
     )
     model.to(device)

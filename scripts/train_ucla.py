@@ -354,7 +354,7 @@ def main():
     parser.add_argument("--conditional", action="store_true", help="Conditional model")
     parser.add_argument("--tags", type=str, nargs="*", default=[])
     parser.add_argument(
-        "--optimizer", type=str, default="adamw", choices=["AdamW", "SGD"]
+        "--optimizer", type=str, default="AdamW", choices=["AdamW", "SGD"]
     )
     parser.add_argument("--controller", action="store_true", help="Use controller")
     args = parser.parse_args()

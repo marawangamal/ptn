@@ -135,12 +135,14 @@ class MPS_BM_LSF(AbstractDisributionHead):
                 theta_mps,
                 y.reshape(B, H),
                 use_scale_factors=self.config.use_scale_factors,
+                norm=self.config.norm,
             )  # (B,), (B, H)
             z_tilde, gammas_z = batch_born_mps_marginalize(
                 theta_mps,
                 self.alpha.unsqueeze(0).expand(B, -1),
                 self.beta.unsqueeze(0).expand(B, -1),
                 use_scale_factors=self.config.use_scale_factors,
+                norm=self.config.norm,
             )
 
             if len(gammas_p) == 0:

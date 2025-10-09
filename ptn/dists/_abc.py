@@ -22,6 +22,7 @@ class AbstractDisributionHeadConfig:
     lambda_ortho: float = 0.0  # orthogonal regularization
     init_method: str = "randn"  # "randn" or "uniform"
     use_scale_factors: bool = True
+    norm: str = "linf"
 
 
 @dataclass
