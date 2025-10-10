@@ -6,7 +6,7 @@ from ptn.dists._abc import (
     AbstractDisributionHeadOutput,
 )
 from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
-from ptn.dists.tensorops.mps_born import batch_born_mps_marginalize
+from ptn.dists.tensorops.mps_born import mps_norm_batch
 
 
 def print_tens_stats(t: torch.Tensor, name: str):
@@ -137,7 +137,7 @@ class MPS_BM_LSF(AbstractDisributionHead):
                 use_scale_factors=self.config.use_scale_factors,
                 norm=self.config.norm,
             )  # (B,), (B, H)
-            z_tilde, gammas_z = batch_born_mps_marginalize(
+            z_tilde, gammas_z = mps_norm_batch(
                 theta_mps,
                 self.alpha.unsqueeze(0).expand(B, -1),
                 self.beta.unsqueeze(0).expand(B, -1),
