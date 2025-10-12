@@ -76,14 +76,18 @@ class MPS_REGRESSOR(AbstractRegressorHead):
         **kwargs,
     ):
         assert_all(
-            (x.ndim == 3, "Expected x to be 3D (B, H, D_in), but got {x.shape}"),
+            (x.ndim == 3, f"Expected x to be 3D (B, H, D_in), but got {x.shape}"),
             (
                 y is None or y.ndim == 2,
-                "Expected y to be 2D (B, D_out), but got {y.shape}",
+                f"Expected y to be 2D (B, D_out), but got {y.shape}",
             ),
             (
                 x.size(1) == self.config.horizon,
                 f"Expected x horizon to be {self.config.horizon}, but got {x.shape}",
+            ),
+            (
+                y is None or (y >= 0).all(),
+                "Expected y to be non-negative",
             ),
         )
 
