@@ -205,6 +205,12 @@ def main():
     parser.add_argument("--model", default="mps_sigma_lsf", choices=dists.keys())
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="AdamW",
+        choices=["AdamW", "SGD", "LBFGS", "AdaHessian"],
+    )
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument(
@@ -284,7 +290,15 @@ def main():
         )
     )
     model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    # Initialize optimizer using utility function
+    try:
+        from ptn.optimizers import create_optimizer
+
+        optimizer = create_optimizer(model, args.optimizer, lr=args.lr)
+    except (ImportError, ValueError) as e:
+        print(f"Error creating optimizer {args.optimizer}: {e}")
+        print("Falling back to AdamW")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     # Training loop
     best_val_loss = float("inf")
