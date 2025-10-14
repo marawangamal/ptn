@@ -6,7 +6,7 @@ from ptn.dists._abc import (
     AbstractDisributionHeadOutput,
 )
 from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
-from ptn.dists.tensorops.mps_born import mps_norm_batch
+from ptn.dists.tensorops.mps import mps_norm_batch
 
 
 def print_tens_stats(t: torch.Tensor, name: str):

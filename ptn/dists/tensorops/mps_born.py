@@ -2,41 +2,6 @@ from typing import List
 import torch
 
 
-def mps_norm(
-    g: torch.Tensor,
-    a: torch.Tensor,
-    b: torch.Tensor,
-    use_scale_factors: bool = True,
-    norm: str = "l2",
-    **kwargs
-):
-    """Marginalize a Born MPS tensor.
-
-    Args:
-        g (torch.Tensor): g tensor. Shape: (H, R, D, R)
-
-    Returns:
-        torch.Tensor: Marginalized tensor. Shape: (1,)
-    """
-    H, _, _, _ = g.shape
-    scale_factors = []
-    norm_fn = {
-        "l2": torch.linalg.norm,
-        "linf": torch.amax,
-    }[norm]
-    L = torch.einsum("p,pdq,r,rds->qs", a, g[0], a, g[0])
-    for h in range(1, H):
-        L = torch.einsum("pdq,pr,rds ->qs", g[h], L, g[h])
-        if use_scale_factors:
-            sf = norm_fn(L.abs())
-            scale_factors.append(sf)
-            L = L / sf
-    L = torch.einsum("pq,p,q->", L, b, b)
-    if not use_scale_factors:
-        scale_factors = [torch.tensor(1.0)]
-    return L, torch.stack(scale_factors)  # (1,), (H,)
-
-
 def born_mps_ortho_marginalize(g: torch.Tensor, a: torch.Tensor, b: torch.Tensor):
     """Marginalize an Orthogonal Born MPS tensor.
 
@@ -89,7 +54,6 @@ def born_mps_canonical_marginalize(
     return z_tilde, torch.stack(scale_factors)
 
 
-mps_norm_batch = torch.vmap(mps_norm, in_dims=(0, 0, 0))
 batch_ortho_born_mps_marginalize = torch.vmap(
     born_mps_ortho_marginalize, in_dims=(0, 0, 0)
 )

@@ -238,42 +238,89 @@ def get_synthetic_data_loaders(
     pass
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger, num_classes):
+def train_epoch(
+    model,
+    train_loader,
+    optimizer,
+    device,
+    wandb_logger,
+    num_classes,
+    optimizer_name="AdamW",
+):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
     num_batches = 0
     pbar = tqdm(train_loader, desc="Training")
-    for batch in pbar:
-        # for gen modelling: x is the class, y is the pixel values
-        x, y = batch
-        B = y.shape[0]
 
-        # Convert to one-hot encoding
-        x = x.float()
-        x, y = x.to(device), y.to(device)
+    if optimizer_name == "LBFGS":
+        # L-BFGS requires a closure function
+        def lbfgs_closure():
+            optimizer.zero_grad()
+            total_loss_closure = 0
+            num_batches_closure = 0
 
-        # Forward pass
-        output = model(x, y.reshape(B, -1))
-        loss = output.loss
+            for batch in train_loader:
+                x, y = batch
+                B = y.shape[0]
+                x = x.float()
+                x, y = x.to(device), y.to(device)
 
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        p = sum(torch.linalg.norm(p) for p in model.parameters())
-        optimizer.step()
+                output = model(x, y.reshape(B, -1))
+                loss = output.loss
+                loss.backward()
+                total_loss_closure += loss.item()
+                num_batches_closure += 1
+
+            return total_loss_closure / num_batches_closure
+
+        # L-BFGS step
+        loss = optimizer.step(lbfgs_closure)
+        total_loss = loss
+        num_batches = 1
 
         wandb_logger.log(
             {
-                "train/batch_loss": loss.item(),
-                "train/grad_norm": g,
-                "train/param_norm": p,
+                "train/epoch_loss": loss,
+                "train/grad_norm": 0.0,  # Not computed for L-BFGS
+                "train/param_norm": sum(
+                    torch.linalg.norm(p) for p in model.parameters()
+                ),
             }
         )
 
-        total_loss += loss.item()
-        num_batches += 1
+    else:
+        # Standard first-order or AdaHessian training
+        for batch in pbar:
+            # for gen modelling: x is the class, y is the pixel values
+            x, y = batch
+            B = y.shape[0]
+
+            # Convert to one-hot encoding
+            x = x.float()
+            x, y = x.to(device), y.to(device)
+
+            # Forward pass
+            output = model(x, y.reshape(B, -1))
+            loss = output.loss
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            p = sum(torch.linalg.norm(p) for p in model.parameters())
+            optimizer.step()
+
+            wandb_logger.log(
+                {
+                    "train/batch_loss": loss.item(),
+                    "train/grad_norm": g,
+                    "train/param_norm": p,
+                }
+            )
+
+            total_loss += loss.item()
+            num_batches += 1
 
         pbar.set_postfix({"train/loss": loss.item()})
 
@@ -354,7 +401,10 @@ def main():
     parser.add_argument("--conditional", action="store_true", help="Conditional model")
     parser.add_argument("--tags", type=str, nargs="*", default=[])
     parser.add_argument(
-        "--optimizer", type=str, default="AdamW", choices=["AdamW", "SGD"]
+        "--optimizer",
+        type=str,
+        default="AdamW",
+        choices=["AdamW", "SGD", "LBFGS", "AdaHessian"],
     )
     parser.add_argument("--controller", action="store_true", help="Use controller")
     args = parser.parse_args()
@@ -404,7 +454,15 @@ def main():
         )
     )
     model.to(device)
-    optimizer = getattr(torch.optim, args.optimizer)(model.parameters(), lr=args.lr)
+    # Initialize optimizer using utility function
+    try:
+        from ptn.optimizers import create_optimizer
+
+        optimizer = create_optimizer(model, args.optimizer, lr=args.lr)
+    except (ImportError, ValueError) as e:
+        print(f"Error creating optimizer {args.optimizer}: {e}")
+        print("Falling back to AdamW")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     controller = None
     if args.controller:
         controller = RollbackOnIncrease(
@@ -425,7 +483,7 @@ def main():
     best_val_loss = float("inf")
     for epoch in range(args.epochs):
         train_loss = train_epoch(
-            model, train_loader, optimizer, device, wandb, num_classes
+            model, train_loader, optimizer, device, wandb, num_classes, args.optimizer
         )
         val_loss = evaluate(model, val_loader, device, num_classes)
         if controller is not None:
