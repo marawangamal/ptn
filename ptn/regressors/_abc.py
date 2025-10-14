@@ -18,6 +18,7 @@ class AbstractRegressorHeadConfig:
 class AbstractRegressorHeadOutput:
     logits: torch.Tensor  # (B, D_out)
     loss: Optional[torch.Tensor] = None  # (1,)
+    gammas: Optional[torch.Tensor] = None  # (B, H)
 
 
 class AbstractRegressorHead(ABC, torch.nn.Module):

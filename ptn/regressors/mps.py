@@ -79,7 +79,7 @@ class MPS_REGRESSOR(AbstractRegressorHead):
             (x.ndim == 3, f"Expected x to be 3D (B, H, D_in), but got {x.shape}"),
             (
                 y is None or y.ndim == 2,
-                f"Expected y to be 2D (B, D_out), but got {y.shape}",
+                f"Expected y to be 2D (B, D_out)",
             ),
             (
                 x.size(1) == self.config.horizon,
@@ -109,22 +109,29 @@ class MPS_REGRESSOR(AbstractRegressorHead):
         )  # (B*Do,), (B*Do, H)
 
         # Non-negative regression
-        y_tilde = y_tilde.abs().clamp(min=self.eps)
-        gammas_y = gammas_y.clamp(min=self.eps)
+        if self.config.use_scale_factors:
+            y_tilde = y_tilde.abs().clamp(min=self.eps)
+            gammas_y = gammas_y.clamp(min=self.eps)
 
         if y is not None:
-            loss = (1 / H) * (  # avg across seq dimension
-                y_tilde.log()
-                + (gammas_y.log().sum(dim=-1))  # (B*Do, H) => (B*Do,)
-                + y.reshape(-1).log()  # (B*Do,)
-            ).mean()  # avg across batch dimension
+
+            if self.config.use_scale_factors:
+                # stable log(yhat/y) objective
+                loss = (1 / H) * (  # avg across seq dimension
+                    y_tilde.log()
+                    + (gammas_y.log().sum(dim=-1))  # (B*Do, H) => (B*Do,)
+                    + y.reshape(-1).log()  # (B*Do,)
+                ).mean()  # avg across batch dimension
+            else:
+                loss = torch.nn.functional.mse_loss(y_tilde, y.reshape(-1))  # (B*Do,)
 
             if loss.isnan() or loss < 0:
                 print(f"[MPS_REGRESSOR] Loss is NaN or negative: {loss}")
                 raise ValueError("[MPS_REGRESSOR] Loss is NaN or negative")
 
         return AbstractRegressorHeadOutput(
-            logits=torch.randn(B, H, Do),
+            logits=y_tilde,
+            gammas=gammas_y,
             loss=loss,
         )
 
