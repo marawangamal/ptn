@@ -1,3 +1,4 @@
+import argparse
 import math
 import torch
 import torch.nn as nn
@@ -10,26 +11,14 @@ from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, normalizers
 import os
 
-# Initialize
-tokenizer = Tokenizer(models.BPE())
-tokenizer.normalizer = normalizers.NFKC()
-tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
-
-# Setup trainer
-trainer = trainers.BpeTrainer(
-    vocab_size=2**10, special_tokens=["<pad>", "<unk>", "<s>", "</s>"]
-)
-
-corpus_path = "data/shakespeare/main.txt"
-assert os.path.exists(corpus_path), f"File not found: {corpus_path}"
-
-# Train
-print("Vocab size before training:", tokenizer.get_vocab_size())
-tokenizer.train([corpus_path], trainer)
-
-# Save and verify
-tokenizer.save("bpe_tokenizer.json")
-print("Vocab size after training:", tokenizer.get_vocab_size())
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", type=str, default="ttlm")
+parser.add_argument("--lr", type=float, default=1e-3)
+parser.add_argument("--batch_size", type=int, default=12)
+parser.add_argument("--bpt", type=int, default=10, help="Bits per token")
+parser.add_argument("--rank", type=int, default=8, help="Rank of the MPS")
+parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
+args = parser.parse_args()
 
 
 def dec2bin(x, bits):
@@ -43,41 +32,48 @@ def bin2dec(b, bits):
     return torch.sum(mask * b, -1)
 
 
-# # Example
-# NUM_BITS_PER_TOKEN = 10
-# d = torch.randint(0, 16, (3, 6))
-# b = dec2bin(d, NUM_BITS_PER_TOKEN)
-# d_rec = bin2dec(b, NUM_BITS_PER_TOKEN)
-
-# ---------------------------------------------------------------------
-# Run training using MPS
-# ---------------------------------------------------------------------
-
-#  --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
-
 # ---------------------------------------------------------------------
 # Hyperparameters
 # ---------------------------------------------------------------------
-lr = 3e-4
-block_size = 32
-batch_size = 12
+lr = args.lr
+block_size = args.seq_len
+batch_size = args.batch_size
 n_layer = 4
 n_head = 4
 n_embd = 128
 dropout = 0.0
 bit_size = 2
-n_bits_per_token = 10
-mps_rank = 8
-# ---------------------------------------------------------------------
+n_bits_per_token = args.bpt
+mps_rank = args.rank
 
 # ---------------------------------------------------------------------
-# 1) Load the trained tokenizer
+# 1) Train tokenizer
 # ---------------------------------------------------------------------
-tokenizer = Tokenizer.from_file("bpe_tokenizer.json")
+# Initialize
+tokenizer = Tokenizer(models.BPE())
+tokenizer.normalizer = normalizers.NFKC()
+tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+
+# Setup trainer
+trainer = trainers.BpeTrainer(
+    vocab_size=bit_size**n_bits_per_token,
+    special_tokens=["<pad>", "<unk>", "<s>", "</s>"],
+)
+
+corpus_path = "data/shakespeare/main.txt"
+assert os.path.exists(corpus_path), f"File not found: {corpus_path}"
+
+# Train
+print("Vocab size before training:", tokenizer.get_vocab_size())
+tokenizer.train([corpus_path], trainer)
+
+# # Save and verify
+# tokenizer.save("bpe_tokenizer.json")
+print("Vocab size after training:", tokenizer.get_vocab_size())
 
 
 # ---------------------------------------------------------------------
-# 2) Dataset and DataLoader
+# 2) Dataset
 # ---------------------------------------------------------------------
 class TextDataset(Dataset):
     def __init__(self, path, tokenizer, block_size, n_bits_per_token=None):
@@ -106,11 +102,11 @@ class TextDataset(Dataset):
 
 
 # ---------------------------------------------------------------------
-# 3) Instantiate model
+# 3) Model
 # ---------------------------------------------------------------------
 
 
-class TTModel(nn.Module):
+class TTLM(nn.Module):  # TTLM = Tensor Train Language Model
     def __init__(self, config):
         super().__init__()
         assert config.block_size is not None
@@ -136,7 +132,7 @@ class TTModel(nn.Module):
         out = self.mps(x, y)
         return out.logits, out.loss
 
-    def generate(self):
+    def generate(self, *args, **kwargs):
         x = torch.ones(1, 1, device=next(self.parameters()).device)
         return self.mps.generate(x)
 
@@ -150,20 +146,23 @@ config = GPTConfig(
     block_size=block_size,
 )
 # MPS model
-model = TTModel(config)
-
-# # GPT model
-# model = GPT(config)
+if args.model == "ttlm":
+    model = TTLM(config)
+else:
+    # GPT model
+    model = GPT(config)
 
 # ---------------------------------------------------------------------
 # 4) Basic training setup
 # ---------------------------------------------------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = model.to(device)
-# model = torch.compile(model) # requires PyTorch 2.0
 
 train_dataset = TextDataset(
-    "data/shakespeare/main.txt", tokenizer, block_size, n_bits_per_token=10
+    "data/shakespeare/main.txt",
+    tokenizer,
+    block_size,
+    n_bits_per_token=n_bits_per_token if args.model == "ttlm" else None,
 )
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -175,7 +174,7 @@ criterion = nn.CrossEntropyLoss()
 # ---------------------------------------------------------------------
 epochs = 5
 model.train()
-print(f"Training model on {device} for {epochs} epochs")
+print(f"Training {args.model} model on {device} for {epochs} epochs")
 for epoch in range(epochs):
     total_loss = 0.0
     pbar = tqdm(enumerate(train_loader), total=len(train_loader), leave=False)
@@ -193,18 +192,21 @@ for epoch in range(epochs):
         total_loss += loss.item()
         if i % 50 == 0:
             # sample from the model
-            xb = model.generate()
-            xd = bin2dec(xb.reshape(xb.size(0), -1, n_bits_per_token), n_bits_per_token)
+            prefix = torch.tensor(tokenizer.encode("VINCENTIO").ids).reshape(1, -1)
+            x = model.generate(prefix, max_new_tokens=block_size)
+            if args.model == "ttlm":
+                x = bin2dec(
+                    x.reshape(x.size(0), -1, n_bits_per_token), n_bits_per_token
+                )
             print(
                 f"Epoch {epoch+1} Step {i}/{len(train_loader)} | Loss: {loss.item():.4f}"
             )
-            print(f"Sample: {tokenizer.decode(xd[0].tolist())}")
-            pass
+            print(f"Sample: {tokenizer.decode(x[0].tolist())}")
 
         pbar.set_postfix(loss=loss.item())
 
 # ---------------------------------------------------------------------
 # 6) Save checkpoint
 # ---------------------------------------------------------------------
-torch.save(model.state_dict(), "gpt_shakespeare.pt")
-print("✅ Training complete. Model saved to gpt_shakespeare.pt")
+torch.save(model.state_dict(), f"checkpoints/{args.model}_shakespeare.pt")
+print(f"✅ Training complete. Model saved to checkpoints/{args.model}_shakespeare.pt")
