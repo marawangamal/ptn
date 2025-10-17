@@ -11,7 +11,7 @@ from dataloaders.shakespeare import ShakespeareDataset
 from dataloaders.smiles import SmilesDataset
 from toks.ctokenizer import CTokenizer
 
-from ptn.models.modelling_nanogpt import GPT, GPTConfig
+from ptn.models.modelling_nanogpt_modded import GPT, GPTConfig
 
 import argparse
 
