@@ -5,6 +5,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from tokenizers import Tokenizer
+import wandb
 from ptn.models.modelling_nanogpt import GPT, GPTConfig
 from ptn.dists._abc import AbstractDisributionHeadConfig
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
@@ -18,6 +19,7 @@ parser.add_argument("--batch_size", type=int, default=12)
 parser.add_argument("--bpt", type=int, default=10, help="Bits per token")
 parser.add_argument("--rank", type=int, default=8, help="Rank of the MPS")
 parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
+parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
 args = parser.parse_args()
 
 
@@ -73,14 +75,39 @@ print("Vocab size after training:", tokenizer.get_vocab_size())
 
 
 # ---------------------------------------------------------------------
+# Helpers for TTLM
+# ---------------------------------------------------------------------
+def evaluate(model, val_loader, device):
+    model.eval()
+    total_loss = 0
+    num_batches = 0
+    with torch.no_grad():
+        for x, y in val_loader:
+            x, y = x.to(device), y.to(device)
+            logits, loss = model(x, targets=y)
+            total_loss += loss.item()
+            num_batches += 1
+    return total_loss / num_batches
+
+
+# ---------------------------------------------------------------------
 # 2) Dataset
 # ---------------------------------------------------------------------
 class TextDataset(Dataset):
-    def __init__(self, path, tokenizer, block_size, n_bits_per_token=None):
+    def __init__(
+        self, path, tokenizer, block_size, n_bits_per_token=None, split="train"
+    ):
         with open(path, "r", encoding="utf-8") as f:
             self.text = f.read()
         # encode entire corpus
         self.tokens = tokenizer.encode(self.text).ids
+        # split into train and validation
+        self.train_tokens = self.tokens[: int(len(self.tokens) * 0.9)]
+        self.val_tokens = self.tokens[int(len(self.tokens) * 0.9) :]
+        if split == "train":
+            self.tokens = self.train_tokens
+        else:
+            self.tokens = self.val_tokens
         self.block_size = block_size
         self.n_bits_per_token = n_bits_per_token
 
@@ -137,6 +164,9 @@ class TTLM(nn.Module):  # TTLM = Tensor Train Language Model
         return self.mps.generate(x)
 
 
+wandb.init(project="ptn-nlp", name=f"{args.model}_shakespeare", config=vars(args))
+
+
 config = GPTConfig(
     vocab_size=tokenizer.get_vocab_size(),
     n_layer=n_layer,
@@ -164,18 +194,27 @@ train_dataset = TextDataset(
     block_size,
     n_bits_per_token=n_bits_per_token if args.model == "ttlm" else None,
 )
+val_dataset = TextDataset(
+    "data/shakespeare/main.txt",
+    tokenizer,
+    block_size,
+    n_bits_per_token=n_bits_per_token if args.model == "ttlm" else None,
+    split="val",
+)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 criterion = nn.CrossEntropyLoss()
+num_iterations = len(train_loader) * args.epochs
 
 # ---------------------------------------------------------------------
 # 5) Training loop
 # ---------------------------------------------------------------------
-epochs = 5
 model.train()
-print(f"Training {args.model} model on {device} for {epochs} epochs")
-for epoch in range(epochs):
+print(f"Training {args.model} model on {device} for {args.epochs} epochs")
+print(f"Total number of iterations: {num_iterations}")
+for epoch in range(args.epochs):
     total_loss = 0.0
     pbar = tqdm(enumerate(train_loader), total=len(train_loader), leave=False)
     for i, (x, y) in pbar:
@@ -189,21 +228,20 @@ for epoch in range(epochs):
         loss.backward()
         optimizer.step()
 
-        total_loss += loss.item()
-        if i % 50 == 0:
-            # sample from the model
-            prefix = torch.tensor(tokenizer.encode("VINCENTIO").ids).reshape(1, -1)
-            x = model.generate(prefix, max_new_tokens=block_size)
-            if args.model == "ttlm":
-                x = bin2dec(
-                    x.reshape(x.size(0), -1, n_bits_per_token), n_bits_per_token
-                )
-            print(
-                f"Epoch {epoch+1} Step {i}/{len(train_loader)} | Loss: {loss.item():.4f}"
-            )
-            print(f"Sample: {tokenizer.decode(x[0].tolist())}")
+        wandb.log({"train/loss": loss.item()})
 
+        total_loss += loss.item()
         pbar.set_postfix(loss=loss.item())
+
+    # sample from the model
+    prefix = torch.tensor(tokenizer.encode("VINCENTIO").ids).reshape(1, -1)
+    x = model.generate(prefix, max_new_tokens=block_size)
+    if args.model == "ttlm":
+        x = bin2dec(x.reshape(x.size(0), -1, n_bits_per_token), n_bits_per_token)
+    print(f"Sample: {tokenizer.decode(x[0].tolist())}")
+    validation_loss = evaluate(model, val_loader, device)
+    print(f"Epoch {epoch+1}/{args.epochs} | Val loss: {validation_loss:.4f}")
+    wandb.log({"val/loss": validation_loss})
 
 # ---------------------------------------------------------------------
 # 6) Save checkpoint
