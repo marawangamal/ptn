@@ -9,15 +9,22 @@ from transformers import AutoTokenizer
 import wandb
 from dataloaders.shakespeare import ShakespeareDataset
 from dataloaders.smiles import SmilesDataset
+from ptn.dists._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
+from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
 from toks.ctokenizer import CTokenizer
 
 from ptn.models.modelling_nanogpt_modded import GPT, GPTConfig
 
 import argparse
 
-
 DEFAULT_SMILES_PATH = "./dataloaders/data/qm9.smi"
 DEFAULT_SHAKESPEARE_PATH = "./dataloaders/data/tinyshakespeare.txt"
+
+# Use if debugging locally (i.e., running from project root)
+DEFAULT_SMILES_PATH = os.path.join("scripts", "langauge_modelling", DEFAULT_SMILES_PATH)
+DEFAULT_SHAKESPEARE_PATH = os.path.join(
+    "scripts", "langauge_modelling", DEFAULT_SHAKESPEARE_PATH
+)
 
 
 def _ensure_smiles_file(path: str):
@@ -72,6 +79,29 @@ def build_exp_name(args: argparse.Namespace):
     return "_".join(parts)
 
 
+class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
+    def __init__(self, config):
+        super().__init__()
+        self.mps = MPS_SIGMA_LSF(
+            AbstractDisributionHeadConfig(
+                d_model=1,
+                d_output=config["d_vocab"],
+                horizon=config["lm_head_horizon"],
+                rank=config["lm_head_rank"],
+            )
+        )
+
+    def forward(self, x, y=None):
+        B = x.shape[0]
+        x = torch.ones(B, 1, device=x.device)
+        out = self.mps(x, y)
+        return AbstractDisributionHeadOutput(logits=out.logits, loss=out.loss)
+
+    def generate(self, *args, **kwargs):
+        x = torch.ones(1, 1, device=next(self.parameters()).device)
+        return self.mps.generate(x)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoGPT on Shakespeare")
     parser.add_argument("--seq_len", type=int, default=256, help="Sequence length")
@@ -82,6 +112,7 @@ def parse_args():
     parser.add_argument(
         "--max_samples", type=int, default=1000, help="Max samples to use"
     )
+    parser.add_argument("--model", type=str, default="gpt", help="Model type")
     parser.add_argument("--lm_head", type=str, default="stp", help="LM head type")
     parser.add_argument(
         "--lm_head_horizon", type=int, default=1, help="LM head horizon"
@@ -132,8 +163,13 @@ def evaluate(model, dataloader, device):
     with torch.no_grad():
         for batch in dataloader:
             input_ids = batch["input_ids"].to(device)
-            x = input_ids[:, :-1]
-            y = input_ids[:, 1:]
+            if not args.model == "ttlm":
+                # Shifted
+                x = input_ids[:, :-1]
+                y = input_ids[:, 1:]
+            else:
+                # Unshifted
+                x, y = input_ids, input_ids.clone()
             output = model(x, y)
             total_loss += output.loss.item()
             num_batches += 1
@@ -162,7 +198,6 @@ def train(args):
 
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
     # # Load tokenizer
     #     tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -181,13 +216,15 @@ def train(args):
     tokenizer = CTokenizer(dataset_path)
 
     # Load Shakespeare dataset
-    # shakespeare_path = "dataloaders/data/tinyshakespeare.txt"
     full_dataset = {
         "shakespeare": ShakespeareDataset,
         "smiles": SmilesDataset,
-    }[
-        args.dataset
-    ](tokenizer, seq_len=args.seq_len, max_samples=args.max_samples)
+    }[args.dataset](
+        tokenizer,
+        seq_len=args.seq_len,
+        max_samples=args.max_samples,
+        file_path=dataset_path,
+    )
 
     # Split dataset into train and validation
     train_size = int(0.9 * len(full_dataset))
@@ -200,8 +237,8 @@ def train(args):
         train_dataset, batch_size=args.batch_size, shuffle=True
     )
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
-    print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
+    # print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
+    # print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
 
     # Create model
     print(f"Creating model..")
@@ -225,15 +262,19 @@ def train(args):
         "aux_lambda": args.aux_lambda,
         "debug": args.debug,
     }
-    model = GPT(GPTConfig(**model_kwargs))
+    if args.model == "ttlm":
+        model_kwargs["lm_head_horizon"] = args.seq_len
+        model = TTLM(config=model_kwargs)
+    else:
+        model = GPT(GPTConfig(**model_kwargs))
+
     print(f"Moving model to {device}")
     model.to(device)
 
     # Optimizer
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    num_training_steps = args.epochs * len(train_dataloader)
     if args.use_scheduler:
-        num_training_steps = args.epochs * len(train_dataloader)
-        print(f"Num training steps: {num_training_steps}")
         num_warmup_steps = 100
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
@@ -259,12 +300,17 @@ def train(args):
 
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total parameters: {total_params:,}")
-    print(f"Num tokens: {len(tokenizer)}")
-    print(f"Loss of uniform distribution: {math.log(len(tokenizer))}")
-    wandb.log({"total_parameters": total_params})
+    print("\n📊 Training Summary")
+    print("-" * 40)
+    print(f"{'Total parameters:':25} {total_params:,}")
+    print(f"{'Num tokens:':25} {len(tokenizer):,}")
+    print(f"{'Loss (uniform dist.):':25} {math.log(len(tokenizer)):.4f}")
+    print(f"{'Num training steps:':25} {num_training_steps:,}")
+    print(f"{'Using device:':25} {device}")
+    print("-" * 40)
 
-    # Logs gradients and parameters histograms
+    # Log to wandb
+    wandb.log({"total_parameters": total_params})
     wandb.watch(model, log="all", log_freq=100)  # log_freq = steps between logging
 
     # Training loop
@@ -279,12 +325,14 @@ def train(args):
             # Move to device
             input_ids = batch["input_ids"].to(device)
 
-            # # # Create input and target
-            x = input_ids[:, :-1]  # All but last token
-            y = input_ids[:, 1:].clone()  # All but first token
-
-            # Unshifted
-            # x, y = input_ids, input_ids.clone()
+            # Create input and target
+            if not args.model == "ttlm":
+                # Shifted
+                x = input_ids[:, :-1]  # All but last token
+                y = input_ids[:, 1:].clone()  # All but first token
+            else:
+                # Unshifted
+                x, y = input_ids, input_ids.clone()
 
             # Forward pass
             optimizer.zero_grad()

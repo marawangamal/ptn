@@ -14,11 +14,11 @@ import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", type=str, default="ttlm")
-parser.add_argument("--lr", type=float, default=1e-3)
+parser.add_argument("--lr", type=float, default=1e-4)
 parser.add_argument("--batch_size", type=int, default=12)
 parser.add_argument("--bpt", type=int, default=10, help="Bits per token")
 parser.add_argument("--rank", type=int, default=8, help="Rank of the MPS")
-parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
+parser.add_argument("--seq_len", type=int, default=64, help="Sequence length")
 parser.add_argument("--epochs", type=int, default=5, help="Number of epochs")
 args = parser.parse_args()
 
