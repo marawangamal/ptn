@@ -65,6 +65,14 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
 
         self.eps = 1e-12
 
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(horizon={self.config.horizon}, "
+            f"rank={self.config.rank}, d_model={self.config.d_model}, "
+            f"d_output={self.config.d_output}, pos_func='{self.config.pos_func}', "
+            f"init_method='{getattr(self.config, 'init_method', None)}')"
+        )
+
     def w_mps(self, x: torch.Tensor):
         return POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
