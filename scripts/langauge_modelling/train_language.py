@@ -26,6 +26,10 @@ DEFAULT_SHAKESPEARE_PATH = os.path.join(
     "scripts", "langauge_modelling", DEFAULT_SHAKESPEARE_PATH
 )
 
+# TODO:
+# [ ] Add custom bpe tokenizer
+# [ ] Add `bit_size` and `n_bits` for MPS
+
 
 def _ensure_smiles_file(path: str):
     """Create ./data/qm9.smi by downloading from HF if missing."""
@@ -91,6 +95,15 @@ class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
             )
         )
 
+    def _dec2bin(self, x, bits):
+        # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
+        mask = 2 ** torch.arange(bits - 1, -1, -1).to(x.device, x.dtype)
+        return x.unsqueeze(-1).bitwise_and(mask).ne(0).float()
+
+    def _bin2dec(self, b, bits):
+        mask = 2 ** torch.arange(bits - 1, -1, -1).to(b.device, b.dtype)
+        return torch.sum(mask * b, -1)
+
     def forward(self, x, y=None):
         B = x.shape[0]
         x = torch.ones(B, 1, device=x.device)
@@ -152,7 +165,10 @@ def parse_args():
         "--save_every", type=int, default=None, help="Save every n epochs"
     )
     parser.add_argument("--dataset", type=str, default="shakespeare", help="Dataset")
-    parser.add_argument("--tokenizer", type=str, default="gpt2", help="Tokenizer")
+    parser.add_argument("--bit_size", type=int, default=8, help="Bit size")
+    parser.add_argument(
+        "--n_bits_per_token", type=int, default=4, help="Number of bits per token"
+    )
     return parser.parse_args()
 
 
@@ -185,6 +201,34 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
+def get_tokenizer(corpus_path, bit_size, n_bits_per_token):
+    from tokenizers import Tokenizer
+    from tokenizers import Tokenizer, models, trainers, pre_tokenizers, normalizers
+
+    # Initialize
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.normalizer = normalizers.NFKC()
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+
+    # Setup trainer
+    trainer = trainers.BpeTrainer(
+        vocab_size=bit_size**n_bits_per_token,
+        special_tokens=["<pad>", "<unk>", "<s>", "</s>"],
+    )
+
+    assert os.path.exists(corpus_path), f"File not found: {corpus_path}"
+
+    # Train
+    print("Vocab size before training:", tokenizer.get_vocab_size())
+    tokenizer.train([corpus_path], trainer)
+
+    # # Save and verify
+    # tokenizer.save("bpe_tokenizer.json")
+    print("Vocab size after training:", tokenizer.get_vocab_size())
+
+    return tokenizer
+
+
 def train(args):
     # Initialize wandb
     wandb.init(
@@ -213,7 +257,12 @@ def train(args):
         "smiles": _ensure_smiles_file,
     }[args.dataset]
     _ensure_ds(dataset_path)
+
+    # Old method for tokenzier
     tokenizer = CTokenizer(dataset_path)
+
+    # Train tokenizer
+    # tokenizer = get_tokenizer(dataset_path, args.bit_size, args.n_bits_per_token)
 
     # Load Shakespeare dataset
     full_dataset = {
@@ -234,9 +283,11 @@ def train(args):
     )
 
     train_dataloader = DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True
+        train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True
     )
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True
+    )
     # print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
     # print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
 
@@ -267,6 +318,13 @@ def train(args):
         model = TTLM(config=model_kwargs)
     else:
         model = GPT(GPTConfig(**model_kwargs))
+
+    # Try compiling model
+    # try:
+    #     model = torch.compile(model)
+    #     print("Model compiled successfully")
+    # except:
+    #     pass
 
     print(f"Moving model to {device}")
     model.to(device)
