@@ -115,6 +115,28 @@ class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
         return self.mps.generate(x)
 
 
+class BPETokenizerWrapper:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.vocab_size = tokenizer.get_vocab_size()
+        self.eos_token = "</s>"
+        self.pad_token = "<pad>"
+        self.eos_token_id = tokenizer.token_to_id(self.eos_token)
+        self.pad_token_id = tokenizer.token_to_id(self.pad_token)
+
+    def __len__(self):
+        return self.vocab_size
+
+    def encode(self, text, **kwargs):
+        return self.tokenizer.encode(text).ids
+
+    def decode(self, ids, skip_special_tokens=True):
+        return self.tokenizer.decode(ids)
+
+    def get_vocab_size(self):
+        return self.vocab_size
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoGPT on Shakespeare")
     parser.add_argument("--seq_len", type=int, default=256, help="Sequence length")
@@ -176,6 +198,8 @@ def evaluate(model, dataloader, device):
     model.eval()
     total_loss = 0
     num_batches = 0
+    if len(dataloader) == 0:
+        raise ValueError("Dataloader is empty")
     with torch.no_grad():
         for batch in dataloader:
             input_ids = batch["input_ids"].to(device)
@@ -226,7 +250,7 @@ def get_tokenizer(corpus_path, bit_size, n_bits_per_token):
     # tokenizer.save("bpe_tokenizer.json")
     print("Vocab size after training:", tokenizer.get_vocab_size())
 
-    return tokenizer
+    return BPETokenizerWrapper(tokenizer)
 
 
 def train(args):
@@ -259,10 +283,10 @@ def train(args):
     _ensure_ds(dataset_path)
 
     # Old method for tokenzier
-    tokenizer = CTokenizer(dataset_path)
+    # tokenizer = CTokenizer(dataset_path)
 
     # Train tokenizer
-    # tokenizer = get_tokenizer(dataset_path, args.bit_size, args.n_bits_per_token)
+    tokenizer = get_tokenizer(dataset_path, args.bit_size, args.n_bits_per_token)
 
     # Load Shakespeare dataset
     full_dataset = {
@@ -285,9 +309,7 @@ def train(args):
     train_dataloader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True
     )
-    val_dataloader = DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True
-    )
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
     # print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
     # print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
 
