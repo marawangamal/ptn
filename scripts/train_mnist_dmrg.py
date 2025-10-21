@@ -338,7 +338,7 @@ if __name__ == "__main__":
     direction = 1
     block_position = 0
     get_bond_dims = lambda mps: list(set(g.size(0) for g in mps.g))
-    print(f"Training for {N_EPOCHS_PER_CORE * N_CORES} epochs")
+    print(f"Training for {N_EPOCHS_PER_CORE * N_CORES} epochs on device {dv}")
     for epoch in range(N_EPOCHS_PER_CORE * N_CORES):
         for i, batch in enumerate(train_loader):
             optimizer.zero_grad()

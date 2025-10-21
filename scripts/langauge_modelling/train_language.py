@@ -1,17 +1,17 @@
-"""
+r"""
 Train language models (e.g., MPS, TTLM, GPT) on character or molecular string datasets.
 
 Supports Shakespeare and SMILES formats. Models and hyperparameters can be selected via command line.
 
 Example:
-    python scripts/langauge_modelling/train_language.py \\
-        --model ttlm \\
-        --batch_size 256 \\
-        --seq_len 16 \\
-        --epochs 200 \\
-        --sample_freq 50 \\
-        --lr 1.0 \\
-        --lm_head_rank 8
+python scripts/langauge_modelling/train_language.py \
+    --model ttlm \
+    --batch_size 256 \
+    --seq_len 16 \
+    --epochs 200 \
+    --sample_freq 50 \
+    --lr 1e-2 \
+    --lm_head_rank 8
 
 Arguments:
     --model            Model architecture to use (e.g., 'ttlm', 'mps', 'gpt')
