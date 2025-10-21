@@ -1,3 +1,30 @@
+"""
+Train language models (e.g., MPS, TTLM, GPT) on character or molecular string datasets.
+
+Supports Shakespeare and SMILES formats. Models and hyperparameters can be selected via command line.
+
+Example:
+    python scripts/langauge_modelling/train_language.py \\
+        --model ttlm \\
+        --batch_size 256 \\
+        --seq_len 16 \\
+        --epochs 200 \\
+        --sample_freq 50 \\
+        --lr 1.0 \\
+        --lm_head_rank 8
+
+Arguments:
+    --model            Model architecture to use (e.g., 'ttlm', 'mps', 'gpt')
+    --batch_size       Training batch size
+    --seq_len          Sequence length for training
+    --epochs           Number of training epochs
+    --sample_freq      How often (in epochs) to generate samples
+    --lr               Learning rate
+    --lm_head_rank     (optional) Rank parameter for LM head
+    (see argparse in script for all arguments)
+
+"""
+
 import math
 import os
 import re
@@ -177,7 +204,7 @@ def parse_args():
     parser.add_argument(
         "--aux_head_d_hidden", type=int, default=None, help="Aux head hidden dimension"
     )
-    parser.add_argument("--sample", action="store_true", help="Sample from model")
+    parser.add_argument("--sample_freq", type=int, default=0, help="Sample frequency")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
         "--tags", type=str, nargs="*", default=[], help="Tags for wandb logging"
@@ -479,7 +506,9 @@ def train(args):
         wandb.log({"train/loss": avg_loss, "val/loss": val_loss, "epoch": epoch + 1})
 
         # Generate sample text
-        if args.sample:
+        if (
+            epoch % args.sample_freq == 0 and args.sample_freq > 0
+        ) or epoch == args.epochs - 1:
             model.eval()
             with torch.no_grad():
                 prompt = "VIRGILIA:"
