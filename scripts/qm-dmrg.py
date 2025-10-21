@@ -1,4 +1,5 @@
-from typing import List
+from typing import List, Optional
+import math as m
 import torch
 
 from ptn.dists.tensorops.mps import mps_norm
@@ -43,12 +44,16 @@ def mps_norm(
         "linf": torch.amax,
     }[norm]
     L = torch.einsum("pdq, rds->qs", g[0], g[0])
-    for h in range(1, H - 1):
+    # for h in range(1, H - 1):
+    h = 0
+    while h < H - 1:
         if str(h) in merged:
             g_tilde = merged[str(h)]
             L = torch.einsum("pdvq,pr,rdvs ->qs", g_tilde, L, g_tilde)
+            h += 2
         else:
             L = torch.einsum("pdq,pr,rds ->qs", g[h], L, g[h])
+            h += 1
         if use_scale_factors:
             sf = norm_fn(L.abs())
             scale_factors.append(sf)
@@ -87,6 +92,20 @@ class MPS(torch.nn.Module):
         for idx, (left, right) in enumerate(bond_dims):
             print(f"  Core {idx}: left = {left}, right = {right}")
 
+    def __repr__(self):
+        core_shapes = [tuple(g.shape) for g in self.g]
+        merged = {int(k): tuple(v.shape) for k, v in self.merged.items()}
+        out = []
+        i = 0
+        while i < self.n_cores:
+            if str(i) in self.merged:
+                out.append(f"|{merged[i]}|")
+                i += 2
+            else:
+                out.append(str(core_shapes[i]))
+                i += 1
+        return ",".join(out)
+
     def merge_block(self, block_position: int):
         # position range: 0: (0, 1), 1: (1, 2), ..., n_cores - 2: (n_cores - 2, n_cores - 1)
         assert (
@@ -103,7 +122,10 @@ class MPS(torch.nn.Module):
         )
 
     def unmerge_block(
-        self, block_position: int, cum_percentage: float, side: str = "right"
+        self,
+        block_position: int,
+        cum_percentage: float,
+        side: str = "right",
     ):
         """Unmerge a block at a given position.
 
@@ -164,24 +186,74 @@ class MPS(torch.nn.Module):
             x.size(1) == self.n_cores
         ), "Input must have the same number of cores as the model"
 
-        psi_tilde = mps_select(self.g, x, self.merged)
-        z_tilde, gammas_z = mps_norm(self.g, self.merged)
-        loss = z_tilde.log() - psi_tilde.log().nanmean() + gammas_z.log().sum(dim=-1)
+        psi_tilde = mps_select(self.g, x, self.merged)  # (B, 1)
+        z_tilde, gammas_z = mps_norm(self.g, self.merged)  # (1,), (N,)
+        loss = (
+            z_tilde.log()
+            - 2 * psi_tilde.abs().log().nanmean()
+            + gammas_z.log().sum(dim=-1)
+        )
         return loss
 
 
 if __name__ == "__main__":
-    mps = MPS(n_cores=4, physical_dim=2, bond_dim=3)
+
+    # HPs
+    N_ITERS = 10_000
+    LR = 1e-4
+    RANK = 2
+    PHYSICAL_DIM = 2
+    N_CORES = 8
+    BATCH_SIZE = 32
+    SWEEP_FREQ = 1000  # every N iterations move the block
+    SITE_LENGTH = 2  # number of cores in a merged block (do not change this)
+    CUM_PERCENTAGE = 1.0  # cumulative percentage of singular values to keep
+
+    # Data
+    x = torch.randint(0, PHYSICAL_DIM, (BATCH_SIZE, N_CORES))
+
+    # Model
+    mps = MPS(n_cores=N_CORES, physical_dim=PHYSICAL_DIM, bond_dim=RANK)
     mps.merge_block(0)
-    # mps.unmerge_block(0, 0.5, "left")
-    x = torch.randint(0, 2, (32, 4))
-    # loss = mps(torch.randint(0, 2, (32, 4)))
-    # print(loss)
-    optimizer = torch.optim.Adam(mps.parameters(), lr=1e-3)
-    for i in range(10000):
+
+    # Optimizer
+    optimizer = torch.optim.Adam(mps.parameters(), lr=LR)
+
+    # Training loop
+    direction = 1
+    block_position = 0
+    for i in range(N_ITERS):
         optimizer.zero_grad()
         loss = mps(x)
         loss.backward()
         optimizer.step()
+
         if i % 1000 == 0:
-            print(f"Iteration {i}: loss = {loss.item():.4f}")
+            print(
+                f"[Iter {i}] loss: {loss.item():.2f} ({m.log(PHYSICAL_DIM) * N_CORES:.2f}) | Dir: {direction} | Block: {block_position} | Model: {mps}"
+            )
+
+        if i % SWEEP_FREQ == 0:
+            dir_old = direction
+
+            if block_position + direction + SITE_LENGTH > N_CORES:
+                direction *= -1
+            if block_position + direction < 0:
+                direction *= -1
+            if SITE_LENGTH == N_CORES:
+                direction = 0
+
+            # print(f"Direction changed from {dir_old} to {direction}. Model state: {mps}")
+
+            if direction >= 0:
+                mps.unmerge_block(
+                    block_position, cum_percentage=CUM_PERCENTAGE, side="left"
+                )
+            else:
+                mps.unmerge_block(
+                    block_position, cum_percentage=CUM_PERCENTAGE, side="right"
+                )
+
+            block_position += direction
+            mps.merge_block(block_position)
+            optimizer = torch.optim.Adam(mps.parameters(), lr=LR)
