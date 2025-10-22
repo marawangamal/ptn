@@ -31,6 +31,7 @@ class AbstractDisributionHeadOutput:
     logits: torch.Tensor  # (B, H, V) or (B, V)
     loss: Optional[torch.Tensor] = None  # (1,)
     loss_dict: Optional[dict] = None  # (1,)
+    nll: Optional[torch.Tensor] = None  # (1,)
 
 
 class AbstractDisributionHead(ABC, torch.nn.Module):
@@ -139,6 +140,7 @@ class AbstractDisributionHead(ABC, torch.nn.Module):
             loss=loss,
             logits=logits,
             loss_dict=output.loss_dict,
+            nll=output.nll,
         )
 
     def get_loss_and_logits(
