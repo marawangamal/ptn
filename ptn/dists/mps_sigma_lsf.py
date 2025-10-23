@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 
 from ptn.dists._abc import (
@@ -202,22 +203,29 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             loss_dict=loss_dict,
         )
 
-    def generate(self, x: torch.Tensor, do_sample: bool = True):
+    def generate(
+        self, x: torch.Tensor, do_sample: bool = True, y: Optional[torch.Tensor] = None
+    ):
         """Generate a sequence of length H from the model.
 
         Args:
             x (torch.Tensor): Input features. Shape: (B, D)
+            y (torch.Tensor): Target sequence. Shape: (B, H'). If provided, generation will start from the last timestep of y.
 
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
         B, D, H = x.shape[0], x.shape[1], self.config.horizon
         y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+        start_idx = 0
+        if y is not None:
+            start_idx = y.shape[1]
+            y_out[:, :start_idx] = y
 
         theta_mps = self.w_mps(x)
 
         left_cache, right_cache = None, None
-        for h in range(H):
+        for h in range(start_idx, H):
             y_mrgn = torch.full(
                 (B, H - h - 1),
                 -2,

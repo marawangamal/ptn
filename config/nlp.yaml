@@ -21,7 +21,7 @@ group:
         type: sweep
         preamble: glong
         sweep:
-          lr: [5e-4, 1e-3, 5e-4]
+          lr: [5e-3]
           pos_func: ["abs", "exp"] 
           rank: [32, 64, 128, 256]
-        sweep_template:  "python scripts/langauge_modelling/train_language.py --model ttlm --batch_size 64 --seq_len 16 --epochs 50 --sample_freq 24 --lr {lr} --lm_head_rank {rank} --lm_head_pos_func {pos_func} --bit_size 2 --n_bits_per_token 12 --tags HPO"
+        sweep_template:  "python scripts/langauge_modelling/train_language.py --model ttlm --batch_size 64 --seq_len 16 --epochs 50 --sample_freq 24 --lr {lr} --lm_head_rank {rank} --lm_head_pos_func {pos_func} --bit_size 8 --n_bits_per_token 4 --tags HPO 8P4"

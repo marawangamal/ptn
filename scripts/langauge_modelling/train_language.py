@@ -32,17 +32,17 @@ import time
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 import wandb
 from dataloaders.shakespeare import ShakespeareDataset
 from dataloaders.smiles import SmilesDataset
 from ptn.dists._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
-from toks.ctokenizer import CTokenizer
-
+from ptn.dists import dists
 from ptn.models.modelling_nanogpt_modded import GPT, GPTConfig
 
 import argparse
+
+from scripts.langauge_modelling.utils.nconv import dec2ns, ns2dec
 
 DEFAULT_SMILES_PATH = "./dataloaders/data/qm9.smi"
 DEFAULT_SHAKESPEARE_PATH = "./dataloaders/data/tinyshakespeare.txt"
@@ -114,6 +114,7 @@ class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
         super().__init__()
         self.config = config
         self.mps = MPS_SIGMA_LSF(
+            # self.mps = dists[self.config["lm_head"]](
             AbstractDisributionHeadConfig(
                 d_model=1,
                 d_output=config["bit_size"],
@@ -122,36 +123,42 @@ class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
             )
         )
 
-    def _dec2bin(self, x, bits):
-        # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
-        dv, dt = x.device, x.dtype
-        mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
-        return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(dt)
+    # def _dec2bin(self, x, bits):
+    #     # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
+    #     dv, dt = x.device, x.dtype
+    #     mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    #     return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(dt)
 
-    def _bin2dec(self, b, bits):
-        # note data type is important here and converted from int to float
-        assert (
-            b.size(-1) == bits
-        ), f"Binary tensor last dimension must be of size {bits}"
-        dv, dt = b.device, b.dtype
-        mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
-        return torch.sum(mask * b, -1).to(dt)
+    # def _bin2dec(self, b, bits):
+    #     # note data type is important here and converted from int to float
+    #     assert (
+    #         b.size(-1) == bits
+    #     ), f"Binary tensor last dimension must be of size {bits}"
+    #     dv, dt = b.device, b.dtype
+    #     mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    #     return torch.sum(mask * b, -1).to(dt)
 
-    def forward(self, x, y=None):
+    def forward(self, x, y):
         B = x.shape[0]
         x = torch.ones(B, 1, device=x.device)
         out = self.mps(
-            x, self._dec2bin(y, self.config["n_bits_per_token"]).reshape(B, -1)
+            x,
+            dec2ns(y, self.config["bit_size"], self.config["n_bits_per_token"]).reshape(
+                B, -1
+            ),
         )
         return AbstractDisributionHeadOutput(
             logits=out.logits, loss=out.loss, nll=out.loss * self.mps.config.horizon
         )
 
-    def generate(self, *args, **kwargs):
+    def generate(self, input_ids, *args, **kwargs):
         x = torch.ones(1, 1, device=next(self.parameters()).device)
-        xb = self.mps.generate(x)
+        yb = dec2ns(
+            input_ids, self.config["bit_size"], self.config["n_bits_per_token"]
+        ).reshape(1, -1)
+        xb = self.mps.generate(x, y=yb)
         bits = self.config["n_bits_per_token"]
-        return self._bin2dec(xb.reshape(1, -1, bits), bits)
+        return ns2dec(xb.reshape(1, -1, bits), self.config["bit_size"], bits)
 
 
 class BPETokenizerWrapper:
@@ -541,9 +548,11 @@ def train(args):
                 prompt = "VIRGILIA:"
                 input_ids = (
                     torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device)
-                )
+                )  # (1, L)
                 generated = model.generate(
-                    input_ids, max_output_tokens=100, stop_token=tokenizer.eos_token_id
+                    input_ids,
+                    max_output_tokens=100,
+                    stop_token=tokenizer.eos_token_id,
                 )
                 generated_text = tokenizer.decode(
                     generated[0].tolist(), skip_special_tokens=False
