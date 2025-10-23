@@ -9,7 +9,7 @@ preambles:
     - "#SBATCH --partition=long"
     - "#SBATCH --gres=gpu:rtx8000:1"
     - "#SBATCH --mem=64G"
-    - "#SBATCH --cpus-per-task=64"
+    - "#SBATCH --cpus-per-task=16"
     - "#SBATCH --nodes=1"
     - "source /home/mila/m/marawan.gamal/scratch/ptn/.venv/bin/activate"
 
@@ -24,4 +24,4 @@ group:
           lr: [5e-4, 1e-3, 5e-4]
           pos_func: ["abs", "exp"] 
           rank: [32, 64, 128, 256]
-        sweep_template:  "python scripts/langauge_modelling/train_language.py --model ttlm --batch_size 64 --seq_len 16 --epochs 50 --sample_freq 24 --lr {lr} --lm_head_rank {rank} --pos_func {pos_func} --bit_size 2 --n_bits_per_token 12 --tags HPO"
+        sweep_template:  "python scripts/langauge_modelling/train_language.py --model ttlm --batch_size 64 --seq_len 16 --epochs 50 --sample_freq 24 --lr {lr} --lm_head_rank {rank} --lm_head_pos_func {pos_func} --bit_size 2 --n_bits_per_token 12 --tags HPO"

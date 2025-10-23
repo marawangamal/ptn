@@ -54,8 +54,7 @@ DEFAULT_SHAKESPEARE_PATH = os.path.join(
 )
 
 # TODO:
-# [ ] Add custom bpe tokenizer
-# [ ] Add `bit_size` and `n_bits` for MPS
+# [ ] Remove grad clip and scaling
 
 
 def _ensure_smiles_file(path: str):
