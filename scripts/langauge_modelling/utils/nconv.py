@@ -34,10 +34,36 @@ def ns2dec(d: torch.Tensor, base: int, bits: int) -> torch.Tensor:
     return torch.sum(dl * weights, dim=-1).to(d.dtype)
 
 
+def dec2bin(x, bits):
+    # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
+    dv, dt = x.device, x.dtype
+    mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(dt)
+
+
+def bin2dec(b, bits):
+    # note data type is important here and converted from int to float
+    assert b.size(-1) == bits, f"Binary tensor last dimension must be of size {bits}"
+    dv, dt = b.device, b.dtype
+    mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    return torch.sum(mask * b, -1).to(dt)
+
+
 # ------------ Tests (builtin unittest) ------------
 
 
 class TestDecNs(unittest.TestCase):
+
+    def test_equivalence(self):
+        dec = torch.randint(0, 2**8, (100,))
+        bin = dec2bin(dec, 8)
+        bin_ns = dec2ns(dec, 2, 8)
+        recons = bin2dec(bin, 8)
+        recon_ns = ns2dec(bin_ns, 2, 8)
+        self.assertTrue(torch.equal(bin, bin_ns))
+        self.assertTrue(torch.equal(recons, recon_ns))
+        self.assertTrue(torch.equal(dec, recon_ns))
+
     def test_roundtrip_random(self):
         cases = [(2, 4), (3, 5), (4, 6), (7, 4), (10, 3), (16, 4)]
         for base, bits in cases:
