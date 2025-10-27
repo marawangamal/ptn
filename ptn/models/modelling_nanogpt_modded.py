@@ -24,6 +24,7 @@ from ptn.dists import AbstractDisributionHeadConfig
 class ModelOutput:
     logits: torch.Tensor
     loss: Optional[torch.Tensor] = None
+    nll: Optional[torch.Tensor] = None
 
 
 # n_layerss,
@@ -289,7 +290,11 @@ class GPT(nn.Module):
             )  # note: using list [-1] to preserve the time dim
             loss = None
 
-        return ModelOutput(logits=logits, loss=loss)
+        return ModelOutput(
+            logits=logits,
+            loss=loss,
+            nll=loss * (idx.size(1) + 1) if loss is not None else None,
+        )
 
     @torch.no_grad()
     def generate(

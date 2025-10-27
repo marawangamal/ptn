@@ -1,8 +1,10 @@
+from typing import Optional
 import torch
 
 from ptn.dists._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
+    AbstractDisributionHeadGenerateOutput,
     AbstractDisributionHeadOutput,
 )
 from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
@@ -29,8 +31,11 @@ POS_FUNC_MAP = {
     "rbf": rbf_activation,
 }
 
+# TODO:
+# [ ] remove bias? or replace with pre & post bias and make both trainable/non-trainable
+# [ ] remove self.sig?
 
-# TODO: instead of a separate generate, maybe handle the case when y is not given as generate
+
 class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
@@ -65,6 +70,11 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
 
         self.eps = 1e-12
 
+        # Residual params
+        self.mu = torch.eye(R, R).reshape(1, R, 1, R).repeat(H, 1, Do, 1)
+        if self.config.mode == "residual":
+            self._w_mps.data[0] = torch.zeros(R, Do, R, Di)
+
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(horizon={self.config.horizon}, "
@@ -74,9 +84,15 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def w_mps(self, x: torch.Tensor):
-        return POS_FUNC_MAP[self.config.pos_func](
+        theta = POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
-        )  # (B, H, R, V, R)
+        )
+
+        if self.config.mode == "direct":
+            return theta  # (B, H, R, V, R)
+        elif self.config.mode == "residual":
+            dvc = x.device
+            return self.mu.unsqueeze(0).to(dvc) + theta  # (B, H, R, V, R)
 
     def _ortho_init(self):
         H, R, Do, Di = (
@@ -203,77 +219,34 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             loss_dict=loss_dict,
         )
 
-    def generate_v0(self, x: torch.Tensor, do_sample: bool = True):
+    def generate(
+        self,
+        x: torch.Tensor,
+        do_sample: bool = True,
+        y: Optional[torch.Tensor] = None,
+        debug: bool = False,
+    ):
         """Generate a sequence of length H from the model.
 
         Args:
             x (torch.Tensor): Input features. Shape: (B, D)
-
-        Returns:
-            y (torch.Tensor): Generated sequence. Shape: (B, H)
-        """
-        with torch.no_grad():
-            B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
-
-            # Get MPS tensor
-            g = self.w_mps(x)  # (B, H, R, V, R)
-
-            # Build marginals dp array
-            y_out = torch.full((B, H), -1, dtype=torch.long, device=x.device)
-            g_dot = g.sum(dim=-2)  # (B, H, R, R)
-            m = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)  # margin cache
-            res = self.beta.unsqueeze(0).expand(B, -1)
-            m[:, :, H] = res
-            for h in range(H - 1, -1, -1):
-                res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
-                res = res / torch.linalg.norm(res, dim=-1, keepdim=True)[0]
-                m[:, :, h] = res
-
-            g_y = self.alpha.unsqueeze(0).expand(B, -1)  # (B, R)
-
-            for h in range(H):
-                y_slct_h = (
-                    y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
-                    .reshape(B, 1, min(max(0, h), 1), 1)
-                    .expand(B, R, -1, R)
-                )  # (B, R, 1/0, R)
-                gh_yh = g[:, min(0, h - 1)].gather(  # (B, R, V, R) => (B, R, 1/0, R)
-                    -2,
-                    y_slct_h,
-                )  # (B, R, 1/0, R)
-                if gh_yh.shape[2] > 0:
-                    g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
-                    g_y = g_y / torch.linalg.norm(g_y, dim=1, keepdim=True)[0]  # (B, R)
-                g_ = g[:, h]  # (B, R, V, R)  free leg
-                p_tilde = self.sig(
-                    torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h + 1])
-                )
-                if do_sample:
-                    probs = p_tilde / p_tilde.sum(-1, keepdim=True)  # (B, V)
-                    dist = torch.distributions.Categorical(probs=probs)
-                    yi = dist.sample()  # (B,1)
-                else:
-                    yi = p_tilde.argmax(dim=-1)  # (B,1)
-                y_out[:, h] = yi
-            return y_out
-
-    # USED FOR DEBUGGING
-    def generate(self, x: torch.Tensor, do_sample: bool = True):
-        """Generate a sequence of length H from the model.
-
-        Args:
-            x (torch.Tensor): Input features. Shape: (B, D)
+            y (torch.Tensor): Target sequence. Shape: (B, H'). If provided, generation will start from the last timestep of y.
 
         Returns:
             y (torch.Tensor): Generated sequence. Shape: (B, H)
         """
         B, D, H = x.shape[0], x.shape[1], self.config.horizon
         y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
+        start_idx = 0
+        if y is not None:
+            start_idx = y.shape[1]
+            y_out[:, :start_idx] = y
 
         theta_mps = self.w_mps(x)
 
         left_cache, right_cache = None, None
-        for h in range(H):
+        p_tilde_seq = []
+        for h in range(start_idx, H):
             y_mrgn = torch.full(
                 (B, H - h - 1),
                 -2,
@@ -299,17 +272,26 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
                     right_cache=right_cache,
                 )
             )  # (B, V), (B, H), (B, H, R), (B, H, R)
+            p_tilde_seq.append(p_tilde)
 
             if do_sample:
-                dist = torch.distributions.Categorical(logits=p_tilde)
+                p = p_tilde.clamp(min=self.eps).log()
+                if debug:
+                    print(f"p: {p}")
+                dist = torch.distributions.Categorical(logits=p)
                 yi = dist.sample()  # (B,1)
             else:
                 yi = p_tilde.argmax(dim=-1)  # (B,1)
             y_out[:, h] = yi
 
-        return y_out
+        # return y_out
+        return AbstractDisributionHeadGenerateOutput(
+            y=y_out,
+            p_tilde=torch.stack(p_tilde_seq, dim=1),  # (B, H, V)
+        )
 
-    def generate_slow(self, x: torch.Tensor, do_sample: bool = True):
+    # USED FOR TESTING THE CACHE IMPLEMENTATION
+    def generate_without_cache(self, x: torch.Tensor, do_sample: bool = True):
         """Generate a sequence of length H from the model.
 
         Args:
@@ -354,142 +336,6 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
 
         return y_out
 
-    # def generate_slow(self, x: torch.Tensor, do_sample: bool = True):
-    #     """Generate a sequence of length H from the model.
-
-    #     Args:
-    #         x (torch.Tensor): Input features. Shape: (B, D)
-
-    #     Returns:
-    #         y (torch.Tensor): Generated sequence. Shape: (B, H)
-    #     """
-    #     B, D, H = x.shape[0], x.shape[1], self.config.horizon
-    #     y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
-
-    #     theta_mps = self.w_mps(x)
-
-    #     for h in range(H):
-    #         y_mrgn = torch.full(
-    #             (B, H - h - 1),
-    #             -2,
-    #             dtype=torch.long,
-    #             device=x.device,
-    #         )
-    #         y_free = torch.full(
-    #             (B, 1),
-    #             -1,
-    #             dtype=torch.long,
-    #             device=x.device,
-    #         )
-    #         ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
-    #         p_tilde, gammas_p = select_margin_mps_tensor_batched(
-    #             self.alpha.unsqueeze(0).expand(B, -1),
-    #             self.beta.unsqueeze(0).expand(B, -1),
-    #             theta_mps,  # (B, R, H, V)
-    #             ops,
-    #             use_scale_factors=True,
-    #         )  # (B, V), (B, H)
-
-    #         if do_sample:
-    #             dist = torch.distributions.Categorical(logits=p_tilde)
-    #             yi = dist.sample()  # (B,1)
-    #         else:
-    #             yi = p_tilde.argmax(dim=-1)  # (B,1)
-    #         y_out[:, h] = yi
-
-    #     return y_out
-
-    # def generate_slow(self, x: torch.Tensor, do_sample: bool = True):
-    #     B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
-
-    #     y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
-
-    #     # theta_mps = POS_FUNC_MAP[self.config.pos_func](
-    #     #     torch.einsum("bi,hpoqi->bhpoq", x, self.w_mps) + self.b_mps
-    #     # )
-    #     g = self.w_mps(x)  # (B, H, R, V, R)
-
-    #     g_dot = g.sum(dim=-2)  # (B, H, R, R)
-    #     m = torch.ones(B, R, H + 1, device=x.device, dtype=x.dtype)
-    #     res = self.beta.unsqueeze(0).expand(B, -1)
-    #     m[:, :, H] = res
-    #     for h in range(H - 1, -1, -1):
-    #         res = torch.einsum("bqr,br->bq", g_dot[:, h], res)  # (B, )
-    #         res = res / torch.linalg.norm(res, dim=-1, keepdim=True)[0]
-    #         m[:, :, h] = res
-
-    #     for h in range(H):
-
-    #         # 0:h-1 -- select
-    #         # h -- free
-    #         # h+1:H -- marginalize
-    #         # gh_yh -- g_{h, yh}
-    #         # g_y -- stack(g_{0, y0}, g_{1, y1}, ..., g_{h-1, yh-1})
-
-    #         # **** DEBUG ****
-    #         g_y = self.alpha.unsqueeze(0).expand(B, -1)  # (B, R)
-
-    #         y_slct_h = (
-    #             y_out[:, min(0, h - 1) : min(0, h - 1) + 1]
-    #             .reshape(B, 1, min(max(0, h), 1), 1)
-    #             .expand(B, R, -1, R)
-    #         )  # (B, R, 1/0, R)
-    #         gh_yh = g[
-    #             :, min(0, h - 1)
-    #         ].gather(  # (B, H, R, V, R) => (B, 1/0, R, 1/0, R)
-    #             2,
-    #             y_slct_h,
-    #         )  # (B, R, 1/0, R)
-    #         if gh_yh.shape[2] > 0:
-    #             g_y = torch.einsum("br, brdq->bq", g_y, gh_yh)  # (B, R)
-    #             g_y = g_y / torch.linalg.norm(g_y, dim=1, keepdim=True)[0]  # (B, R)
-    #         g_ = g[:, h]  # (B, R, V, R)  free leg
-    #         p_tilde_1 = self.sig(
-    #             torch.einsum("br,brdq,bq->bd", g_y, g_, m[:, :, h + 1])
-    #         )
-    #         # probs = p_tilde / p_tilde.sum(-1, keepdim=True)  # (B, V)
-    #         # dist = torch.distributions.Categorical(probs=probs)
-    #         # yi = dist.sample()  # (B,1)
-    #         # y_out[:, h] = yi
-    #         # **** DEBUG ****
-
-    #         y_mrgn = torch.full(
-    #             (B, H - h - 1),
-    #             -2,
-    #             dtype=torch.long,
-    #             device=x.device,
-    #         )
-    #         y_free = torch.full(
-    #             (B, 1),
-    #             -1,
-    #             dtype=torch.long,
-    #             device=x.device,
-    #         )
-    #         ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
-    #         p_tilde, gammas_p = select_margin_mps_tensor_batched(
-    #             self.alpha.unsqueeze(0).expand(B, -1),
-    #             self.beta.unsqueeze(0).expand(B, -1),
-    #             g,  # (B, R, H, V)
-    #             ops,
-    #             use_scale_factors=True,
-    #             m=m,
-    #             g_y=g_y,
-    #             g_=g_,
-    #             p_tilde=p_tilde_1,
-    #             y_slct_h=y_slct_h,
-    #             y_out=y_out,
-    #             gh_yh=gh_yh,
-    #         )  # (B, V), (B, H)
-
-    #         if do_sample:
-    #             dist = torch.distributions.Categorical(logits=p_tilde)
-    #             yi = dist.sample()  # (B,1)
-    #         else:
-    #             yi = p_tilde.argmax(dim=-1)  # (B,1)
-    #         y_out[:, h] = yi
-
-    #     return y_out
-
 
 def test_generate():
     B, H, D, V = 8, 32, 9, 2
@@ -524,8 +370,6 @@ def run_test():
     y = torch.randint(0, V, (B, H))
     loss = mt_head(x, y).loss
     print(f"loss: {loss}")
-    # out = mt_head.generate(x)
-    # print(f"generated: {out}")
 
 
 if __name__ == "__main__":

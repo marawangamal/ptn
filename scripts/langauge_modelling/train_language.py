@@ -1,3 +1,30 @@
+r"""
+Train language models (e.g., MPS, TTLM, GPT) on character or molecular string datasets.
+
+Supports Shakespeare and SMILES formats. Models and hyperparameters can be selected via command line.
+
+Example:
+python scripts/langauge_modelling/train_language.py \
+    --model ttlm \
+    --batch_size 64 \
+    --seq_len 16 \
+    --epochs 200 \
+    --sample_freq 50 \
+    --lr 1e-3 \
+    --lm_head_rank 16
+
+Arguments:
+    --model            Model architecture to use (e.g., 'ttlm', 'mps', 'gpt')
+    --batch_size       Training batch size
+    --seq_len          Sequence length for training
+    --epochs           Number of training epochs
+    --sample_freq      How often (in epochs) to generate samples
+    --lr               Learning rate
+    --lm_head_rank     (optional) Rank parameter for LM head
+    (see argparse in script for all arguments)
+
+"""
+
 import math
 import os
 import re
@@ -5,17 +32,17 @@ import time
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
 import wandb
 from dataloaders.shakespeare import ShakespeareDataset
 from dataloaders.smiles import SmilesDataset
 from ptn.dists._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
-from toks.ctokenizer import CTokenizer
-
+from ptn.dists import dists
 from ptn.models.modelling_nanogpt_modded import GPT, GPTConfig
 
 import argparse
+
+from scripts.langauge_modelling.utils.nconv import dec2ns, ns2dec
 
 DEFAULT_SMILES_PATH = "./dataloaders/data/qm9.smi"
 DEFAULT_SHAKESPEARE_PATH = "./dataloaders/data/tinyshakespeare.txt"
@@ -27,8 +54,7 @@ DEFAULT_SHAKESPEARE_PATH = os.path.join(
 )
 
 # TODO:
-# [ ] Add custom bpe tokenizer
-# [ ] Add `bit_size` and `n_bits` for MPS
+# [ ] Remove grad clip and scaling
 
 
 def _ensure_smiles_file(path: str):
@@ -86,38 +112,81 @@ def build_exp_name(args: argparse.Namespace):
 class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
     def __init__(self, config):
         super().__init__()
+        self.config = config
         self.mps = MPS_SIGMA_LSF(
+            # self.mps = dists[self.config["lm_head"]](
             AbstractDisributionHeadConfig(
                 d_model=1,
-                d_output=config["d_vocab"],
-                horizon=config["lm_head_horizon"],
+                d_output=config["bit_size"],
+                horizon=config["lm_head_horizon"] * config["n_bits_per_token"],
                 rank=config["lm_head_rank"],
+                init_method=config["lm_head_init_method"],
             )
         )
 
-    def _dec2bin(self, x, bits):
-        # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
-        mask = 2 ** torch.arange(bits - 1, -1, -1).to(x.device, x.dtype)
-        return x.unsqueeze(-1).bitwise_and(mask).ne(0).float()
+    # def _dec2bin(self, x, bits):
+    #     # mask = 2 ** torch.arange(bits).to(x.device, x.dtype)
+    #     dv, dt = x.device, x.dtype
+    #     mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    #     return x.unsqueeze(-1).bitwise_and(mask).ne(0).to(dt)
 
-    def _bin2dec(self, b, bits):
-        mask = 2 ** torch.arange(bits - 1, -1, -1).to(b.device, b.dtype)
-        return torch.sum(mask * b, -1)
+    # def _bin2dec(self, b, bits):
+    #     # note data type is important here and converted from int to float
+    #     assert (
+    #         b.size(-1) == bits
+    #     ), f"Binary tensor last dimension must be of size {bits}"
+    #     dv, dt = b.device, b.dtype
+    #     mask = 2 ** torch.arange(bits - 1, -1, -1).to(dv, dt)
+    #     return torch.sum(mask * b, -1).to(dt)
 
-    def forward(self, x, y=None):
+    def forward(self, x, y):
         B = x.shape[0]
         x = torch.ones(B, 1, device=x.device)
-        out = self.mps(x, y)
-        return AbstractDisributionHeadOutput(logits=out.logits, loss=out.loss)
+        out = self.mps(
+            x,
+            dec2ns(y, self.config["bit_size"], self.config["n_bits_per_token"]).reshape(
+                B, -1
+            ),
+        )
+        return AbstractDisributionHeadOutput(
+            logits=out.logits, loss=out.loss, nll=out.loss * self.mps.config.horizon
+        )
 
-    def generate(self, *args, **kwargs):
+    def generate(self, input_ids, *args, **kwargs):
         x = torch.ones(1, 1, device=next(self.parameters()).device)
-        return self.mps.generate(x)
+        yb = dec2ns(
+            input_ids, self.config["bit_size"], self.config["n_bits_per_token"]
+        ).reshape(1, -1)
+        xb = self.mps.generate(x, y=yb)
+        bits = self.config["n_bits_per_token"]
+        return ns2dec(xb.reshape(1, -1, bits), self.config["bit_size"], bits)
+
+
+class BPETokenizerWrapper:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        self.vocab_size = tokenizer.get_vocab_size()
+        self.eos_token = "</s>"
+        self.pad_token = "<pad>"
+        self.eos_token_id = tokenizer.token_to_id(self.eos_token)
+        self.pad_token_id = tokenizer.token_to_id(self.pad_token)
+
+    def __len__(self):
+        return self.vocab_size
+
+    def encode(self, text, **kwargs):
+        return self.tokenizer.encode(text).ids
+
+    def decode(self, ids, skip_special_tokens=True):
+        return self.tokenizer.decode(ids)
+
+    def get_vocab_size(self):
+        return self.vocab_size
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train NanoGPT on Shakespeare")
-    parser.add_argument("--seq_len", type=int, default=256, help="Sequence length")
+    parser.add_argument("--seq_len", type=int, default=16, help="Sequence length")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -146,6 +215,12 @@ def parse_args():
         default=0.0,
         help="LM head load balance lambda",
     )
+    parser.add_argument(
+        "--lm_head_init_method",
+        type=str,
+        default="randn",
+        help="LM head initialization method",
+    )
     parser.add_argument("--aux_head", type=str, default=None, help="Aux head type")
     parser.add_argument(
         "--aux_head_horizon", type=int, default=2, help="Aux head horizon"
@@ -155,7 +230,7 @@ def parse_args():
     parser.add_argument(
         "--aux_head_d_hidden", type=int, default=None, help="Aux head hidden dimension"
     )
-    parser.add_argument("--sample", action="store_true", help="Sample from model")
+    parser.add_argument("--sample_freq", type=int, default=50, help="Sample frequency")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
         "--tags", type=str, nargs="*", default=[], help="Tags for wandb logging"
@@ -165,9 +240,9 @@ def parse_args():
         "--save_every", type=int, default=None, help="Save every n epochs"
     )
     parser.add_argument("--dataset", type=str, default="shakespeare", help="Dataset")
-    parser.add_argument("--bit_size", type=int, default=8, help="Bit size")
+    parser.add_argument("--bit_size", type=int, default=2, help="Bit size")
     parser.add_argument(
-        "--n_bits_per_token", type=int, default=4, help="Number of bits per token"
+        "--n_bits_per_token", type=int, default=12, help="Number of bits per token"
     )
     return parser.parse_args()
 
@@ -175,7 +250,10 @@ def parse_args():
 def evaluate(model, dataloader, device):
     model.eval()
     total_loss = 0
+    total_nll = 0
     num_batches = 0
+    if len(dataloader) == 0:
+        raise ValueError("Dataloader is empty")
     with torch.no_grad():
         for batch in dataloader:
             input_ids = batch["input_ids"].to(device)
@@ -188,9 +266,10 @@ def evaluate(model, dataloader, device):
                 x, y = input_ids, input_ids.clone()
             output = model(x, y)
             total_loss += output.loss.item()
+            total_nll += output.nll.item() if output.nll is not None else 0
             num_batches += 1
     model.train()
-    return total_loss / num_batches
+    return total_loss / num_batches, total_nll / num_batches
 
 
 def set_seed(seed: int):
@@ -226,7 +305,7 @@ def get_tokenizer(corpus_path, bit_size, n_bits_per_token):
     # tokenizer.save("bpe_tokenizer.json")
     print("Vocab size after training:", tokenizer.get_vocab_size())
 
-    return tokenizer
+    return BPETokenizerWrapper(tokenizer)
 
 
 def train(args):
@@ -259,10 +338,10 @@ def train(args):
     _ensure_ds(dataset_path)
 
     # Old method for tokenzier
-    tokenizer = CTokenizer(dataset_path)
+    # tokenizer = CTokenizer(dataset_path)
 
     # Train tokenizer
-    # tokenizer = get_tokenizer(dataset_path, args.bit_size, args.n_bits_per_token)
+    tokenizer = get_tokenizer(dataset_path, args.bit_size, args.n_bits_per_token)
 
     # Load Shakespeare dataset
     full_dataset = {
@@ -285,9 +364,7 @@ def train(args):
     train_dataloader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True
     )
-    val_dataloader = DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True
-    )
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
     # print(f"Train example: {tokenizer.decode(train_dataset[0]['input_ids'])}")
     # print(f"Val example: {tokenizer.decode(val_dataset[0]['input_ids'])}")
 
@@ -306,11 +383,14 @@ def train(args):
         "lm_head_d_hidden": args.lm_head_d_hidden,
         "lm_head_pos_func": args.lm_head_pos_func,
         "lm_head_load_balance_lambda": args.lm_head_load_balance_lambda,
+        "lm_head_init_method": args.lm_head_init_method,
         "aux_head": args.aux_head,
         "aux_head_horizon": args.aux_head_horizon,
         "aux_head_rank": args.aux_head_rank,
         "aux_head_d_hidden": args.aux_head_d_hidden,
         "aux_lambda": args.aux_lambda,
+        "n_bits_per_token": args.n_bits_per_token,
+        "bit_size": args.bit_size,
         "debug": args.debug,
     }
     if args.model == "ttlm":
@@ -377,6 +457,7 @@ def train(args):
     train_start_time = time.time()
     for epoch in range(args.epochs):
         total_loss = 0
+        total_nll = 0
         start_time = time.time()
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}", leave=False)
         for batch_idx, batch in enumerate(pbar):
@@ -417,6 +498,7 @@ def train(args):
             scheduler.step()
 
             total_loss += loss.item()
+            total_nll += output.nll.item() if output.nll is not None else 0
 
             if loss.isnan():
                 raise ValueError("Loss is NaN")
@@ -447,25 +529,38 @@ def train(args):
                             wandb.log({f"train/{k}": v})
 
         avg_loss = total_loss / len(train_dataloader)
+        avg_nll = total_nll / len(train_dataloader)
 
         # Evaluate on validation set
-        val_loss = evaluate(model, val_dataloader, device)
+        val_loss, val_nll = evaluate(model, val_dataloader, device)
 
         print(
             f"Epoch {epoch+1} completed. Train loss: {avg_loss:.4f} | Val loss: {val_loss:.4f} | Epoch Time: {time.time() - start_time:.2f}s | Total Time: {time.time() - train_start_time:.2f}s"
         )
-        wandb.log({"train/loss": avg_loss, "val/loss": val_loss, "epoch": epoch + 1})
+        wandb.log(
+            {
+                "train/loss": avg_loss,
+                "train/nll": avg_nll,
+                "val/loss": val_loss,
+                "val/nll": val_nll,
+                "epoch": epoch + 1,
+            }
+        )
 
         # Generate sample text
-        if args.sample:
+        if (
+            epoch % args.sample_freq == 0 and args.sample_freq > 0
+        ) or epoch == args.epochs - 1:
             model.eval()
             with torch.no_grad():
                 prompt = "VIRGILIA:"
                 input_ids = (
                     torch.tensor(tokenizer.encode(prompt)).unsqueeze(0).to(device)
-                )
+                )  # (1, L)
                 generated = model.generate(
-                    input_ids, max_output_tokens=100, stop_token=tokenizer.eos_token_id
+                    input_ids,
+                    max_output_tokens=100,
+                    stop_token=tokenizer.eos_token_id,
                 )
                 generated_text = tokenizer.decode(
                     generated[0].tolist(), skip_special_tokens=False
