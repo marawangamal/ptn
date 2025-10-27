@@ -31,6 +31,10 @@ POS_FUNC_MAP = {
     "rbf": rbf_activation,
 }
 
+# TODO:
+# [ ] remove bias? or replace with pre & post bias and make both trainable/non-trainable
+# [ ] remove self.sig?
+
 
 class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
