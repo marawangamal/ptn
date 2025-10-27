@@ -162,18 +162,22 @@ class MPS_BM_LSF(AbstractDisributionHead):
                 & gammas_p.isfinite().all(dim=-1)
                 & gammas_z.isfinite().all(dim=-1)
             )  # (B,)
-            p_tilde = p_tilde[fmask]
-            z_tilde = z_tilde[fmask]
-            gammas_p = gammas_p[fmask]
-            gammas_z = gammas_z[fmask]
+            p_tilde_ = p_tilde[fmask]
+            z_tilde_ = z_tilde[fmask]
+            gammas_p_ = gammas_p[fmask]
+            gammas_z_ = gammas_z[fmask]
 
             loss = (1 / H) * (  # avg across seq dimension
-                -2 * torch.log(p_tilde.abs())  # (B,)
-                + torch.log(z_tilde)  # (B,)
+                -2 * torch.log(p_tilde_.abs())  # (B,)
+                + torch.log(z_tilde_)  # (B,)
                 # Contraction Stability Scale Factors
-                - (2 * torch.log(gammas_p.abs()).sum(dim=-1))  # (B, H)
-                + (gammas_z.log().sum(dim=-1))  # (B, H)
+                - (2 * torch.log(gammas_p_.abs()).sum(dim=-1))  # (B, H)
+                + (gammas_z_.log().sum(dim=-1))  # (B, H)
             ).mean()  # avg across batch dimension
+
+            # if loss.isnan() or loss < 0:
+            #     print(f"[MPS] Loss is NaN or negative: {loss}")
+            #     raise ValueError("[MPS] Loss is NaN or negative")
 
             # if loss.isnan() or loss < 0:
             #     print(f"[MPS] Loss is NaN or negative: {loss}")
@@ -260,25 +264,32 @@ def run_test():
 
 
 def train_single_example():
-    B, H, D, V = 32, 8, 1, 2
+    # set seed
+    torch.manual_seed(0)
+    B, H, R, D, V = 16, 8, 2, 1, 2
     mt_head = MPS_BM_LSF(
         AbstractDisributionHeadConfig(
             d_model=D,
             d_output=V,
             horizon=H,
-            rank=2,
+            rank=R,
         ),
     )
     x = torch.randn(B, D)
     y = torch.randint(0, V, (B, H))
-    optimizer = torch.optim.SGD(mt_head.parameters(), lr=1e-3)
+    optimizer = torch.optim.AdamW(mt_head.parameters(), lr=1e-4)
     for i in range(10_000):
         output = mt_head(x, y)
         output.loss.backward()
+        # clip grad norm
+        # grad = torch.nn.utils.clip_grad_norm(mt_head.parameters(), 1.0)
+        param_norm = (
+            torch.nn.utils.parameters_to_vector(mt_head.parameters()).norm().item()
+        )
         optimizer.step()
         optimizer.zero_grad()
         if i % 100 == 0:
-            print(f"[{i}] loss: {output.loss:.2f}")
+            print(f"[{i}] loss: {output.loss:.2f} | param norm: {param_norm:.4f}")
 
 
 if __name__ == "__main__":

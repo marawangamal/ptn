@@ -120,6 +120,7 @@ class TTLM(torch.nn.Module):  # TTLM = Tensor Train Language Model
                 d_output=config["bit_size"],
                 horizon=config["lm_head_horizon"] * config["n_bits_per_token"],
                 rank=config["lm_head_rank"],
+                init_method=config["lm_head_init_method"],
             )
         )
 
@@ -213,6 +214,12 @@ def parse_args():
         type=float,
         default=0.0,
         help="LM head load balance lambda",
+    )
+    parser.add_argument(
+        "--lm_head_init_method",
+        type=str,
+        default="randn",
+        help="LM head initialization method",
     )
     parser.add_argument("--aux_head", type=str, default=None, help="Aux head type")
     parser.add_argument(
@@ -376,6 +383,7 @@ def train(args):
         "lm_head_d_hidden": args.lm_head_d_hidden,
         "lm_head_pos_func": args.lm_head_pos_func,
         "lm_head_load_balance_lambda": args.lm_head_load_balance_lambda,
+        "lm_head_init_method": args.lm_head_init_method,
         "aux_head": args.aux_head,
         "aux_head_horizon": args.aux_head_horizon,
         "aux_head_rank": args.aux_head_rank,

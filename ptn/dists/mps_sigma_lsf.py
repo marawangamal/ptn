@@ -4,6 +4,7 @@ import torch
 from ptn.dists._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
+    AbstractDisributionHeadGenerateOutput,
     AbstractDisributionHeadOutput,
 )
 from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
@@ -65,6 +66,11 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
 
         self.eps = 1e-12
 
+        # Residual params
+        self.mu = torch.eye(R, R).reshape(1, R, 1, R).repeat(H, 1, Do, 1)
+        if self.config.mode == "residual":
+            self._w_mps.data[0] = torch.zeros(R, Do, R, Di)
+
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(horizon={self.config.horizon}, "
@@ -74,9 +80,15 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def w_mps(self, x: torch.Tensor):
-        return POS_FUNC_MAP[self.config.pos_func](
+        theta = POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
-        )  # (B, H, R, V, R)
+        )
+
+        if self.config.mode == "direct":
+            return theta  # (B, H, R, V, R)
+        elif self.config.mode == "residual":
+            dvc = x.device
+            return self.mu.unsqueeze(0).to(dvc) + theta  # (B, H, R, V, R)
 
     def _ortho_init(self):
         H, R, Do, Di = (
@@ -204,7 +216,11 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def generate(
-        self, x: torch.Tensor, do_sample: bool = True, y: Optional[torch.Tensor] = None
+        self,
+        x: torch.Tensor,
+        do_sample: bool = True,
+        y: Optional[torch.Tensor] = None,
+        debug: bool = False,
     ):
         """Generate a sequence of length H from the model.
 
@@ -225,6 +241,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         theta_mps = self.w_mps(x)
 
         left_cache, right_cache = None, None
+        p_tilde_seq = []
         for h in range(start_idx, H):
             y_mrgn = torch.full(
                 (B, H - h - 1),
@@ -251,15 +268,23 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
                     right_cache=right_cache,
                 )
             )  # (B, V), (B, H), (B, H, R), (B, H, R)
+            p_tilde_seq.append(p_tilde)
 
             if do_sample:
-                dist = torch.distributions.Categorical(logits=p_tilde)
+                p = p_tilde.clamp(min=self.eps).log()
+                if debug:
+                    print(f"p: {p}")
+                dist = torch.distributions.Categorical(logits=p)
                 yi = dist.sample()  # (B,1)
             else:
                 yi = p_tilde.argmax(dim=-1)  # (B,1)
             y_out[:, h] = yi
 
-        return y_out
+        # return y_out
+        return AbstractDisributionHeadGenerateOutput(
+            y=y_out,
+            p_tilde=torch.stack(p_tilde_seq, dim=1),  # (B, H, V)
+        )
 
     # USED FOR TESTING THE CACHE IMPLEMENTATION
     def generate_without_cache(self, x: torch.Tensor, do_sample: bool = True):
