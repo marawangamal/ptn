@@ -257,6 +257,13 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             ]
         )  # (B, R, V, R) x H
         cores_mrgn = [cores[h].sum(dim=2) for h in range(H)]
+        esum_z = []
+        for h in range(H):
+            esum_z.append(cores_mrgn[h])
+            esum_z.append([0, h + 1, h + 2])
+        esum_z.append([0])
+        z = torch.einsum(*esum_z)
+
         for i in range(H):
             esum = []
             for j in range(H):
@@ -281,10 +288,12 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
                     esum.append([0, j + 1, H + 2, j + 2])
             esum.append([0] + [H + 2])
             py_tilde = torch.einsum(*esum)  # (B, V)
-            py_tilde = py_tilde / py_tilde.sum(-1, keepdim=True)
+            # py_tilde = py_tilde / py_tilde.sum(-1, keepdim=True)
 
             # Sample from py_tilde
-            yi = torch.multinomial(py_tilde, num_samples=1).reshape(-1)  # (B,)
+            yi = torch.multinomial(py_tilde / z.unsqueeze(-1), num_samples=1).reshape(
+                -1
+            )  # (B,)
             y_out[:, i] = yi
         return y_out
 
@@ -338,7 +347,6 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
                     beta,
                     theta_mps,  # (B, R, H, V)
                     ops,
-                    use_scale_factors=False,
                     build_cache=True if h == 0 else False,
                     left_cache=left_cache,
                     right_cache=right_cache,
