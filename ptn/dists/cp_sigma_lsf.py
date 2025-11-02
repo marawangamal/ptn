@@ -38,7 +38,9 @@ class CP_SIGMA_LSF(AbstractDisributionHead):
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
         self.w_cp = torch.nn.Parameter(torch.randn(R, H, Di, V) * std_fan_in)
-        self.b_cp = torch.nn.Parameter(torch.zeros(R, H, V) * std_fan_in)
+        self.b_cp = None
+        if config.use_bias:
+            self.b_cp = torch.nn.Parameter(torch.zeros(R, H, V) * std_fan_in)
 
     def set_output_embeddings(self, embeddings: torch.nn.Parameter):
         raise NotImplementedError("set_output_embeddings not implemented")
@@ -73,9 +75,9 @@ class CP_SIGMA_LSF(AbstractDisributionHead):
         loss_dict = {}
 
         if y is not None:
-
+            b = 0 if self.b_cp is None else self.b_cp
             theta_cp = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + self.b_cp
+                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + b
             )
 
             p_tilde, gammas_p = select_margin_cp_tensor_batched(
@@ -125,8 +127,9 @@ class CP_SIGMA_LSF(AbstractDisributionHead):
             B, D, H, R = x.shape[0], x.shape[1], self.config.horizon, self.config.rank
             # y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
 
+            b = 0 if self.b_cp is None else self.b_cp
             theta_cp = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + self.b_cp
+                torch.einsum("bi,rhiv->brhv", x, self.w_cp) + b
             )
 
             # -1: marginalize
@@ -172,6 +175,28 @@ class CP_SIGMA_LSF(AbstractDisributionHead):
                 y_out[:, h] = yi
             return y_out
 
+    def materialize(self, x: torch.Tensor):
+        """Materialize probabilities into a tensor.
+
+        Args:
+            x (torch.Tensor): Input features. Shape: (B, Di)
+
+        Returns:
+            p (torch.Tensor): Materialized probabilities. Shape: (B, V**H)
+        """
+        b = 0 if self.b_cp is None else self.b_cp
+        theta_cp = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,rhiv->brhv", x, self.w_cp) + b
+        )
+        esum = []
+        H = theta_cp.shape[2]
+        for h in range(H):
+            esum.append(theta_cp[:, :, h])
+            esum.append([0, 1, 2 + h])
+        esum.append([0] + [2 + h for h in range(H)])
+        p_tilde = torch.einsum(*esum)  # (B, V**H)
+        return p_tilde
+
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
@@ -192,5 +217,22 @@ def run_test():
     print(f"generated: {out}")
 
 
+def test_materialize():
+    B, H, Di, Do, R = 1, 2, 1, 32, 2
+    mt_head = CP_SIGMA_LSF(
+        AbstractDisributionHeadConfig(
+            d_model=Di,
+            d_output=Do,
+            horizon=H,
+            rank=R,
+            pos_func="exp",
+            use_bias=False,
+        ),
+    )
+    x = torch.ones(B, Di)
+    p = mt_head.materialize(x)
+    print(f"p: {p}")
+
+
 if __name__ == "__main__":
-    run_test()
+    test_materialize()
