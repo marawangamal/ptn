@@ -2,12 +2,7 @@ import os
 import certifi
 import torch
 from tqdm import tqdm
-import torchvision
-from torchvision import transforms
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 from ptn.dists import dists
 from ptn.dists._abc import AbstractDisributionHeadConfig
@@ -109,12 +104,14 @@ def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
     losses = []
     print(f"\n\nTraining model...")
     print(f"Num batches: {len(dataloader)}")
+    print(f"Device: {dvc}")
+    dummy_input = torch.ones(batch_size, 1, device=dvc)
     for epoch in range(n_epochs):
         train_losses = []
         for i, batch in tqdm(enumerate(dataloader), leave=False, total=len(dataloader)):
             x = batch["input_ids"]
             x = x.to(dvc)
-            output = model(torch.ones(x.size(0), 1), x)
+            output = model(dummy_input, x)
             optimizer.zero_grad()
             output.loss.backward()
             optimizer.step()
@@ -126,7 +123,7 @@ def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
 
         # Generate sample
         # Decimal
-        y = model.generate(torch.ones(1, 1))
+        y = model.generate(dummy_input)
         y_str = tokenizer.decode(y[0].tolist())
         y_ids = [str(k) for k in y[0][:5].tolist()]
 
@@ -138,7 +135,7 @@ def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
 if __name__ == "__main__":
     # Hyperparameters
     # Data
-    file_path = "../data/shakespeare/main.txt"
+    file_path = "data/shakespeare/main.txt"
     n_samples = 200_000
     # Model
     horizon = 32  # i.e. sequence length
