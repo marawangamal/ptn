@@ -24,6 +24,8 @@ class AbstractDisributionHeadConfig:
     use_scale_factors: bool = True
     norm: str = "linf"
     mode: str = "direct"  # "direct", "residual", "hholder"
+    rank_dropout: Optional[float] = None  # probability of a rank dim being dropped out
+    use_bias: bool = True
 
 
 @dataclass
