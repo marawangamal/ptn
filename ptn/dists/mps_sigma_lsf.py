@@ -1,4 +1,5 @@
 from typing import Optional
+import warnings
 import torch
 
 from ptn.dists._abc import (
@@ -40,6 +41,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
+        self.eps = 1e-12
         H, R, Di, Do = (
             config.horizon,
             config.rank,
@@ -67,10 +69,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
 
-        if config.init_method == "ortho":
-            self._ortho_init()
-
-        self.eps = 1e-12
+        self._init_params(config.init_method)
 
         # Residual params
         self.mu = torch.eye(R, R).reshape(1, R, 1, R).repeat(H, 1, Do, 1)
@@ -115,16 +114,36 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             dvc = x.device
             return self.mu.unsqueeze(0).to(dvc) + theta  # (B, H, R, V, R)
 
-    def _ortho_init(self):
+    def _init_params(self, init_method: str = "randn"):
+
         H, R, Do, Di = (
             self.config.horizon,
             self.config.rank,
             self.config.d_output,
             self.config.d_model,
         )
-        self._w_mps.data = (
-            torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
-        )
+
+        # NOTE: initializing s.t. W[i1] == W[i2] ∀ i1, i2 will result in degenerate solutions
+        # Specifically, it will cause the leared distribition to be the symetric lifting of the dirac distribution.
+        # This means initializing to be all Identity will cause this degeneracy.
+        if init_method == "randn":
+            return  # alread initialized to be random
+
+        elif init_method == "eye":
+            # BAD: initializing to be all identity will cause degenerate solution.
+            # must use randomness to break symmetry
+            # Add warning
+            warnings.warn(
+                "Initializing to be all identity will cause degenerate solution. Must use randomness to break symmetry."
+            )
+            self._w_mps.data = (
+                torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
+            )
+        elif init_method == "ortho":
+            bs = H * Do * Di
+            qs, _, _ = torch.svd(torch.randn(bs, R, R))
+            qs = qs.reshape(H, Do, Di, R, R)
+            self._w_mps.data = qs.permute(0, 3, 1, 4, 2)
 
     def _compute_orthogonal_reg(self):
         H, R, Do, Di = (
