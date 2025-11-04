@@ -93,22 +93,56 @@ def get_tokenizer(corpus_path, bit_size, n_bits_per_token):
     return BPETokenizerWrapper(tok)
 
 
-def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
+def compute_loss(model, dataloader, batch_size=32):
+    model.eval()
+    total_loss = 0
+    num_batches = 0
     dvc = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(dvc)
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, drop_last=True
+    with torch.no_grad():
+        for batch in dataloader:
+            x = batch["input_ids"]
+            x = x.to(dvc)
+            dummy_input = torch.ones(x.size(0), 1, device=dvc)
+            output = model(dummy_input, x)
+            total_loss += output.loss.item()
+            num_batches += 1
+    return total_loss / num_batches if num_batches > 0 else 0.0
+
+
+def train_model(
+    model, train_dataset, val_dataset, batch_size=32, lr=1e-3, n_epochs=50, resume=True
+):
+    dvc = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Auto resume training from last checkpoint
+    ckpt_path = "checkpoints/shakespeare/model_last.pt"
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    if os.path.exists(ckpt_path) and resume:
+        model.load_state_dict(torch.load(ckpt_path)["model_state_dict"])
+        print(f"Loaded model from {ckpt_path}")
+
+    model.to(dvc)
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+    )
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     grads = []
-    losses = []
+    train_losses = []
+    val_losses = []
+
     print(f"\n\nTraining model...")
-    print(f"Num batches: {len(dataloader)}")
+    print(f"Num batches: {len(train_dataloader)}")
     print(f"Device: {dvc}")
     dummy_input = torch.ones(batch_size, 1, device=dvc)
     for epoch in range(n_epochs):
         train_losses = []
-        for i, batch in tqdm(enumerate(dataloader), leave=False, total=len(dataloader)):
+        for i, batch in tqdm(
+            enumerate(train_dataloader), leave=False, total=len(train_dataloader)
+        ):
             x = batch["input_ids"]
             x = x.to(dvc)
             output = model(dummy_input, x)
@@ -118,8 +152,12 @@ def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
             grads.append(torch.nn.utils.clip_grad_norm(model.parameters(), 1.0))
             train_losses.append(output.loss.item())
 
-        loss_avg = sum(train_losses) / len(train_losses)
-        losses.append(loss_avg)
+        # Compute avg train loss
+        train_loss = sum(train_losses) / len(train_losses)
+        train_losses.append(train_loss)
+
+        # Compute avg val loss
+        val_loss = compute_loss(model, val_dataloader)
 
         # Generate sample
         # Decimal
@@ -127,22 +165,62 @@ def train_model(model, dataset, batch_size=32, lr=1e-3, n_epochs=50):
         y_str = tokenizer.decode(y[0].tolist())
         y_ids = [str(k) for k in y[0][:5].tolist()]
 
+        # Log results
         print(
-            f"[Epoch{epoch + 1}/{n_epochs}][{i + 1}/{len(dataloader)}] Loss: {loss_avg:.2f} | {' '.join(y_ids)} | {repr(y_str)}"
+            f"[Epoch {epoch + 1}/{n_epochs}] Train Loss: {train_loss:.2f} | Val Loss: {val_loss:.2f} | {' '.join(y_ids)} | {repr(y_str)}"
+        )
+
+        # Save checkpoint
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "config": vars(args),
+                "epoch": epoch,
+            },
+            ckpt_path,
         )
 
 
 if __name__ == "__main__":
-    # Hyperparameters
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train a Shakespeare model.")
     # Data
-    file_path = "data/shakespeare/main.txt"
-    n_samples = 200_000
+    parser.add_argument(
+        "--file_path",
+        type=str,
+        default="data/shakespeare/main.txt",
+        help="Path to the Shakespeare data.",
+    )
+    parser.add_argument(
+        "--n_samples", type=int, default=200_000, help="Number of samples to use."
+    )
     # Model
-    horizon = 32  # i.e. sequence length
-    batch_size = 32
-    d_output = 512
-    d_model = 1
-    rank = 4
+    parser.add_argument(
+        "--horizon", type=int, default=32, help="Sequence length (horizon)."
+    )
+    parser.add_argument(
+        "--batch_size", type=int, default=32, help="Batch size to use for training."
+    )
+    parser.add_argument("--d_output", type=int, default=512, help="Output dimension.")
+    parser.add_argument("--d_model", type=int, default=1, help="Model dimension.")
+    parser.add_argument("--rank", type=int, default=4, help="Model rank.")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument(
+        "--n_epochs", type=int, default=50, help="Number of epochs to train for."
+    )
+
+    args = parser.parse_args()
+
+    file_path = args.file_path
+    n_samples = args.n_samples
+    horizon = args.horizon
+    batch_size = args.batch_size
+    d_output = args.d_output
+    d_model = args.d_model
+    rank = args.rank
+    lr = args.lr
+    n_epochs = args.n_epochs
 
     tokenizer = get_tokenizer(
         corpus_path=file_path, bit_size=d_output, n_bits_per_token=1
@@ -150,6 +228,8 @@ if __name__ == "__main__":
     dataset = ShakespeareDataset(
         tokenizer, seq_len=horizon, max_samples=n_samples + 1, file_path=file_path
     )
+    # Split dataset into train and val
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [0.9, 0.1])
     print("Num. Tokens:", tokenizer.get_vocab_size())
 
     # Hyperparameters
@@ -166,4 +246,4 @@ if __name__ == "__main__":
         )
     )
 
-    train_model(model, dataset, batch_size)
+    train_model(model, train_dataset, val_dataset, batch_size, lr=lr, n_epochs=n_epochs)
