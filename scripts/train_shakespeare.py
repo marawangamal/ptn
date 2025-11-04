@@ -2,6 +2,7 @@ import os
 import certifi
 import torch
 from tqdm import tqdm
+import wandb
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
 
 from ptn.dists import dists
@@ -111,7 +112,14 @@ def compute_loss(model, dataloader, batch_size=32):
 
 
 def train_model(
-    model, train_dataset, val_dataset, batch_size=32, lr=1e-3, n_epochs=50, resume=True
+    model,
+    train_dataset,
+    val_dataset,
+    tokenizer,
+    batch_size=32,
+    lr=1e-3,
+    n_epochs=50,
+    resume=True,
 ):
     dvc = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -149,8 +157,12 @@ def train_model(
             optimizer.zero_grad()
             output.loss.backward()
             optimizer.step()
-            grads.append(torch.nn.utils.clip_grad_norm(model.parameters(), 1.0))
+            grad_norm = torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
+            grads.append(grad_norm)
             train_losses.append(output.loss.item())
+            wandb.log(
+                {"train/batch_loss": output.loss.item(), "train/grad_norm": grad_norm}
+            )
 
         # Compute avg train loss
         train_loss = sum(train_losses) / len(train_losses)
@@ -169,12 +181,20 @@ def train_model(
         print(
             f"[Epoch {epoch + 1}/{n_epochs}] Train Loss: {train_loss:.2f} | Val Loss: {val_loss:.2f} | {' '.join(y_ids)} | {repr(y_str)}"
         )
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "train/loss": train_loss,
+                "val/loss": val_loss,
+                "learning_rate": optimizer.param_groups[0]["lr"],
+                "generated_text": wandb.Html(f"<pre>{y_str}</pre>"),
+            }
+        )
 
         # Save checkpoint
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
-                "config": vars(args),
                 "epoch": epoch,
             },
             ckpt_path,
@@ -212,6 +232,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Initialize wandb with cleaner naming
+    wandb.init(
+        project="ptn-shakespeare",
+        name=f"H{args.horizon}_R{args.rank}_LR{args.lr:g}",
+        config=vars(args),
+    )
+
     file_path = args.file_path
     n_samples = args.n_samples
     horizon = args.horizon
@@ -246,4 +273,13 @@ if __name__ == "__main__":
         )
     )
 
-    train_model(model, train_dataset, val_dataset, batch_size, lr=lr, n_epochs=n_epochs)
+    train_model(
+        model,
+        train_dataset,
+        val_dataset,
+        tokenizer,
+        batch_size,
+        lr=lr,
+        n_epochs=n_epochs,
+    )
+    wandb.finish()
