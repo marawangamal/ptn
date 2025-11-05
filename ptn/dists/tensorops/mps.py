@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 
 
@@ -212,8 +213,9 @@ def mps_norm(
         "l2": torch.linalg.norm,
         "linf": torch.amax,
     }[norm]
-    L = torch.einsum("p,pdq,r,rds->qs", a, g[0], a, g[0])
-    for h in range(1, H):
+    # L = torch.einsum("p,pdq,r,rds->qs", a, g[0], a, g[0])
+    L = torch.einsum("p,r->pr", a, a)  # (B, R)
+    for h in range(0, H):
         L = torch.einsum("pdq,pr,rds ->qs", g[h], L, g[h])
         if use_scale_factors:
             sf = norm_fn(L.abs())
@@ -225,4 +227,73 @@ def mps_norm(
     return L, torch.stack(scale_factors)  # (1,), (H,)
 
 
+def reduce_select(
+    t: torch.Tensor,  # (B, H, R, D, R)
+    y: torch.Tensor,
+):
+    pass
+
+
+def born_select_margin(
+    g: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    y: torch.Tensor,  # (H, D)
+    use_scale_factors: bool = True,
+    free_index: Optional[int] = None,
+    norm: str = "l2",
+    **kwargs,
+):
+    """Marginalize a Born MPS tensor.
+
+    Args:
+        g (torch.Tensor): Core tensors. Shape: (H, R, D, R)
+        a (torch.Tensor): Left boundary tensor. Shape: (R,)
+        b (torch.Tensor): Right boundary tensor. Shape: (R,)
+        y (torch.Tensor): Target tensor. Shape: (H, D)
+        use_scale_factors (bool): Whether to use scale factors.
+        free_index (Optional[int]): Free index. Shape: (B,)
+        norm (str): Norm to use for scale factors.
+
+    Returns:
+        torch.Tensor: Marginalized tensor. Shape: (1,)
+    """
+    assert y.ndim == 2, "Feature tensor `y` must be 2D (H, D)"
+    assert y.size(0) == g.size(0), "Horizon mismatch"
+    assert y.size(1) == g.size(2), "Physical dimension mismatch"
+    assert a.size(0) == g.size(1) == b.size(0), "Bond dimension mismatch"
+    H, _, _, _ = g.shape
+    scale_factors = []
+
+    def amax_fn(x: torch.Tensor):
+        return torch.amax(x.abs().flatten())
+
+    norm_fn = {
+        "l2": torch.linalg.norm,
+        "linf": amax_fn,
+    }[norm]
+    L = torch.einsum("p,r->pr", a, a)  # (B, R)
+    for h in range(0, H):
+        if free_index is not None and h == free_index:  # free index encountered
+            L = torch.einsum("pdq,pr,rds->qds", g[h], L, g[h])
+        elif free_index is not None and h < free_index:  # before free index
+            L = torch.einsum("pdq,pr,rds,d->qs", g[h], L, g[h], y[h])
+        elif free_index is not None and h > free_index:  # before free index
+            L = torch.einsum("pdq,pvr,rds,d->qvs", g[h], L, g[h], y[h])
+        else:  # no free index
+            L = torch.einsum("pdq,pr,rds,d->qs", g[h], L, g[h], y[h])
+        if use_scale_factors:
+            sf = norm_fn(L)
+            scale_factors.append(sf)
+            L = L / sf
+    if free_index is not None:
+        L = torch.einsum("pvq,p,q->v", L, b, b)  # return dist
+    else:
+        L = torch.einsum("pq,p,q->", L, b, b)
+    if not use_scale_factors:
+        scale_factors = [torch.tensor(1.0)]
+    return L, torch.stack(scale_factors)  # (1,), (H,)
+
+
 mps_norm_batch = torch.vmap(mps_norm, in_dims=(0, 0, 0))
+born_select_margin_batch = torch.vmap(born_select_margin, in_dims=(0, 0, 0, 0))
