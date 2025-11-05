@@ -126,9 +126,13 @@ def train_model(
 
     # Auto resume training from last checkpoint
     os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    start_epoch = 0
     if os.path.exists(ckpt_path) and resume:
-        model.load_state_dict(torch.load(ckpt_path)["model_state_dict"])
-        print(f"Loaded model from {ckpt_path}")
+        ckpt_data = torch.load(ckpt_path)
+        model.load_state_dict(ckpt_data["model_state_dict"])
+        start_epoch = ckpt_data["epoch"] + 1
+        print(f">>> Loaded model from {ckpt_path} <<<")
+        print(f">>> Resuming training from epoch {start_epoch} <<<")
 
     model.to(dvc)
     train_dataloader = torch.utils.data.DataLoader(
@@ -146,7 +150,7 @@ def train_model(
     print(f"Num batches: {len(train_dataloader)}")
     print(f"Device: {dvc}")
     dummy_input = torch.ones(batch_size, 1, device=dvc)
-    for epoch in range(n_epochs):
+    for epoch in range(start_epoch, n_epochs):
         train_losses = []
         for i, batch in tqdm(
             enumerate(train_dataloader), leave=False, total=len(train_dataloader)
