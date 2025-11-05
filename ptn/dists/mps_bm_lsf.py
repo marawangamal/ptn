@@ -5,10 +5,7 @@ from ptn.dists._abc import (
     AbstractDisributionHeadConfig,
     AbstractDisributionHeadOutput,
 )
-from ptn.dists.tensorops.mps import (
-    born_select_margin_batch,
-    select_margin_mps_tensor_batched,
-)
+from ptn.dists.tensorops.mps import select_margin_mps_tensor_batched
 from ptn.dists.tensorops.mps import mps_norm_batch
 
 
@@ -117,7 +114,7 @@ class MPS_BM_LSF(AbstractDisributionHead):
             y is None or y.size(1) == self.config.horizon
         ), f"Incorrect y horizon, must of shape (B, {self.config.horizon}) but got {y.shape}"
 
-        B, R, H, Do = (
+        B, R, H, V = (
             x.size(0),
             self.config.rank,
             self.config.horizon,
@@ -131,28 +128,26 @@ class MPS_BM_LSF(AbstractDisributionHead):
 
         if y is not None:
 
-            g = self.w_mps(x)
-            a = self.alpha.unsqueeze(0).expand(B, -1)
-            b = self.beta.unsqueeze(0).expand(B, -1)
-            sf, lnorm = self.config.use_scale_factors, self.config.norm
-            # BUG: TN should be two MPS with labels in between during contraction
-            # p_tilde, gammas_p = select_margin_mps_tensor_batched(
-            #     self.alpha.unsqueeze(0).expand(B, -1),
-            #     self.beta.unsqueeze(0).expand(B, -1),
-            #     theta_mps,
-            #     y.reshape(B, H),
-            #     use_scale_factors=self.config.use_scale_factors,
-            #     norm=self.config.norm,
-            # )  # (B,), (B, H)
-            # need to convert y to (H, D) one-hot encoding
-            # (B, H) -> (B, H, D)
-            y_ = torch.nn.functional.one_hot(y, num_classes=Do).float()
-            p_tilde, gammas_p = born_select_margin_batch(
-                g, a, b, y_, use_scale_factors=sf, norm=lnorm
+            theta_mps = self.w_mps(x)
+            p_tilde, gammas_p = select_margin_mps_tensor_batched(
+                self.alpha.unsqueeze(0).expand(B, -1),
+                self.beta.unsqueeze(0).expand(B, -1),
+                theta_mps,
+                y.reshape(B, H),
+                use_scale_factors=self.config.use_scale_factors,
+                norm=self.config.norm,
             )  # (B,), (B, H)
             z_tilde, gammas_z = mps_norm_batch(
-                g, a, b, use_scale_factors=sf, norm=lnorm
+                theta_mps,
+                self.alpha.unsqueeze(0).expand(B, -1),
+                self.beta.unsqueeze(0).expand(B, -1),
+                use_scale_factors=self.config.use_scale_factors,
+                norm=self.config.norm,
             )
+
+            if len(gammas_p) == 0:
+                gammas_p = [torch.ones(B)]
+            gammas_p = torch.stack(gammas_p, dim=-1)
 
             # --- clamp before logs ---
             p_tilde = p_tilde.clamp(min=self.eps)
@@ -192,53 +187,12 @@ class MPS_BM_LSF(AbstractDisributionHead):
                 loss += self.config.lambda_ortho * self._compute_orthogonal_reg()
 
         return AbstractDisributionHeadOutput(
-            logits=torch.randn(B, H, Do),
+            logits=torch.randn(B, H, V),
             loss=loss,
             loss_dict=loss_dict,
         )
 
     def generate(self, x: torch.Tensor, do_sample: bool = True):
-        """Generate a sequence of length H from the model.
-
-        Args:
-            x (torch.Tensor): Input features. Shape: (B, D)
-
-        Returns:
-            y (torch.Tensor): Generated sequence. Shape: (B, H)
-        """
-        B, Di, H, Do = x.shape[0], x.shape[1], self.config.horizon, self.config.d_output
-        y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
-
-        g = self.w_mps(x)
-        a = self.alpha.unsqueeze(0).expand(B, -1)
-        b = self.beta.unsqueeze(0).expand(B, -1)
-        sf, lnorm = self.config.use_scale_factors, self.config.norm
-
-        for h in range(H):
-            # ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
-            y_slct = torch.nn.functional.one_hot(y_out[:, :h], num_classes=Do).float()
-            y_mrgn = torch.ones(B, H - h, Do, device=x.device)
-            y_ = torch.cat([y_slct, y_mrgn], dim=1)  # (B, H, Do)
-            p_tilde, gammas_p = born_select_margin_batch(
-                g,  # (B, R, H, V)
-                a,
-                b,
-                y_,
-                free_index=h,
-                use_scale_factors=sf,
-                norm=lnorm,
-            )  # (B, V), (B, H)
-
-            if do_sample:
-                dist = torch.distributions.Categorical(logits=p_tilde)
-                yi = dist.sample()  # (B,1)
-            else:
-                yi = p_tilde.argmax(dim=-1)  # (B,1)
-            y_out[:, h] = yi
-
-        return y_out
-
-    def generate_old(self, x: torch.Tensor, do_sample: bool = True):
         """Generate a sequence of length H from the model.
 
         Args:
@@ -289,34 +243,6 @@ class MPS_BM_LSF(AbstractDisributionHead):
 
         return y_out
 
-    def materialize(self, x: torch.Tensor):
-        """Materialize probabilities into a tensor.
-
-        Args:
-            x (torch.Tensor): Input features. Shape: (B, Di)
-
-        Returns:
-            p (torch.Tensor): Materialized probabilities. Shape: (B, V**H)
-        """
-        theta_mps = self.w_mps(x)  # (B, H, R, V, R)
-        esum = []
-        H = theta_mps.size(1)
-        cores = (
-            [torch.einsum("i,bidj->bdj", self.alpha, theta_mps[:, 0]).unsqueeze(1)]
-            + [theta_mps[:, h] for h in range(1, H - 1)]
-            + [
-                torch.einsum("bidj,j->bid", theta_mps[:, H - 1], self.beta).unsqueeze(
-                    -1
-                )
-            ]
-        )
-        for h in range(H):
-            esum.append(cores[h])
-            esum.append([0, h + 1, h + H + 2, h + 2])
-        esum.append([0] + [h + H + 2 for h in range(H)])
-        p_tilde = torch.einsum(*esum)  # (B, V**H)
-        return p_tilde**2
-
 
 def run_test():
     B, H, D, V = 4, 28 * 28, 9, 2
@@ -340,10 +266,13 @@ def run_test():
 def train_single_example():
     # set seed
     torch.manual_seed(0)
-    B, H, R, D, V = 16, 4, 2, 1, 2
+    B, H, R, D, V = 16, 8, 2, 1, 2
     mt_head = MPS_BM_LSF(
         AbstractDisributionHeadConfig(
-            d_model=D, d_output=V, horizon=H, rank=R, use_scale_factors=False
+            d_model=D,
+            d_output=V,
+            horizon=H,
+            rank=R,
         ),
     )
     x = torch.randn(B, D)
