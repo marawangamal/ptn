@@ -120,11 +120,11 @@ def train_model(
     lr=1e-3,
     n_epochs=50,
     resume=True,
+    ckpt_path="checkpoints/shakespeare/model_last.pt",
 ):
     dvc = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Auto resume training from last checkpoint
-    ckpt_path = "checkpoints/shakespeare/model_last.pt"
     os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
     if os.path.exists(ckpt_path) and resume:
         model.load_state_dict(torch.load(ckpt_path)["model_state_dict"])
@@ -281,5 +281,6 @@ if __name__ == "__main__":
         batch_size,
         lr=lr,
         n_epochs=n_epochs,
+        ckpt_path=f"checkpoints/shakespeare/model_last_R{rank}_LR{lr:g}_H{horizon}.pt",
     )
     wandb.finish()
