@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 import warnings
 import torch
 
@@ -37,6 +37,16 @@ POS_FUNC_MAP = {
 # [ ] remove self.sig?
 
 
+def reconstruct_cores(w: List[List[torch.Tensor]], rank: int) -> torch.Tensor:
+    # w[i] is of shape (H, Do, Di)
+    # need to reconstruct (H, R, Do, R, Di) by randomly sampling r^2 from the R^2 cores and concatenating them
+    R = len(w)
+    ids = torch.randperm(R**2)[: rank**2]
+    # unravel ids to get (r, r)
+    ids = torch.unravel_index(ids, (R, R))
+    ws = [w[i][j] for i, j in ids]
+
+
 class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
@@ -50,10 +60,20 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        self._w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
-        self.b_mps = None
-        if config.use_bias:
-            self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R) * std_fan_in)
+        if self.config.rank_dropout is not None:
+            self._w_mps = torch.nn.ParameterList()
+            for _ in range(R):
+                plist = torch.nn.ParameterList()
+                for _ in range(R):
+                    plist.append(
+                        torch.nn.Parameter(torch.randn(H, Do, Di) * std_fan_in)
+                    )
+                self._w_mps.append(plist)
+        else:
+            self._w_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
+            self.b_mps = None
+            if config.use_bias:
+                self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R) * std_fan_in)
 
         dtype = self._w_mps.dtype
         self.alpha = torch.nn.Parameter(
@@ -85,6 +105,34 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def w_mps(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
+        w = self._w_mps  # (H, R, Do, R, Di)
+        b = self.b_mps  # (H, R, Do, R)
+        if self.config.rank_dropout is not None:
+            ids = torch.arange(self.config.rank)
+            n_rank = int(self.config.rank * self.config.rank_dropout)
+            ids = torch.randperm(self.config.rank)[:n_rank]
+            w = w[:, ids][:, :, :, ids]
+            b = b[:, ids][:, :, :, ids] if b is not None else 0.0
+            print(f"w: {w.shape}")
+            print(f"b: {b.shape if b is not None else None}")
+            print(f"n_rank: {n_rank}")
+            print(f"self._w_mps: {self._w_mps.shape}")
+            print(f"ids: {ids}")
+
+        else:
+            b = b if b is not None else 0.0
+
+        theta = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,hpoqi->bhpoq", x, w) + b
+        )
+
+        if self.config.mode == "direct":
+            return theta  # (B, H, R, V, R)
+        elif self.config.mode == "residual":
+            dvc = x.device
+            return self.mu.unsqueeze(0).to(dvc) + theta  # (B, H, R, V, R)
+
+    def w_mps_old(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         w = self._w_mps
         if self.config.rank_dropout is not None:
             # Randomly drop some rank dimensions
@@ -521,4 +569,4 @@ def test_materialize():
 
 
 if __name__ == "__main__":
-    test_generate()
+    run_test()
