@@ -33,8 +33,11 @@ pip install wandb && wandb login
 
 Train $\mathrm{MPS\_\mathrm{\sigma+LSF}}$ and $\mathrm{MPS}\_\mathrm{BM+LSF}$ on MNIST
 ```bash
+# MPS SIGMA and MPS BM trained w/ LSF
 python scripts/train_mnist.py --model mps_sigma_lsf --rank 8 --pos_func exp
 python scripts/train_mnist.py --model mps_bm_lsf --rank 8
+# MPS BM trained w/ DMRG
+python scripts/dmrg/train_mps_bm_dmrg.py --rank 64 --epochs 50 --lr 1e-3
 ```
 
 ### UCLA Datasets

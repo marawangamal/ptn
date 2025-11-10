@@ -239,7 +239,7 @@ def select_margin_hmm_tensor_batched(
     assert len(core.shape) == 4, "MPS params tensor must be 4D (batched)"
     assert len(ops.shape) == 2, "Invalid ops tensor: must be 2D (batched)"
     assert (ops >= -2).all() and (
-        ops < core.size(3)
+        ops < emission.size(2)
     ).all(), "Invalid ops tensor: must be in range [-2, vocab_size)"
     assert ops.size(0) == core.size(0), "Batch size mismatch"
     # TODO: add validation that ops must be in order select, free, marginalize

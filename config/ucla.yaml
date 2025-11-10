@@ -51,7 +51,7 @@ group:
             # "ad",
           ]
           model: [
-            # "mps_sigma_lsf",
-            "mps_bm_lsf",
+            "mps_sigma_lsf",
+            # "mps_bm_lsf",
           ]
         sweep_template:  "python scripts/train_ucla.py --dataset {dataset} --rank 32 --model {model} --lr 5e-3 --pos_func abs"

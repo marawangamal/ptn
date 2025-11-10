@@ -14,7 +14,7 @@ from ptn.dists._abc import AbstractDisributionHeadConfig
 from ptn.dists import dists
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
-torch.set_default_dtype(torch.float64)
+# torch.set_default_dtype(torch.float64)
 
 # NOTE: change mps_bm_dmrg to take in the whole train_dataloader and the logger too.
 

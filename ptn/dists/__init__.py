@@ -1,5 +1,6 @@
 from ptn.dists.cp_moe import CP_MOE
 from ptn.dists.cp_sigma_lsf import CP_SIGMA_LSF
+from ptn.dists.hmm_sigma_lsf import HMM_SIGMA_LSF
 from ptn.dists.mps_bm_dmrg import MPS_BM_DMRG
 from ptn.dists.mps_bm_lsf import MPS_BM_LSF
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
@@ -22,4 +23,5 @@ dists = {
     "mps_sigma_lsf": MPS_SIGMA_LSF,  # Non-Negative MPS w/ LSF
     "mps_bm_lsf": MPS_BM_LSF,  # Born Machine w/ LSF
     "mps_bm_dmrg": MPS_BM_DMRG,  # Born Machine w/ DMRG)
+    "hmm_sigma_lsf": HMM_SIGMA_LSF,  # Non-Negative HMM w/ LSF
 }

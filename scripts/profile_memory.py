@@ -9,7 +9,7 @@ print(f"Using device: {device}")
 
 
 def main(models, d_outputs, out_file="results/memory_sweep.csv"):
-    B, H, R, Di = 1, 5, 2, 1
+    B, H, R, Di = 1, 5, 128, 1
     rows = []
     for m in models:
         for Do in d_outputs:
@@ -46,7 +46,9 @@ def main(models, d_outputs, out_file="results/memory_sweep.csv"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--models", nargs="+", default=["mps_sigma_lsf", "mps_bm_dmrg"])
-    parser.add_argument("--d_outputs", nargs="+", default=[1024], type=int)
+    parser.add_argument(
+        "--models", nargs="+", default=["mps_sigma_lsf", "hmm_sigma_lsf"]
+    )
+    parser.add_argument("--d_outputs", nargs="+", default=[256], type=int)
     args = parser.parse_args()
     main(**args.__dict__)

@@ -5,7 +5,6 @@ import torch
 from ptn.dists._abc import (
     AbstractDisributionHead,
     AbstractDisributionHeadConfig,
-    AbstractDisributionHeadGenerateOutput,
     AbstractDisributionHeadOutput,
 )
 from ptn.dists.tensorops.mps import (
@@ -40,7 +39,7 @@ POS_FUNC_MAP = {
 # [ ] remove self.sig?
 
 
-class MPS_SIGMA_LSF(AbstractDisributionHead):
+class HMM_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
@@ -53,15 +52,9 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        if config.mode == "hmm":
-            self._wt_mps = torch.nn.Parameter(torch.randn(H, R, R, Di) * std_fan_in)
-            self._we_mps = torch.nn.Parameter(torch.randn(H, Do, R, Di) * std_fan_in)
-            self.b_mps = None
-        else:
-            self._wt_mps = torch.nn.Parameter(torch.randn(H, R, Do, R, Di) * std_fan_in)
-            self._we_mps = None
-            if config.use_bias:
-                self.b_mps = torch.nn.Parameter(torch.zeros(H, R, Do, R) * std_fan_in)
+        self._wt_mps = torch.nn.Parameter(torch.randn(H, R, R, Di) * std_fan_in)
+        self._we_mps = torch.nn.Parameter(torch.randn(H, Do, R, Di) * std_fan_in)
+        self.b_mps = None
 
         dtype = self._wt_mps.dtype
         self.alpha = torch.nn.Parameter(
@@ -73,15 +66,6 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             requires_grad=False,
         )
 
-        self.sig = (
-            lambda x: x
-        )  # left for user to override (i.e. when using born machine)
-
-        self._init_params(config.init_method)
-
-        # Residual params
-        self.mu = torch.eye(R, R).reshape(1, R, 1, R).repeat(H, 1, Do, 1)
-
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(horizon={self.config.horizon}, "
@@ -90,87 +74,16 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             f"init_method='{getattr(self.config, 'init_method', None)}')"
         )
 
-    # def w_mps(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-    #     w = self._wt_mps  # (H, R, Do, R, Di)
-    #     b = self.b_mps if self.b_mps is not None else 0.0  # (H, R, Do, R)
-
-    #     theta = POS_FUNC_MAP[self.config.pos_func](
-    #         torch.einsum("bi,hpoqi->bhpoq", x, w) + b
-    #     )
-
-    #     return theta  # (B, H, R, V, R)
-
     def w_mps(self, x: torch.Tensor):
         wt = self._wt_mps  # (H, R, R, Di) or (H, R, Do, R, Di)
         we = self._we_mps  # (H, Do, Di) or None
-        b = self.b_mps if self.b_mps is not None else 0.0  # (H, R, Do, R)
-        if self.config.mode == "hmm" and we is not None:
-            theta_t = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,hpqi->bhpq", x, wt) + we
-            )
-            theta_e = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,hori->bhor", x, we)
-            )
-        else:
-            theta_t = POS_FUNC_MAP[self.config.pos_func](
-                torch.einsum("bi,hpoqi->bhpoq", x, wt) + b
-            )
-            theta_e = None
+        theta_t = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,hpqi->bhpq", x, wt)
+        )
+        theta_e = POS_FUNC_MAP[self.config.pos_func](
+            torch.einsum("bi,hori->bhor", x, we)
+        )
         return theta_t, theta_e  # (B, H, R, R), (B, H, Do)
-
-    def _init_params(self, init_method: str = "randn"):
-
-        if self.config.mode == "hmm":
-            # raise warning
-            warnings.warn("Initializing HMM mode is not supported yet.")
-            return
-
-        H, R, Do, Di = (
-            self.config.horizon,
-            self.config.rank,
-            self.config.d_output,
-            self.config.d_model,
-        )
-
-        # NOTE: initializing s.t. W[i1] == W[i2] ∀ i1, i2 will result in degenerate solutions
-        # Specifically, it will cause the leared distribition to be the symetric lifting of the dirac distribution.
-        # This means initializing to be all Identity will cause this degeneracy.
-        if init_method == "randn":
-            return  # alread initialized to be random
-
-        elif init_method == "eye":
-            # BAD: initializing to be all identity will cause degenerate solution.
-            # must use randomness to break symmetry
-            # Add warning
-            warnings.warn(
-                "Initializing to be all identity will cause degenerate solution. Must use randomness to break symmetry."
-            )
-            self._wt_mps.data = (
-                torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
-            )
-        elif init_method == "ortho":
-            bs = H * Do * Di
-            qs, _, _ = torch.svd(torch.randn(bs, R, R))
-            qs = qs.reshape(H, Do, Di, R, R)
-            self._wt_mps.data = qs.permute(0, 3, 1, 4, 2)
-
-    def _compute_orthogonal_reg(self):
-        H, R, Do, Di = (
-            self.config.horizon,
-            self.config.rank,
-            self.config.d_output,
-            self.config.d_model,
-        )
-        dt, dv = self._wt_mps.dtype, self._wt_mps.device
-        w = torch.einsum("hpoqi->hoipq", self._wt_mps)
-        I = (
-            torch.eye(R, R, dtype=dt, device=dv)
-            .reshape(1, 1, 1, R, R)
-            .expand(H, Do, Di, -1, -1)
-        )
-        I_hat = torch.einsum("hoipq,hoipz->hoipz", w, w)
-        loss = (I - I_hat).pow(2).mean()
-        return loss
 
     def forward(
         self,
@@ -197,18 +110,13 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
 
-        slct_fn = {
-            "mps": select_margin_mps_tensor_batched,
-            "hmm": select_margin_hmm_tensor_batched,
-        }[self.config.mode]
-
         if y is not None:
             theta_t, theta_e = self.w_mps(x)  # (B, H, R, V, R), (B, H, Do)
             rank = theta_t.size(-1)
             alpha = self.alpha.unsqueeze(0).expand(B, -1)[:, :rank]
             beta = self.beta.unsqueeze(0).expand(B, -1)[:, :rank]
 
-            p_tilde, gammas_p = slct_fn(
+            p_tilde, gammas_p = select_margin_hmm_tensor_batched(  # type: ignore
                 alpha=alpha,
                 beta=beta,
                 core=theta_t,
@@ -216,7 +124,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
                 ops=y.reshape(B, H),
                 use_scale_factors=self.config.use_scale_factors,
             )  # (B,), (B, H)
-            z_tilde, gammas_z = slct_fn(
+            z_tilde, gammas_z = select_margin_hmm_tensor_batched(  # type: ignore
                 alpha=alpha,
                 beta=beta,
                 core=theta_t,
@@ -265,72 +173,14 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             ).mean()  # avg across batch dimension
 
             if loss.isnan() or loss < 0:
-                print(f"[MPS] Loss is NaN or negative: {loss}")
-                raise ValueError("[MPS] Loss is NaN or negative")
-
-            if self.config.lambda_ortho > 0:
-                loss += self.config.lambda_ortho * self._compute_orthogonal_reg()
+                print(f"[HMM] Loss is NaN or negative: {loss}")
+                raise ValueError("[HMM] Loss is NaN or negative")
 
         return AbstractDisributionHeadOutput(
             logits=torch.randn(B, H, V),
             loss=loss,
             loss_dict=loss_dict,
         )
-
-    def generate_slow_and_unstable(self, x: torch.Tensor, **kwargs):
-        B, R, H = x.size(0), self.config.rank, self.config.horizon
-        y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
-        # env_right = torch.empty(B, H, dtype=torch.long, device=x.device)
-        theta_mps = self.w_mps(x)
-        cores = (
-            [torch.einsum("i,bidj->bdj", self.alpha, theta_mps[:, 0]).unsqueeze(1)]
-            + [theta_mps[:, h] for h in range(1, H - 1)]
-            + [
-                torch.einsum("bidj,j->bid", theta_mps[:, H - 1], self.beta).unsqueeze(
-                    -1
-                )
-            ]
-        )  # (B, R, V, R) x H
-        cores_mrgn = [cores[h].sum(dim=2) for h in range(H)]
-        esum_z = []
-        for h in range(H):
-            esum_z.append(cores_mrgn[h])
-            esum_z.append([0, h + 1, h + 2])
-        esum_z.append([0])
-        z = torch.einsum(*esum_z)
-
-        for i in range(H):
-            esum = []
-            for j in range(H):
-                if j < i:
-                    # (B, 1) => (B, R, 1, R)
-                    Rl, Rr = cores[j].size(1), cores[j].size(-1)
-                    y_tilde = (
-                        y_out[:, j : j + 1].reshape(B, 1, 1, 1).expand(-1, Rl, -1, Rr)
-                    )
-                    # (B, R, V, R) -> (B, R, R)
-                    gy = cores[j].gather(dim=2, index=y_tilde).squeeze(2)  # (B, R)
-                    esum.append(gy)
-                    esum.append([0, j + 1, j + 2])
-                elif j > i:
-                    # (B, R, V, R) -> (B, R, R)
-                    gm = cores_mrgn[j]
-                    esum.append(gm)
-                    esum.append([0, j + 1, j + 2])
-                else:
-                    # (B, R, V, R)
-                    esum.append(cores[i])
-                    esum.append([0, j + 1, H + 2, j + 2])
-            esum.append([0] + [H + 2])
-            py_tilde = torch.einsum(*esum)  # (B, V)
-            # py_tilde = py_tilde / py_tilde.sum(-1, keepdim=True)
-
-            # Sample from py_tilde
-            yi = torch.multinomial(py_tilde / z.unsqueeze(-1), num_samples=1).reshape(
-                -1
-            )  # (B,)
-            y_out[:, i] = yi
-        return y_out
 
     def generate(
         self,
@@ -355,8 +205,8 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             start_idx = y.shape[1]
             y_out[:, :start_idx] = y
 
-        theta_mps = self.w_mps(x)
-        rank = theta_mps.size(-1)
+        theta_t, theta_e = self.w_mps(x)
+        rank = theta_t.size(-1)
         alpha = self.alpha.unsqueeze(0).expand(B, -1)[:, :rank]
         beta = self.beta.unsqueeze(0).expand(B, -1)[:, :rank]
 
@@ -377,11 +227,12 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             )
             ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
             p_tilde, gammas_p, left_cache, right_cache = (
-                select_margin_mps_tensor_batched(
-                    alpha,
-                    beta,
-                    theta_mps,  # (B, R, H, V)
-                    ops,
+                select_margin_hmm_tensor_batched(  # type: ignore
+                    alpha=alpha,
+                    beta=beta,
+                    core=theta_t,  # (B, R, H, V)
+                    emission=theta_e,
+                    ops=ops,
                     build_cache=True if h == 0 else False,
                     left_cache=left_cache,
                     right_cache=right_cache,
@@ -390,11 +241,6 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             p_tilde_seq.append(p_tilde)
 
             if do_sample:
-                # p = p_tilde.clamp(min=self.eps).log()
-                # if debug:
-                #     print(f"p: {p}")
-                # dist = torch.distributions.Categorical(logits=p)
-                # yi = dist.sample()  # (B,1)
                 p = p_tilde / p_tilde.sum(-1, keepdim=True)
                 yi = torch.multinomial(p, num_samples=1).reshape(-1)  # (B,1)
             else:
@@ -402,10 +248,6 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
             y_out[:, h] = yi
 
         return y_out
-        # return AbstractDisributionHeadGenerateOutput(
-        #     y=y_out,
-        #     p_tilde=torch.stack(p_tilde_seq, dim=1),  # (B, H, V)
-        # )
 
     def materialize(self, x: torch.Tensor):
         """Materialize probabilities into a tensor.
@@ -435,93 +277,30 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         p_tilde = torch.einsum(*esum)  # (B, V**H)
         return p_tilde
 
-    # USED FOR TESTING THE CACHE IMPLEMENTATION
-    def generate_without_cache(self, x: torch.Tensor, do_sample: bool = True):
-        """Generate a sequence of length H from the model.
 
-        Args:
-            x (torch.Tensor): Input features. Shape: (B, D)
-
-        Returns:
-            y (torch.Tensor): Generated sequence. Shape: (B, H)
-        """
-        B, D, H = x.shape[0], x.shape[1], self.config.horizon
-        y_out = torch.empty(B, H, dtype=torch.long, device=x.device)
-
-        theta_mps = self.w_mps(x)
-
-        for h in range(H):
-            y_mrgn = torch.full(
-                (B, H - h - 1),
-                -2,
-                dtype=torch.long,
-                device=x.device,
-            )
-            y_free = torch.full(
-                (B, 1),
-                -1,
-                dtype=torch.long,
-                device=x.device,
-            )
-            ops = torch.cat([y_out[:, :h], y_free, y_mrgn], dim=-1)  # (B, H)
-            p_tilde, gammas_p, _, _ = select_margin_mps_tensor_batched(
-                self.alpha.unsqueeze(0).expand(B, -1),
-                self.beta.unsqueeze(0).expand(B, -1),
-                theta_mps,  # (B, R, H, V)
-                ops,
-                use_scale_factors=True,
-            )  # (B, V), (B, H), (B, H, R), (B, H, R)
-
-            if do_sample:
-                dist = torch.distributions.Categorical(logits=p_tilde)
-                yi = dist.sample()  # (B,1)
-            else:
-                yi = p_tilde.argmax(dim=-1)  # (B,1)
-            y_out[:, h] = yi
-
-        return y_out
-
-
-def test_generate():
-    B, R, H, Di, Do = 8, 2, 4, 1, 2
-    mt_head = MPS_SIGMA_LSF(
+def run_test():
+    B, H, R, Di, Do = 1, 5, 2, 1, 256
+    mt_head = HMM_SIGMA_LSF(
         AbstractDisributionHeadConfig(
             d_model=Di,
             d_output=Do,
             horizon=H,
             rank=R,
             pos_func="abs",
-            # rank_dropout=0.5,
         ),
     )
     x = torch.randn(B, Di)
-    y_1 = mt_head.generate_slow_and_unstable(x, do_sample=True)
-    # y_2 = mt_head.generate_slow(x, do_sample=False)
-    # assert torch.allclose(y_1, y_2)
-    # print("[PASS] generate and generate_slow match")
-
-
-def run_test():
-    B, H, D, V = 4, 28 * 28, 9, 2
-    mt_head = MPS_SIGMA_LSF(
-        AbstractDisributionHeadConfig(
-            d_model=D,
-            d_output=V,
-            horizon=H,
-            rank=8,
-            pos_func="abs",
-            rank_dropout=0.5,
-        ),
-    )
-    x = torch.randn(B, D)
-    y = torch.randint(0, V, (B, H))
+    y = torch.randint(0, Do, (B, H))
     loss = mt_head(x, y).loss
     print(f"loss: {loss}")
+    # test generate
+    y_out = mt_head.generate(x)
+    print(f"y_out: {y_out}")
 
 
 def test_materialize():
     B, H, Di, Do, R = 1, 2, 1, 32, 2
-    mt_head = MPS_SIGMA_LSF(
+    mt_head = HMM_SIGMA_LSF(
         AbstractDisributionHeadConfig(
             d_model=Di,
             d_output=Do,

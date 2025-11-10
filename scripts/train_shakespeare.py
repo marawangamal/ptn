@@ -177,7 +177,7 @@ def train_model(
 
         # Generate sample
         # Decimal
-        y = model.generate(dummy_input)
+        y = model.generate(torch.ones(1, 1, device=dvc))
         y_str = tokenizer.decode(y[0].tolist())
         y_ids = [str(k) for k in y[0][:5].tolist()]
 
@@ -233,13 +233,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_epochs", type=int, default=50, help="Number of epochs to train for."
     )
+    parser.add_argument(
+        "--model", type=str, default="mps_sigma_lsf", choices=dists.keys()
+    )
 
     args = parser.parse_args()
 
     # Initialize wandb with cleaner naming
+    exp_name = f"H{args.horizon}_R{args.rank}_LR{args.lr:g}_M{args.model}"
     wandb.init(
         project="ptn-shakespeare",
-        name=f"H{args.horizon}_R{args.rank}_LR{args.lr:g}",
+        name=exp_name,
         config=vars(args),
     )
 
@@ -265,7 +269,7 @@ if __name__ == "__main__":
 
     # Hyperparameters
 
-    model = dists["mps_sigma_lsf"](
+    model = dists[args.model](
         AbstractDisributionHeadConfig(
             d_model=d_model,
             d_output=d_output,
@@ -285,6 +289,6 @@ if __name__ == "__main__":
         batch_size,
         lr=lr,
         n_epochs=n_epochs,
-        ckpt_path=f"checkpoints/shakespeare/model_last_R{rank}_LR{lr:g}_H{horizon}.pt",
+        ckpt_path=f"checkpoints/shakespeare/model_last_{exp_name}.pt",
     )
     wandb.finish()
