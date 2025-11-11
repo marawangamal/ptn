@@ -76,10 +76,10 @@ class HMM_SIGMA_LSF(AbstractDisributionHead):
 
     def w_mps(self, x: torch.Tensor):
         H = self.config.horizon
-        wt = self._wt_mps.unsqueeze(1).expand(
+        wt = self._wt_mps.unsqueeze(0).expand(
             H, -1, -1, -1
         )  # (H, R, R, Di) or (H, R, Do, R, Di)
-        we = self._we_mps.unsqueeze(1).expand(H, -1, -1)  # (H, Do, Di) or None
+        we = self._we_mps.unsqueeze(0).expand(H, -1, -1)  # (H, Do, Di) or None
         theta_t = POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpqi->bhpq", x, wt)
         )
