@@ -430,7 +430,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--num_grad_steps", type=int, default=10)
     parser.add_argument("--num_loops", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=8192)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--tags", type=str, nargs="*", default=[])
     args = parser.parse_args()
