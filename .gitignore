@@ -10,3 +10,5 @@ media
 data
 scripts/clean.sh
 scripts/setup.sh
+training.txt*
+validation.txt*
