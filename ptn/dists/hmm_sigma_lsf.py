@@ -52,8 +52,8 @@ class HMM_SIGMA_LSF(AbstractDisributionHead):
         )
 
         std_fan_in = torch.sqrt(torch.tensor(2.0)) / Di**0.5
-        self._wt_mps = torch.nn.Parameter(torch.randn(H, R, R, Di) * std_fan_in)
-        self._we_mps = torch.nn.Parameter(torch.randn(H, Do, R, Di) * std_fan_in)
+        self._wt_mps = torch.nn.Parameter(torch.randn(R, R, Di) * std_fan_in)
+        self._we_mps = torch.nn.Parameter(torch.randn(Do, R, Di) * std_fan_in)
         self.b_mps = None
 
         dtype = self._wt_mps.dtype
@@ -75,8 +75,11 @@ class HMM_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def w_mps(self, x: torch.Tensor):
-        wt = self._wt_mps  # (H, R, R, Di) or (H, R, Do, R, Di)
-        we = self._we_mps  # (H, Do, Di) or None
+        H = self.config.horizon
+        wt = self._wt_mps.unsqueeze(1).expand(
+            H, -1, -1, -1
+        )  # (H, R, R, Di) or (H, R, Do, R, Di)
+        we = self._we_mps.unsqueeze(1).expand(H, -1, -1)  # (H, Do, Di) or None
         theta_t = POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpqi->bhpq", x, wt)
         )
