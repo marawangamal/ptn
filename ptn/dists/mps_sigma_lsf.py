@@ -85,24 +85,21 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         )
 
     def w_mps(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
-        w = self._w_mps
+        w = self._w_mps  # (H, R, Do, R, Di)
+        b = self.b_mps  # (H, R, Do, R)
         if self.config.rank_dropout is not None:
-            # Randomly drop some rank dimensions
-            keep_mask = (
-                torch.rand(self.config.rank, device=self._w_mps.device)
-                > self.config.rank_dropout
-            )
-            keep_idx = keep_mask.nonzero(as_tuple=True)[0]  # convert mask → indices
+            ids1 = torch.arange(self.config.rank)
+            ids2 = torch.arange(self.config.rank)
+            n_rank = int(self.config.rank * self.config.rank_dropout)
+            ids1 = torch.randperm(self.config.rank)[:n_rank]
+            ids2 = torch.randperm(self.config.rank)[:n_rank]
+            w = w[:, ids1][:, :, :, ids2]
+            b = b[:, ids1][:, :, :, ids2] if b is not None else 0.0
+            # print(f"Rank dropout enabled: {self.config.rank_dropout}")
+            # print(f"w: {self._w_mps.shape} -> {w.shape}")
 
-            # Go from (H, R, Do, R, Di) → (H, R', Do, R', Di)
-            w = self._w_mps[:, keep_idx, :, :][:, :, :, keep_idx, :]
-            b = (
-                self.b_mps[:, keep_idx, :, :][:, :, :, keep_idx]
-                if self.b_mps is not None
-                else 0
-            )
         else:
-            b = self.b_mps if self.b_mps is not None else 0
+            b = b if b is not None else 0.0
 
         theta = POS_FUNC_MAP[self.config.pos_func](
             torch.einsum("bi,hpoqi->bhpoq", x, w) + b

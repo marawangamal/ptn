@@ -315,12 +315,12 @@ if __name__ == "__main__":
     LR = 1e-3
     RANK = 2
     PHYSICAL_DIM = 2
-    SCALE = 7
+    SCALE = 28
     N_CORES = SCALE**2
     BATCH_SIZE = 8192
     PRINT_FREQ = 10
     SITE_LENGTH = 2  # number of cores in a merged block (do not change this)
-    CUM_PERCENTAGE = 1.0  # cumulative percentage of singular values to keep
+    CUM_PERCENTAGE = 0.99  # cumulative percentage of singular values to keep
 
     # Data
     # x = torch.randint(0, PHYSICAL_DIM, (BATCH_SIZE, N_CORES))
