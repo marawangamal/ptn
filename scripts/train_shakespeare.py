@@ -3,6 +3,7 @@ import certifi
 import torch
 from tqdm import tqdm
 import wandb
+from transformers import AutoTokenizer
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
 
 from ptn.dists import dists
@@ -118,6 +119,7 @@ def train_model(
     tokenizer,
     batch_size=32,
     lr=1e-3,
+    accum_grad=1,
     n_epochs=50,
     resume=True,
     ckpt_path="checkpoints/shakespeare/model_last.pt",
@@ -158,9 +160,11 @@ def train_model(
             x = batch["input_ids"]
             x = x.to(dvc)
             output = model(dummy_input, x)
-            optimizer.zero_grad()
+
             output.loss.backward()
-            optimizer.step()
+            if (i + 1) % accum_grad == 0:
+                optimizer.step()
+                optimizer.zero_grad()
             grad_norm = torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
             grads.append(grad_norm)
             train_losses.append(output.loss.item())
@@ -236,6 +240,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model", type=str, default="mps_sigma_lsf", choices=dists.keys()
     )
+    parser.add_argument(
+        "--accum_grad", type=int, default=1, help="Number of gradient accumulations."
+    )
+    parser.add_argument("--tokenizer", type=str, default=None)
 
     args = parser.parse_args()
 
@@ -256,10 +264,14 @@ if __name__ == "__main__":
     rank = args.rank
     lr = args.lr
     n_epochs = args.n_epochs
+    accum_grad = args.accum_grad
 
-    tokenizer = get_tokenizer(
-        corpus_path=file_path, bit_size=d_output, n_bits_per_token=1
-    )
+    if args.tokenizer == "gpt2":
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    else:
+        tokenizer = get_tokenizer(
+            corpus_path=file_path, bit_size=d_output, n_bits_per_token=1
+        )
     dataset = ShakespeareDataset(
         tokenizer, seq_len=horizon, max_samples=n_samples + 1, file_path=file_path
     )
@@ -281,6 +293,9 @@ if __name__ == "__main__":
         )
     )
 
+    # Print model summary
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:2f}M")
+
     train_model(
         model,
         train_dataset,
@@ -288,6 +303,7 @@ if __name__ == "__main__":
         tokenizer,
         batch_size,
         lr=lr,
+        accum_grad=accum_grad,
         n_epochs=n_epochs,
         ckpt_path=f"checkpoints/shakespeare/model_last_{exp_name}.pt",
     )

@@ -1,4 +1,7 @@
 import torch
+import wandb
+import argparse
+from transformers import AutoTokenizer
 
 
 def log_domain_matmul(log_A, log_B):
@@ -17,9 +20,6 @@ def log_domain_matmul(log_A, log_B):
     n = log_A.shape[1]
     p = log_B.shape[1]
 
-    # log_A_expanded = torch.stack([log_A] * p, dim=2)
-    # log_B_expanded = torch.stack([log_B] * m, dim=0)
-    # fix for PyTorch > 1.5 by egaznep on Github:
     log_A_expanded = torch.reshape(log_A, (m, n, 1))
     log_B_expanded = torch.reshape(log_B, (1, n, p))
 
@@ -36,15 +36,10 @@ class TransitionModel(torch.nn.Module):
         self.unnormalized_transition_matrix = torch.nn.Parameter(torch.randn(N, N))
 
     def forward(self, log_alpha):
-        """
-        log_alpha : Tensor of shape (batch size, N)
-        Multiply previous timestep's alphas by transition matrix (in log domain)
-        """
         log_transition_matrix = torch.nn.functional.log_softmax(
             self.unnormalized_transition_matrix, dim=0
         )
 
-        # Matrix multiplication in the log domain
         out = log_domain_matmul(
             log_transition_matrix, log_alpha.transpose(0, 1)
         ).transpose(0, 1)
@@ -67,25 +62,14 @@ class EmissionModel(torch.nn.Module):
 
 
 class HMM(torch.nn.Module):
-    """
-    Hidden Markov Model with discrete observations.
-    """
-
     def __init__(self, M, N):
         super(HMM, self).__init__()
-        self.M = M  # number of possible observations
-        self.N = N  # number of states
+        self.M = M
+        self.N = N
 
-        # A
         self.transition_model = TransitionModel(self.N)
-
-        # b(x_t)
         self.emission_model = EmissionModel(self.N, self.M)
-
-        # pi
         self.unnormalized_state_priors = torch.nn.Parameter(torch.randn(self.N))
-
-        # use the GPU
         self.is_cuda = torch.cuda.is_available()
         if self.is_cuda:
             self.cuda()
@@ -101,22 +85,21 @@ class HMM(torch.nn.Module):
             self.emission_model.unnormalized_emission_matrix, dim=1
         )
 
-        # sample initial state
-        z_t = torch.distributions.categorical.Categorical(state_priors).sample().item()
+        z_t = int(
+            torch.distributions.categorical.Categorical(state_priors).sample().item()
+        )
         z = []
         x = []
         z.append(z_t)
         for t in range(0, T):
-            # sample emission
-            x_t = (
+            x_t = int(
                 torch.distributions.categorical.Categorical(emission_matrix[z_t])
                 .sample()
                 .item()
             )
             x.append(x_t)
 
-            # sample transition
-            z_t = (
+            z_t = int(
                 torch.distributions.categorical.Categorical(transition_matrix[:, z_t])
                 .sample()
                 .item()
@@ -127,13 +110,6 @@ class HMM(torch.nn.Module):
         return x, z
 
     def forward(self, x, T):
-        """
-        x : IntTensor of shape (batch size, T_max)
-        T : IntTensor of shape (batch size)
-
-        Compute log p(x) for each example in the batch.
-        T = length of each example
-        """
         if self.is_cuda:
             x = x.cuda()
             T = T.cuda()
@@ -153,7 +129,6 @@ class HMM(torch.nn.Module):
                 log_alpha[:, t - 1, :]
             )
 
-        # Select the sum for the final timestep (each x may have different length).
         log_sums = log_alpha.logsumexp(dim=2)
         log_probs = torch.gather(log_sums, 1, T.view(-1, 1) - 1)
         return log_probs
@@ -170,7 +145,6 @@ class ShakespeareDataset(torch.utils.data.Dataset):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
 
-        # Read Shakespeare text
         with open(file_path, "r", encoding="utf-8") as f:
             text = f.read()
 
@@ -188,40 +162,66 @@ class ShakespeareDataset(torch.utils.data.Dataset):
         return {"input_ids": seq, "length": len(seq)}
 
 
-# Train loop
-import torch
-from transformers import AutoTokenizer
+def main():
+    parser = argparse.ArgumentParser(
+        description="Train a Hidden Markov Model on Shakespeare text"
+    )
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument(
+        "--batch_size", type=int, default=32, help="Batch size for training"
+    )
+    parser.add_argument(
+        "--seq_len", type=int, default=32, help="Sequence length for training"
+    )
+    parser.add_argument(
+        "--n_hidden", type=int, default=256, help="Number of hidden states in HMM"
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=250, help="Number of epochs to train"
+    )
+    parser.add_argument(
+        "--accum_grad",
+        type=int,
+        default=1,
+        help="Number of gradients to accumulate",
+    )
+    args = parser.parse_args()
 
-# Hyperparameters
-lr = 1e-2
-batch_size = 32
-seq_len_train = 32
-seq_len_test = 32
-n_hidden = 256
+    # Initialize wandb
+    exp_name = f"h{args.n_hidden}_b{args.batch_size}_sl{args.seq_len}_lr{args.lr:g}_ag{args.accum_grad}"
+    wandb.init(project="hmm-shakespeare", name=exp_name, config=vars(args))
 
-# Data
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-dataset = ShakespeareDataset(tokenizer, seq_len=seq_len_train)
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    dataset = ShakespeareDataset(tokenizer, seq_len=args.seq_len)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=True
+    )
 
-# Model
-model = HMM(M=len(tokenizer), N=n_hidden)
+    model = HMM(M=len(tokenizer), N=args.n_hidden)
 
-# Optimizer
-optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.00001)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.00001)
 
-# Train loop
-for epoch in range(250):
-    for idx, batch in enumerate(dataloader):
-        optimizer.zero_grad()
-        x, T = batch["input_ids"], batch["length"]
-        logp = model(x, T)
-        loss = -logp.mean()
-        loss.backward()
-        optimizer.step()
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {num_params/1e6:.2f}M")
+    for epoch in range(args.epochs):
+        for idx, batch in enumerate(dataloader):
+            x, T = batch["input_ids"], batch["length"]
+            logp = model(x, T)
+            loss = -logp.mean()
+            loss.backward()
 
-        if idx % 10 == 0:
-            sample = tokenizer.decode(model.sample(seq_len_test)[0])
-            print(
-                f"[Epoch {epoch}][{idx}/{len(dataloader)}] Loss: {loss.item():.2f} | {repr(sample)}"
-            )
+            if (idx + 1) % args.accum_grad == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+            wandb.log({"train/batch_loss": loss.item()})
+
+            if idx % 10 == 0:
+                sample = tokenizer.decode(model.sample(args.seq_len)[0])
+                print(
+                    f"[Epoch {epoch}][{idx}/{len(dataloader)}] Loss: {loss.item():.2f} | {repr(sample)}"
+                )
+
+
+if __name__ == "__main__":
+    main()
