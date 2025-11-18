@@ -41,7 +41,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
     def __init__(self, config: AbstractDisributionHeadConfig):
         """Simple multi-head distribution with independent linear heads for each position."""
         super().__init__(config)
-        self.eps = 1e-12
+        self.eps = config.eps
         H, R, Di, Do = (
             config.horizon,
             config.rank,
@@ -124,7 +124,7 @@ class MPS_SIGMA_LSF(AbstractDisributionHead):
         # Specifically, it will cause the leared distribition to be the symetric lifting of the dirac distribution.
         # This means initializing to be all Identity will cause this degeneracy.
         if init_method == "randn":
-            return  # alread initialized to be random
+            return  # already initialized to be random
 
         elif init_method == "eye":
             # BAD: initializing to be all identity will cause degenerate solution.

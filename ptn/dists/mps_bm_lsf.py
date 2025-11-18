@@ -1,3 +1,4 @@
+import warnings
 import torch
 
 from ptn.dists._abc import (
@@ -61,8 +62,9 @@ class MPS_BM_LSF(AbstractDisributionHead):
             lambda x: x
         )  # left for user to override (i.e. when using born machine)
 
-        if config.init_method == "ortho":
-            self._ortho_init()
+        # if config.init_method == "ortho":
+        #     self._ortho_init()
+        self._init_params(config.init_method)
 
         self.eps = 1e-12
 
@@ -71,16 +73,47 @@ class MPS_BM_LSF(AbstractDisributionHead):
             torch.einsum("bi,hpoqi->bhpoq", x, self._w_mps) + self.b_mps
         )  # (B, H, R, V, R)
 
-    def _ortho_init(self):
+    # def _ortho_init(self):
+    #     H, R, Do, Di = (
+    #         self.config.horizon,
+    #         self.config.rank,
+    #         self.config.d_output,
+    #         self.config.d_model,
+    #     )
+    #     self._w_mps.data = (
+    #         torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
+    #     )
+
+    def _init_params(self, init_method: str = "randn"):
+
         H, R, Do, Di = (
             self.config.horizon,
             self.config.rank,
             self.config.d_output,
             self.config.d_model,
         )
-        self._w_mps.data = (
-            torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
-        )
+
+        # NOTE: initializing s.t. W[i1] == W[i2] ∀ i1, i2 will result in degenerate solutions
+        # Specifically, it will cause the leared distribition to be the symetric lifting of the dirac distribution.
+        # This means initializing to be all Identity will cause this degeneracy.
+        if init_method == "randn":
+            return  # already initialized to be random
+
+        elif init_method == "eye":
+            # BAD: initializing to be all identity will cause degenerate solution.
+            # must use randomness to break symmetry
+            # Add warning
+            warnings.warn(
+                "Initializing to be all identity will cause degenerate solution. Must use randomness to break symmetry."
+            )
+            self._w_mps.data = (
+                torch.eye(R, R).reshape(1, R, 1, R, 1).repeat(H, 1, Do, 1, Di)
+            )
+        elif init_method == "ortho":
+            bs = H * Do * Di
+            qs, _, _ = torch.svd(torch.randn(bs, R, R))
+            qs = qs.reshape(H, Do, Di, R, R)
+            self._w_mps.data = qs.permute(0, 3, 1, 4, 2)
 
     def _compute_orthogonal_reg(self):
         H, R, Do, Di = (
@@ -242,6 +275,34 @@ class MPS_BM_LSF(AbstractDisributionHead):
             y_out[:, h] = yi
 
         return y_out
+
+    def materialize(self, x: torch.Tensor):
+        """Materialize probabilities into a tensor.
+
+        Args:
+            x (torch.Tensor): Input features. Shape: (B, Di)
+
+        Returns:
+            p (torch.Tensor): Materialized probabilities. Shape: (B, V**H)
+        """
+        theta_mps = self.w_mps(x)  # (B, H, R, V, R)
+        esum = []
+        H = theta_mps.size(1)
+        cores = (
+            [torch.einsum("i,bidj->bdj", self.alpha, theta_mps[:, 0]).unsqueeze(1)]
+            + [theta_mps[:, h] for h in range(1, H - 1)]
+            + [
+                torch.einsum("bidj,j->bid", theta_mps[:, H - 1], self.beta).unsqueeze(
+                    -1
+                )
+            ]
+        )
+        for h in range(H):
+            esum.append(cores[h])
+            esum.append([0, h + 1, h + H + 2, h + 2])
+        esum.append([0] + [h + H + 2 for h in range(H)])
+        p_tilde = torch.einsum(*esum)  # (B, V**H)
+        return p_tilde**2
 
 
 def run_test():

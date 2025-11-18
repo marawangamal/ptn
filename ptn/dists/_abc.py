@@ -26,6 +26,7 @@ class AbstractDisributionHeadConfig:
     mode: str = "direct"  # "direct", "residual", "hholder", "hmm"
     rank_dropout: Optional[float] = None  # probability of a rank dim being dropped out
     use_bias: bool = True
+    eps: float = 1e-12
 
 
 @dataclass
