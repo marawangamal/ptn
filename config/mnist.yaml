@@ -1,0 +1,87 @@
+# Experiment 1
+# Evaluating efficacy of multi-token regularization during pretraining and finetuning
+preambles:
+  glong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --partition=long"
+    - "#SBATCH --gres=gpu:rtx8000:1"
+    - "#SBATCH --mem=128G"
+    - "#SBATCH --cpus-per-task=16"
+    - "#SBATCH --nodes=1"
+    - "source /home/mila/m/marawan.gamal/scratch/ptn/.venv/bin/activate"
+
+  gtamia:   
+    - "#!/bin/bash"
+    - "#SBATCH --gres=gpu:4"
+    - "#SBATCH --mem=128G"
+    - "#SBATCH --cpus-per-task=16"
+    - "module load cuda/12.6 arrow python/3.12 httpproxy"
+    - "source /scratch/m/mgamal/ptn/.venv/bin/activate"
+
+  clong:   
+    - "#!/bin/bash"
+    - "#SBATCH --output=slurm/slurm-%j.out"
+    - "#SBATCH --error=slurm/slurm-%j.err"   
+    - "#SBATCH --mem=64G"
+    - "#SBATCH --cpus-per-task=64"
+    - "source /home/mila/m/marawan.gamal/scratch/mtl/.venv/bin/activate"
+
+group:
+  name: "main"
+  type: parallel
+  jobs:
+
+    # # Run on MILA
+    # - group:
+    #     type: sweep
+    #     preamble: glong
+    #     sweep:  
+    #       model: [
+    #         "mps_sigma_lsf",
+    #         "mps_bm_lsf",
+    #       ]
+    #       rank: [4, 8, 16, 32, 64]
+    #       lr: [1e-2, 5e-2, 1e-3, 5e-4, 1e-4, 5e-5]
+    #       pos_func: [
+    #         "exp",
+    #         "abs",
+    #         "sigmoid",
+    #       ]
+    #     sweep_template:  "python scripts/train_mnist.py --epochs 10 --model {model} --rank {rank} --lr {lr} --pos_func {pos_func}"
+
+
+    # # Run on TAMIA
+    # - group:
+    #     type: sweep
+    #     preamble: gtamia
+    #     sweep:  
+    #       model: [
+    #         "mps_sigma_lsf",
+    #         "mps_bm_lsf",
+    #       ]
+    #       rank: [64, 128, 256, 512]
+    #       lr: [5e-2, 1e-3, 5e-4, 1e-4, 5e-5]
+    #       pos_func: [
+    #         "exp",
+    #         "abs",
+    #         "sigmoid",
+    #       ]
+    #     sweep_template:  "python scripts/train_mnist.py --epochs 10 --model {model} --rank {rank} --lr {lr} --pos_func {pos_func}"
+
+
+    # Sample from best runs
+    # mmpssigmalsf_e50_l005_b32_r16_psigmoid_s1_irandn_l00_n10_mNone_sFalse_s28_mmultitask_nlinf_a1
+
+    - group:
+        type: sweep
+        preamble: glong
+        sweep:  
+          model: [
+            "mps_sigma_lsf",
+          ]
+          rank: [16]
+          lr: [5e-2]
+          pos_func: [sigmoid]
+        sweep_template:  "python scripts/train_mnist.py --model {model} --rank {rank} --lr {lr} --pos_func {pos_func} --sample --save_checkpoint"

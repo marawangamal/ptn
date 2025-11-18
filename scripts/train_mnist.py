@@ -14,7 +14,7 @@ from ptn.dists._abc import AbstractDisributionHeadConfig
 from ptn.dists import dists
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
-torch.set_default_dtype(torch.float64)
+# torch.set_default_dtype(torch.float64)
 
 # NOTE: change mps_bm_dmrg to take in the whole train_dataloader and the logger too.
 
@@ -49,7 +49,9 @@ def get_data_loaders(batch_size=32, data_dir="./data", scale=None):
     return train_loader, val_loader
 
 
-def train_epoch(model, train_loader, optimizer, device, wandb_logger, multitask=False):
+def train_epoch(
+    model, train_loader, optimizer, device, wandb_logger, multitask=False, accum_grad=1
+):
     """Train for one epoch and return average loss."""
     model.train()
     total_loss = 0
@@ -98,7 +100,8 @@ def train_epoch(model, train_loader, optimizer, device, wandb_logger, multitask=
         g = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         p = sum(torch.linalg.norm(p) for p in model.parameters())
 
-        optimizer.step()
+        if (i + 1) % accum_grad == 0:
+            optimizer.step()
 
         wandb_logger.log(
             {
@@ -240,12 +243,18 @@ def main():
     )
     parser.add_argument("--sample", action="store_true", help="Sample from the model")
     parser.add_argument("--norm", type=str, default="linf", choices=["l2", "linf"])
+    parser.add_argument(
+        "--accum_grad", type=int, default=1, help="Accumulate gradients"
+    )
 
     args = parser.parse_args()
 
     # Initialize wandb
     wandb.init(
-        project="ptn", name=build_exp_name(args), config=vars(args), tags=args.tags
+        project="ptn-rebuttal",
+        name=build_exp_name(args),
+        config=vars(args),
+        tags=args.tags,
     )
 
     # Setup
@@ -297,6 +306,7 @@ def main():
             device,
             wandb,
             multitask=args.mode == "multitask",
+            accum_grad=args.accum_grad,
         )
         val_loss = evaluate(
             model, val_loader, device, multitask=args.mode == "multitask"
