@@ -4,6 +4,7 @@ from ptn.dists.mps_bm_dmrg import MPS_BM_DMRG
 from ptn.dists.mps_bm_lsf import MPS_BM_LSF
 from ptn.dists.mps_sigma_lsf import MPS_SIGMA_LSF
 from ptn.dists.stp import STP
+from ptn.dists.multihead import MultiHeadDist
 from ._abc import AbstractDisributionHeadConfig, AbstractDisributionHeadOutput
 
 dists = {
@@ -11,6 +12,7 @@ dists = {
     # Basic
     # ----------------------------------
     "stp": STP,
+    "multihead": MultiHeadDist,
     # ----------------------------------
     # CP Dists
     # ----------------------------------

@@ -2,22 +2,23 @@ import math
 import os
 import re
 import time
+import argparse
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import wandb
+from gradnorm_pytorch import GradNormLossWeighter, MockNetworkWithMultipleLosses
+
 from dataloaders.shakespeare import ShakespeareDataset
 from dataloaders.smiles import SmilesDataset
 from toks.ctokenizer import CTokenizer
 
 from ptn.models.modelling_nanogpt import GPT, GPTConfig
 
-import argparse
-
 
 DEFAULT_SMILES_PATH = "./dataloaders/data/qm9.smi"
-DEFAULT_SHAKESPEARE_PATH = "./dataloaders/data/tinyshakespeare.txt"
+DEFAULT_SHAKESPEARE_PATH = "./data/shakespeare/main.txt"
 
 
 def _ensure_smiles_file(path: str):
@@ -122,6 +123,7 @@ def parse_args():
     )
     parser.add_argument("--dataset", type=str, default="shakespeare", help="Dataset")
     parser.add_argument("--tokenizer", type=str, default="gpt2", help="Tokenizer")
+    parser.add_argument("--gnorm", action="store_true", help="Use GradNorm")
     return parser.parse_args()
 
 
@@ -257,6 +259,15 @@ def train(args):
             lambda step: 1.0,
         )
 
+    shared_param = next(model.transformer.h[-1].parameters())
+    loss_weighter = GradNormLossWeighter(
+        num_losses=2,
+        learning_rate=args.lr,
+        restoring_force_alpha=0.0,  # 0. is perfectly balanced losses, while anything greater than 1 would account for the relative training rates of each loss. in the paper, they go as high as 3.
+        # grad_norm_parameters=backbone_parameter,
+        grad_norm_parameters=shared_param,
+    )
+
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total parameters: {total_params:,}")
@@ -292,20 +303,25 @@ def train(args):
             loss = output.loss
 
             # Backward pass
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            param_norm = sum(torch.linalg.norm(p) for p in model.parameters())
+            if args.gnorm:
+                loss_weighter.backward(output.losses)
+            else:
+                loss.backward()
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=1.0
+                )
+                param_norm = sum(torch.linalg.norm(p) for p in model.parameters())
 
-            # if grad norm very large skip
-            if grad_norm > 100:
-                continue
+                # if grad norm very large skip
+                if grad_norm > 100:
+                    continue
 
-            # Scale up grad norms
-            if grad_norm < 1.0 and grad_norm > 0:
-                scale = 1.0 / (grad_norm + 1e-6)
-                for p in model.parameters():
-                    if p.grad is not None:
-                        p.grad.mul_(scale)
+                # Scale up grad norms
+                if grad_norm < 1.0 and grad_norm > 0:
+                    scale = 1.0 / (grad_norm + 1e-6)
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            p.grad.mul_(scale)
 
             optimizer.step()
             scheduler.step()
@@ -321,8 +337,8 @@ def train(args):
                     {
                         "train/batch_loss": loss.item(),
                         "epoch": epoch + 1,
-                        "grad_norm": grad_norm.item(),
-                        "param_norm": param_norm,
+                        # "grad_norm": grad_norm.item(),
+                        # "param_norm": param_norm,
                         "lr": scheduler.get_last_lr()[0],
                     }
                 )
@@ -343,6 +359,14 @@ def train(args):
         avg_loss = total_loss / len(train_dataloader)
 
         # Evaluate on validation set
+        # uniform:
+        # loss: 4.22
+        # lm:
+        # Epoch 1 completed. Train loss: 3.5278 | Val loss: 3.1523 | Epoch Time: 119.69s | Total Time: 119.69s
+        # lm+aux:
+        # Epoch 1 completed. Train loss: 4.0993 | Val loss: 3.5380 | Epoch Time: 110.80s | Total Time: 110.80s
+        # lm+aux+gnorm:
+        # Epoch 1 completed. Train loss: 4.1059 | Val loss: 3.9265 | Epoch Time: 209.65s | Total Time: 209.65s
         val_loss = evaluate(model, val_dataloader, device)
 
         print(

@@ -8,7 +8,7 @@ class ShakespeareDataset(Dataset):
         tokenizer,
         seq_len=256,
         max_samples=None,
-        file_path="dataloaders/data/tinyshakespeare.txt",
+        file_path="data/shakespeare/main.txt",
     ):
         self.tokenizer = tokenizer
         self.seq_len = seq_len

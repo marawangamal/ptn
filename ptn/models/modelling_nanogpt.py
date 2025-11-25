@@ -10,7 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,7 @@ from ptn.dists import AbstractDisributionHeadConfig
 class ModelOutput:
     logits: torch.Tensor
     loss: Optional[torch.Tensor] = None
+    losses: Optional[List[torch.Tensor]] = None
 
 
 # n_layerss,
@@ -209,18 +210,19 @@ class GPT(nn.Module):
 
         # self.lm_head.set_output_embeddings(self.transformer.wte.weight)
 
-        # self.aux_head = None
-        # if config.aux_head is not None:
-        #     self.aux_head = dists[config.aux_head](
-        #         AbstractDisributionHeadConfig(
-        #             d_model=config.d_model,
-        #             d_output=config.d_vocab,
-        #             horizon=config.aux_head_horizon,
-        #             rank=config.aux_head_rank,
-        #             d_hidden=config.aux_head_d_hidden,
-        #             debug=config.debug,
-        #         )
-        #     )
+        self.aux_head = None
+        self.aux_lambda = config.aux_lambda
+        if config.aux_head is not None:
+            self.aux_head = dists[config.aux_head](
+                AbstractDisributionHeadConfig(
+                    d_model=config.d_model,
+                    d_output=config.d_vocab,
+                    horizon=config.aux_head_horizon,
+                    rank=config.aux_head_rank,
+                    d_hidden=config.aux_head_d_hidden,
+                    debug=config.debug,
+                )
+            )
 
         # init all weights
         self.apply(self._init_weights)
@@ -275,10 +277,17 @@ class GPT(nn.Module):
         #     )  # note: using list [-1] to preserve the time dim
         #     loss = None
 
+        losses = []
         if targets is not None:
             output = self.lm_head.forward_seq(x, y=targets, window_shift=0)
             logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
             loss = output.loss
+            losses.append(output.loss)
+            # add aux head loss
+            if self.aux_head is not None and self.aux_lambda > 0:
+                output_aux = self.aux_head.forward_seq(x, y=targets, window_shift=0)
+                loss = loss + output_aux.loss * self.aux_lambda
+                losses.append(output_aux.loss)
         else:
             # output = self.lm_head(x[:, -1:, :])
             # logits = output.logits[:, :, 0, :]  # (B, T, H, V) -> (B, T, V)
@@ -289,7 +298,7 @@ class GPT(nn.Module):
             )  # note: using list [-1] to preserve the time dim
             loss = None
 
-        return ModelOutput(logits=logits, loss=loss)
+        return ModelOutput(logits=logits, loss=loss, losses=losses)
 
     @torch.no_grad()
     def generate(
